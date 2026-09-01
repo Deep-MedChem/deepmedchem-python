@@ -1,8 +1,9 @@
-"""Forward-compatible typed API response models."""
+"""Forward-compatible, chemistry-first API response models."""
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Iterator, Mapping, Sequence
+from typing import Any, overload
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -12,21 +13,155 @@ class APIModel(BaseModel):
 
     @property
     def raw(self) -> dict[str, Any]:
+        """Return the complete JSON-compatible response, including additive fields."""
+
         return self.model_dump(mode="json")
 
 
-class SearchResult(APIModel):
+class WarningMessage(APIModel):
+    code: str | None = None
+    message: str | None = None
+
+
+class Hit(APIModel):
+    """One typed, immutable row in a molecular result."""
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    smiles: str
+    rank: int
+    score: float | None = None
+    product_id: str | None = None
+    reaction_id: str | None = None
+    metric: str | None = None
+
+    @property
+    def extra(self) -> Mapping[str, Any]:
+        common = {"smiles", "rank", "score", "product_id", "reaction_id", "metric"}
+        return {key: value for key, value in self.raw.items() if key not in common}
+
+
+class SearchMeta(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    request_id: str | None = None
+    database: str | None = None
+    release: str | None = None
+    method: str | None = None
+    metric: str | None = None
+    returned: int = 0
+    elapsed_ms: float | None = None
+
+
+class SearchResult(APIModel, Sequence[str]):
+    """An ordered molecule sequence with typed, locally available search details."""
+
     results: list[dict[str, Any]] = Field(default_factory=list)
-    warnings: list[dict[str, Any]] = Field(default_factory=list)
+    warnings: tuple[WarningMessage, ...] = ()
     request_id: str | None = None
     database_id: str | None = None
     database_release: str | None = None
+    scorer: str | None = None
+    metric: str | None = None
+    counts: dict[str, Any] = Field(default_factory=dict)
+    timing_ms: dict[str, float] = Field(default_factory=dict)
+
+    @property
+    def method(self) -> str | None:
+        return self.scorer
+
+    @property
+    def hits(self) -> tuple[Hit, ...]:
+        return tuple(
+            Hit.model_validate(
+                {
+                    **row,
+                    "rank": row.get("rank", row.get("index", index - 1) + 1),
+                    "metric": row.get("metric", self.metric),
+                }
+            )
+            for index, row in enumerate(self.results, start=1)
+        )
+
+    @property
+    def smiles(self) -> list[str]:
+        return [hit.smiles for hit in self.hits]
+
+    @property
+    def scores(self) -> list[float | None]:
+        return [hit.score for hit in self.hits]
+
+    @property
+    def ids(self) -> list[str | None]:
+        return [hit.product_id for hit in self.hits]
+
+    @property
+    def ranks(self) -> list[int]:
+        return [hit.rank for hit in self.hits]
+
+    @property
+    def meta(self) -> SearchMeta:
+        returned = self.counts.get("returned", len(self.results))
+        elapsed = self.timing_ms.get("total")
+        return SearchMeta(
+            request_id=self.request_id,
+            database=self.database_id,
+            release=self.database_release,
+            method=self.method,
+            metric=self.metric,
+            returned=int(returned),
+            elapsed_ms=float(elapsed) if elapsed is not None else None,
+        )
+
+    def __len__(self) -> int:
+        return len(self.results)
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.smiles)
+
+    @overload
+    def __getitem__(self, index: int) -> str: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> list[str]: ...
+
+    def __getitem__(self, index: int | slice) -> str | list[str]:
+        return self.smiles[index]
+
+    def __repr__(self) -> str:
+        return (
+            f"{type(self).__name__}({len(self)} molecules, "
+            f"method={self.method!r}, database={self.database_id!r})"
+        )
+
+    def to_records(self) -> list[dict[str, Any]]:
+        return [dict(row) for row in self.results]
+
+    def to_pandas(self):
+        try:
+            import pandas as pd
+        except ImportError as error:
+            raise ImportError(
+                "SearchResult.to_pandas() requires pandas. Install it with "
+                "`python -m pip install pandas`."
+            ) from error
+        return pd.DataFrame.from_records(self.to_records())
+
+
+class SubstructureResult(SearchResult):
+    @property
+    def method(self) -> str:
+        return "substructure"
 
 
 class SampleResult(SearchResult):
     sampling_method: str | None = None
     sampling_version: str | None = None
     seed: int | None = None
+
+    @property
+    def method(self) -> str:
+        return "sample"
 
 
 class SelectionValidation(APIModel):

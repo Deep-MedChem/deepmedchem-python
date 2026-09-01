@@ -1,15 +1,12 @@
-from deepmedchem import Client
-
-dmc = Client(api_key="...")
+import deepmedchem as dmc
 
 result = dmc.search(
     "CC(=O)OC1=CC=CC=C1C(=O)O",
     database="enamine-real-v5a",
+    method="shape",
     limit=3,
 )
 
-print(f"database={result.database_id} release={result.database_release}")
-for hit in result.results:
-    print(f"{hit['rank']}  score={hit['score']:.4f}  {hit['smiles']}")
-
-dmc.close()
+print(result)
+for hit in result.hits:
+    print(f"{hit.rank}  score={hit.score:.4f}  {hit.smiles}")

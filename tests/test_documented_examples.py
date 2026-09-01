@@ -6,6 +6,7 @@ from pathlib import Path
 import httpx
 
 import deepmedchem
+import deepmedchem.facade
 
 EXAMPLES = Path(__file__).parents[1] / "examples" / "docs"
 
@@ -111,6 +112,7 @@ def test_every_published_sdk_example_executes(monkeypatch):
 
     monkeypatch.setenv("DMC_API_KEY", "docs-contract-key")
     monkeypatch.setattr(deepmedchem, "Client", docs_client)
+    monkeypatch.setattr(deepmedchem.facade, "Client", docs_client)
 
     executed = []
     for path in sorted(EXAMPLES.glob("*.py")):

@@ -5,6 +5,7 @@ import httpx
 
 from deepmedchem import AsyncClient, Client, Run, Selection
 from deepmedchem.client import DeepMedChemError
+from deepmedchem.models import SampleResult, SearchResult, SubstructureResult
 
 
 def _run_resource(status="queued"):
@@ -41,9 +42,7 @@ def test_simple_methods_use_distinct_public_operations() -> None:
     ) as client:
         client.search("CCO", database="enamine-real-v5a")
         client.search_cheese("CCO", database="enamine-real-v5a", scorer="shape")
-        client.search_substructure(
-            "C(=O)N", query_format="smarts", database="enamine-real-v5a"
-        )
+        client.search_substructure("C(=O)N", query_format="smarts", database="enamine-real-v5a")
         client.sample(database="enamine-real-v5a", count=10, seed=42)
 
     assert [value[1] for value in captured] == [
@@ -62,9 +61,9 @@ def test_client_attribution_is_configurable() -> None:
     def handler(request: httpx.Request):
         assert request.headers["x-dmc-client"] == "navigator-cli"
         assert request.headers["x-dmc-client-version"] == "0.4.0"
-        assert request.headers["x-dmc-sdk-version"] == "0.1.0"
+        assert request.headers["x-dmc-sdk-version"] == "0.2.0"
         assert request.headers["user-agent"].startswith("navigator-cli/0.4.0 ")
-        assert "deepmedchem/0.1.0" in request.headers["user-agent"]
+        assert "deepmedchem/0.2.0" in request.headers["user-agent"]
         return httpx.Response(200, json={"spaces": []})
 
     with Client(
@@ -210,6 +209,68 @@ def test_async_client_has_matching_simple_search() -> None:
             assert result.request_id == "req_1"
 
     asyncio.run(scenario())
+
+
+def test_client_search_method_routes_without_changing_morgan_default() -> None:
+    paths = []
+
+    def handler(request: httpx.Request):
+        paths.append((request.url.path, json.loads(request.content)))
+        return httpx.Response(
+            200,
+            json={"results": [], "scorer": paths[-1][1].get("scorer", "morgan")},
+        )
+
+    with Client(
+        api_key="token",
+        api_url="https://example.test",
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        assert client.search("CCO", database="db").method == "morgan"
+        assert client.search("CCO", database="db", method="shape").method == "shape"
+
+    assert [path for path, _ in paths] == ["/api/v2/search", "/api/v2/search_cheese"]
+
+
+def test_lightweight_result_is_an_aligned_molecule_sequence() -> None:
+    result = SearchResult.model_validate(
+        {
+            "request_id": "req_1",
+            "database_id": "db",
+            "database_release": "2026.09",
+            "scorer": "shape",
+            "metric": "CHEESE shape cosine",
+            "counts": {"returned": 2},
+            "timing_ms": {"total": 12.5},
+            "new_server_field": {"kept": True},
+            "results": [
+                {"rank": 1, "smiles": "CCO", "score": 0.9, "product_id": "p1"},
+                {"rank": 2, "smiles": "CCN", "score": None, "new_hit_field": 7},
+            ],
+        }
+    )
+
+    assert list(result) == result.smiles == ["CCO", "CCN"]
+    assert result[0] == "CCO"
+    assert result[:] == ["CCO", "CCN"]
+    assert result.scores == [0.9, None]
+    assert result.ids == ["p1", None]
+    assert result.hits[1].extra == {"new_hit_field": 7}
+    assert result.meta.release == "2026.09"
+    assert result.meta.elapsed_ms == 12.5
+    assert result.raw["new_server_field"] == {"kept": True}
+    assert result.results[0]["smiles"] == "CCO"
+    assert repr(result) == "SearchResult(2 molecules, method='shape', database='db')"
+
+
+def test_exact_results_keep_aligned_none_scores() -> None:
+    payload = {"database_id": "db", "results": [{"index": 0, "smiles": "CCO"}]}
+    sample = SampleResult.model_validate(payload)
+    substructure = SubstructureResult.model_validate(payload)
+    assert sample.scores == [None]
+    assert substructure.scores == [None]
+    assert sample.method == "sample"
+    assert substructure.method == "substructure"
 
 
 def test_error_does_not_expose_api_key() -> None:

@@ -1,4 +1,4 @@
-from deepmedchem import Client
+import deepmedchem as dmc
 
 DATABASE = "enamine-real-v5a"
 
@@ -13,21 +13,20 @@ SMARTS_QUERIES = {
     "protic amide or acid": "[O,N;H1]C(=O)",
 }
 
-with Client(api_key="...") as dmc:
-    junction = dmc.search_substructure(
-        JUNCTION_SMILES,
-        query_format="smiles",
+junction = dmc.substructure(
+    JUNCTION_SMILES,
+    format="smiles",
+    database=DATABASE,
+    limit=3,
+)
+print(f"junction SMILES: {len(junction)} hits")
+
+for name, smarts in SMARTS_QUERIES.items():
+    result = dmc.substructure(
+        smarts,
+        format="smarts",
         database=DATABASE,
         limit=3,
+        timeout_seconds=60,
     )
-    print(f"junction SMILES: {len(junction.results)} hits")
-
-    for name, smarts in SMARTS_QUERIES.items():
-        result = dmc.search_substructure(
-            smarts,
-            query_format="smarts",
-            database=DATABASE,
-            limit=3,
-            timeout_seconds=60,
-        )
-        print(f"{name}: {len(result.results)} hits")
+    print(f"{name}: {len(result)} hits")
