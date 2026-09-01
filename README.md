@@ -45,8 +45,9 @@ with Client(api_key="...") as dmc:
     )
 ```
 
-The client reads credentials from an explicit `api_key`, `DEEPMEDCHEM_API_KEY`, `DMC_API_KEY`, a
-custom credential provider, or the shared OS-keyring entry. Explicit credentials take precedence.
+The client reads credentials from an explicit `api_key`, `DEEPMEDCHEM_API_KEY`, `DMC_API_KEY`, the
+existing `CHEESE_API_KEY`, a custom credential provider, or the shared OS-keyring entry. Explicit
+credentials take precedence.
 
 ## Selections and durable runs
 
@@ -100,3 +101,6 @@ twine check dist/*
 ```
 
 API documentation: <https://docs.deepmedchem.com/docs/python/quickstart>
+
+Runnable authenticated examples using the established Enamine query panels are in
+[`examples/live`](examples/live/README.md).

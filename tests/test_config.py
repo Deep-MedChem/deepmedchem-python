@@ -22,6 +22,13 @@ def test_legacy_dmc_api_key_is_supported(monkeypatch) -> None:
     assert resolve_api_key() == "legacy-environment-key"
 
 
+def test_existing_cheese_api_key_environment_is_supported(monkeypatch) -> None:
+    monkeypatch.delenv("DEEPMEDCHEM_API_KEY", raising=False)
+    monkeypatch.delenv("DMC_API_KEY", raising=False)
+    monkeypatch.setenv("CHEESE_API_KEY", "existing-cheese-key")
+    assert resolve_api_key() == "existing-cheese-key"
+
+
 def test_legacy_navigator_keyring_entry_migrates(monkeypatch) -> None:
     values = {(config.LEGACY_SERVICE, config.LEGACY_ACCOUNT): "navigator-key"}
 

@@ -131,7 +131,11 @@ def resolve_api_key(
 ) -> str | None:
     if api_key:
         return api_key
-    value = os.environ.get("DEEPMEDCHEM_API_KEY") or os.environ.get("DMC_API_KEY")
+    value = (
+        os.environ.get("DEEPMEDCHEM_API_KEY")
+        or os.environ.get("DMC_API_KEY")
+        or os.environ.get("CHEESE_API_KEY")
+    )
     if value:
         return value
     if credential_provider is not None:
