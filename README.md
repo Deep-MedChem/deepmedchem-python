@@ -52,6 +52,11 @@ The client reads credentials from an explicit `api_key`, `DEEPMEDCHEM_API_KEY`, 
 existing `CHEESE_API_KEY`, a custom credential provider, or the shared OS-keyring entry. Explicit
 credentials take precedence.
 
+Every request identifies its source with `X-DMC-Client`, `X-DMC-Client-Version`, and
+`X-DMC-SDK-Version`. The default values attribute direct SDK use to `deepmedchem-python`; an
+application such as Navigator can override `application` and `application_version` while retaining
+the installed SDK version separately.
+
 ## Selections and durable runs
 
 `Selection` and `Run` are immutable, chemistry-thin builders. They produce the public

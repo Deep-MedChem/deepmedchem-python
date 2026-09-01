@@ -230,6 +230,8 @@ class Client:
             headers={
                 "x-api-key": token,
                 "x-dmc-client": application,
+                "x-dmc-client-version": client_version,
+                "x-dmc-sdk-version": __version__,
                 "user-agent": f"{application}/{client_version} deepmedchem/{__version__}",
             },
             timeout=timeout,
@@ -530,6 +532,8 @@ class AsyncClient:
             headers={
                 "x-api-key": token,
                 "x-dmc-client": application,
+                "x-dmc-client-version": client_version,
+                "x-dmc-sdk-version": __version__,
                 "user-agent": f"{application}/{client_version} deepmedchem/{__version__}",
             },
             timeout=timeout,

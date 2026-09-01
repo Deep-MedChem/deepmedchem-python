@@ -61,6 +61,8 @@ def test_simple_methods_use_distinct_public_operations() -> None:
 def test_client_attribution_is_configurable() -> None:
     def handler(request: httpx.Request):
         assert request.headers["x-dmc-client"] == "navigator-cli"
+        assert request.headers["x-dmc-client-version"] == "0.4.0"
+        assert request.headers["x-dmc-sdk-version"] == "0.1.0"
         assert request.headers["user-agent"].startswith("navigator-cli/0.4.0 ")
         assert "deepmedchem/0.1.0" in request.headers["user-agent"]
         return httpx.Response(200, json={"spaces": []})

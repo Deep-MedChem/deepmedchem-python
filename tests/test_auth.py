@@ -10,6 +10,8 @@ def test_browser_login_uses_caller_application_and_polls(monkeypatch) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal polls
         assert request.headers["x-dmc-client"] == "navigator-cli"
+        assert request.headers["x-dmc-client-version"] == "0.4.0"
+        assert request.headers["x-dmc-sdk-version"] == "0.1.0"
         assert "deepmedchem/0.1.0" in request.headers["user-agent"]
         if request.url.path.endswith("/start"):
             return httpx.Response(

@@ -33,6 +33,8 @@ def browser_login(
     client_version = application_version or __version__
     headers = {
         "x-dmc-client": application,
+        "x-dmc-client-version": client_version,
+        "x-dmc-sdk-version": __version__,
         "user-agent": f"{application}/{client_version} deepmedchem/{__version__}",
     }
     try:
