@@ -13,4 +13,5 @@ pip install jupyterlab pandas rdkit
 jupyter lab examples/notebooks/enamine_search.ipynb
 ```
 
-Replace the API-key placeholder in the notebook before running it. Do not commit a real key.
+Run `deepmedchem login` first, or provide `DEEPMEDCHEM_API_KEY` through your environment. Never
+put a real key in a notebook or commit one.

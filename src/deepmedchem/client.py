@@ -8,7 +8,13 @@ from typing import Any
 import httpx
 
 from . import __version__
-from .config import DEFAULT_API_URL, CredentialSource, load_config, resolve_api_key
+from .config import (
+    DEFAULT_API_URL,
+    CredentialSource,
+    load_config,
+    resolve_api_key,
+    resolve_profile,
+)
 from .models import (
     Page,
     RunEvent,
@@ -19,6 +25,7 @@ from .models import (
     SelectionEstimate,
     SelectionResult,
     SelectionValidation,
+    SubstructureResult,
 )
 from .selection import Run, Selection
 
@@ -43,12 +50,14 @@ class DeepMedChemError(RuntimeError):
 def _credentials(
     api_key: str | None,
     credential_provider: CredentialSource | None = None,
+    *,
+    profile: str = "default",
 ) -> str:
-    value = resolve_api_key(api_key, credential_provider)
+    value = resolve_api_key(api_key, credential_provider, profile=profile)
     if not value:
         raise DeepMedChemError(
-            "No API key configured. Pass api_key, set DEEPMEDCHEM_API_KEY or "
-            "DMC_API_KEY, or configure a credential provider.",
+            f"No DeepMedChem credential is configured for profile {profile!r}. "
+            f"Run `deepmedchem login --profile {profile}` or set DEEPMEDCHEM_API_KEY.",
             code="missing_api_key",
         )
     return value
@@ -134,18 +143,14 @@ class _SyncRuns:
         while True:
             params = {"cursor": cursor, "status_filter": status}
             page = Page.model_validate(
-                self._client._request(
-                    "GET", f"/api/v2/runs/{run_id}/items", params=params
-                )
+                self._client._request("GET", f"/api/v2/runs/{run_id}/items", params=params)
             )
             yield from (RunItem.model_validate(item) for item in page.data)
             if not page.next_cursor:
                 return
             cursor = page.next_cursor
 
-    def iter_results(
-        self, run_id: str, *, order: str = "completion"
-    ) -> Iterator[RunItem]:
+    def iter_results(self, run_id: str, *, order: str = "completion") -> Iterator[RunItem]:
         cursor = None
         while True:
             page = Page.model_validate(
@@ -162,9 +167,7 @@ class _SyncRuns:
 
     def events(self, run_id: str, *, after: int = 0) -> list[RunEvent]:
         page = Page.model_validate(
-            self._client._request(
-                "GET", f"/api/v2/runs/{run_id}/events", params={"after": after}
-            )
+            self._client._request("GET", f"/api/v2/runs/{run_id}/events", params={"after": after})
         )
         return [RunEvent.model_validate(item) for item in page.data]
 
@@ -210,6 +213,7 @@ class Client:
         api_key: str | None = None,
         *,
         api_url: str | None = None,
+        profile: str | None = None,
         timeout: float = 45.0,
         transport=None,
         credential_provider: CredentialSource | None = None,
@@ -222,8 +226,10 @@ class Client:
             raise ValueError("max_retries must be non-negative")
         if retry_backoff < 0:
             raise ValueError("retry_backoff must be non-negative")
-        configured_url = api_url or load_config().api_url or DEFAULT_API_URL
-        token = _credentials(api_key, credential_provider)
+        config = load_config()
+        selected_profile = resolve_profile(profile, config)
+        configured_url = api_url or config.profile(selected_profile).api_url or DEFAULT_API_URL
+        token = _credentials(api_key, credential_provider, profile=selected_profile)
         client_version = application_version or __version__
         self._client = httpx.Client(
             base_url=configured_url.rstrip("/"),
@@ -256,10 +262,7 @@ class Client:
             response = None
             try:
                 response = self._client.request(method, path, **kwargs)
-                if (
-                    response.status_code in {429, 503, 504}
-                    and attempt < self._max_retries
-                ):
+                if response.status_code in {429, 503, 504} and attempt < self._max_retries:
                     time.sleep(_retry_delay(response, attempt, self._retry_backoff))
                     continue
                 if response.is_error:
@@ -290,10 +293,22 @@ class Client:
         smiles: str,
         *,
         database: str,
+        method: str = "morgan",
         limit: int = 20,
         shortlist_multiplier: int = 10,
         include_synthons: bool = False,
     ) -> SearchResult:
+        if method not in {"morgan", "shape", "esp"}:
+            raise ValueError("method must be one of: 'morgan', 'shape', 'esp'")
+        if method != "morgan":
+            return self.search_cheese(
+                smiles,
+                database=database,
+                scorer=method,
+                limit=limit,
+                shortlist_multiplier=shortlist_multiplier,
+                include_synthons=include_synthons,
+            )
         return SearchResult.model_validate(
             self._request(
                 "POST",
@@ -342,8 +357,8 @@ class Client:
         limit: int = 100,
         timeout_seconds: int = 30,
         include_synthons: bool = False,
-    ) -> SearchResult:
-        return SearchResult.model_validate(
+    ) -> SubstructureResult:
+        return SubstructureResult.model_validate(
             self._request(
                 "POST",
                 "/api/v2/search_substructure",
@@ -372,9 +387,7 @@ class Client:
         }
         if seed is not None:
             payload["seed"] = seed
-        return SampleResult.model_validate(
-            self._request("POST", "/api/v2/sample", json=payload)
-        )
+        return SampleResult.model_validate(self._request("POST", "/api/v2/sample", json=payload))
 
 
 class _AsyncSelections:
@@ -512,6 +525,7 @@ class AsyncClient:
         api_key: str | None = None,
         *,
         api_url: str | None = None,
+        profile: str | None = None,
         timeout: float = 45.0,
         transport=None,
         credential_provider: CredentialSource | None = None,
@@ -524,8 +538,10 @@ class AsyncClient:
             raise ValueError("max_retries must be non-negative")
         if retry_backoff < 0:
             raise ValueError("retry_backoff must be non-negative")
-        configured_url = api_url or load_config().api_url or DEFAULT_API_URL
-        token = _credentials(api_key, credential_provider)
+        config = load_config()
+        selected_profile = resolve_profile(profile, config)
+        configured_url = api_url or config.profile(selected_profile).api_url or DEFAULT_API_URL
+        token = _credentials(api_key, credential_provider, profile=selected_profile)
         client_version = application_version or __version__
         self._client = httpx.AsyncClient(
             base_url=configured_url.rstrip("/"),
@@ -558,13 +574,8 @@ class AsyncClient:
             response = None
             try:
                 response = await self._client.request(method, path, **kwargs)
-                if (
-                    response.status_code in {429, 503, 504}
-                    and attempt < self._max_retries
-                ):
-                    await asyncio.sleep(
-                        _retry_delay(response, attempt, self._retry_backoff)
-                    )
+                if response.status_code in {429, 503, 504} and attempt < self._max_retries:
+                    await asyncio.sleep(_retry_delay(response, attempt, self._retry_backoff))
                     continue
                 if response.is_error:
                     _raise_api_error(response)
@@ -573,9 +584,7 @@ class AsyncClient:
                 raise
             except httpx.HTTPError as error:
                 if attempt < self._max_retries:
-                    await asyncio.sleep(
-                        _retry_delay(response, attempt, self._retry_backoff)
-                    )
+                    await asyncio.sleep(_retry_delay(response, attempt, self._retry_backoff))
                     continue
                 raise DeepMedChemError(
                     f"Platform request failed: {type(error).__name__}",
@@ -592,6 +601,11 @@ class AsyncClient:
         return await self._request("GET", "/api/v2/catalog")
 
     async def search(self, smiles: str, **kwargs) -> SearchResult:
+        method = kwargs.pop("method", "morgan")
+        if method not in {"morgan", "shape", "esp"}:
+            raise ValueError("method must be one of: 'morgan', 'shape', 'esp'")
+        if method != "morgan":
+            return await self.search_cheese(smiles, scorer=method, **kwargs)
         payload = {
             "query_smiles": smiles,
             "database_id": kwargs.pop("database"),
@@ -620,7 +634,7 @@ class AsyncClient:
             await self._request("POST", "/api/v2/search_cheese", json=payload)
         )
 
-    async def search_substructure(self, query: str, **kwargs) -> SearchResult:
+    async def search_substructure(self, query: str, **kwargs) -> SubstructureResult:
         payload = {
             "query": {"format": kwargs.pop("query_format", "smarts"), "value": query},
             "database_id": kwargs.pop("database"),
@@ -630,7 +644,7 @@ class AsyncClient:
         }
         if kwargs:
             raise TypeError(f"unexpected substructure arguments: {sorted(kwargs)}")
-        return SearchResult.model_validate(
+        return SubstructureResult.model_validate(
             await self._request("POST", "/api/v2/search_substructure", json=payload)
         )
 

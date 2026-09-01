@@ -41,6 +41,36 @@ def test_legacy_navigator_keyring_entry_migrates(monkeypatch) -> None:
 
     monkeypatch.setattr(config, "_keyring", lambda: FakeKeyring())
     assert config.get_stored_api_key() == "navigator-key"
-    assert config.migrate_legacy_api_key() is True
-    assert values[(config.SERVICE, config.ACCOUNT)] == "navigator-key"
+    assert values[(config.SERVICE, config.profile_account("default"))] == "navigator-key"
     assert config.migrate_legacy_api_key() is False
+
+
+def test_profile_credentials_are_isolated(monkeypatch) -> None:
+    values = {}
+
+    class Errors:
+        class PasswordDeleteError(Exception):
+            pass
+
+    class FakeKeyring:
+        errors = Errors
+
+        def get_password(self, service, account):
+            return values.get((service, account))
+
+        def set_password(self, service, account, value):
+            values[(service, account)] = value
+
+        def delete_password(self, service, account):
+            if (service, account) not in values:
+                raise self.errors.PasswordDeleteError()
+            del values[(service, account)]
+
+    monkeypatch.setattr(config, "_keyring", lambda: FakeKeyring())
+    config.save_api_key("prod", profile="default")
+    config.save_api_key("development", profile="dev")
+    assert config.get_stored_api_key(profile="default") == "prod"
+    assert config.get_stored_api_key(profile="dev") == "development"
+    config.delete_api_key(profile="dev")
+    assert config.get_stored_api_key(profile="default") == "prod"
+    assert config.get_stored_api_key(profile="dev") is None

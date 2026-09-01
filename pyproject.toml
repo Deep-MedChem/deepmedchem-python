@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "deepmedchem"
-version = "0.1.0"
+version = "0.2.0"
 description = "Official Python client for the DeepMedChem chemical-space platform"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -28,14 +28,14 @@ classifiers = [
 ]
 dependencies = [
   "httpx>=0.27,<1",
+  "keyring>=25.3,<27",
+  "platformdirs>=4.2,<5",
   "pydantic>=2.8,<3",
   "PyYAML>=6,<7",
 ]
 
 [project.optional-dependencies]
-auth = [
-  "keyring>=25.3,<27",
-]
+auth = []
 test = [
   "build>=1.2,<2",
   "keyring>=25.3,<27",
@@ -49,6 +49,9 @@ Homepage = "https://deepmedchem.com"
 Documentation = "https://docs.deepmedchem.com/docs/python/quickstart"
 Repository = "https://github.com/Deep-MedChem/deepmedchem-python"
 Issues = "https://github.com/Deep-MedChem/deepmedchem-python/issues"
+
+[project.scripts]
+deepmedchem = "deepmedchem.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/deepmedchem"]
