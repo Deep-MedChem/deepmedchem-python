@@ -117,4 +117,9 @@ def test_every_published_sdk_example_executes(monkeypatch):
         runpy.run_path(path, run_name=f"docs_example_{path.stem}")
         executed.append(path.name)
 
-    assert executed == ["durable_runs.py", "python_quickstart.py", "selection_builder.py"]
+    assert executed == [
+        "durable_runs.py",
+        "python_quickstart.py",
+        "selection_builder.py",
+        "substructure_search.py",
+    ]

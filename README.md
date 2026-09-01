@@ -48,6 +48,32 @@ database=enamine-real-v5a release=2026-08-29.1
 3  score=0.8713  O=C(O)COc1ccccc1C(=O)O
 ```
 
+## SMILES and SMARTS substructure search
+
+Use `query_format="smiles"` for a concrete molecular graph, including the existing
+junction-spanning examples. Use `query_format="smarts"` for atom lists, ring constraints,
+recursive expressions, and other SMARTS query features:
+
+```python
+with Client(api_key="...") as dmc:
+    junction = dmc.search_substructure(
+        "CNC(=O)N1CCC1",
+        query_format="smiles",
+        database="enamine-real-v5a",
+        limit=10,
+    )
+
+    hydrazides = dmc.search_substructure(
+        "[N;R0][N;R0]C(=O)",
+        query_format="smarts",
+        database="enamine-real-v5a",
+        limit=10,
+    )
+```
+
+See the runnable [substructure example](examples/docs/substructure_search.py) for several
+SQC-derived SMARTS queries. Complex recursive SMARTS can require a longer timeout.
+
 The client reads credentials from an explicit `api_key`, `DEEPMEDCHEM_API_KEY`, `DMC_API_KEY`, the
 existing `CHEESE_API_KEY`, a custom credential provider, or the shared OS-keyring entry. Explicit
 credentials take precedence.
@@ -113,5 +139,5 @@ API documentation: <https://docs.deepmedchem.com/docs/python/quickstart>
 Runnable authenticated examples using the established Enamine query panels are in
 [`examples/live`](examples/live/README.md).
 
-For an interactive RDKit visualization of the query and a labeled result grid, open the
+For interactive RDKit visualization of similarity and SMARTS substructure queries, open the
 [`Enamine search notebook`](examples/notebooks/enamine_search.ipynb).
