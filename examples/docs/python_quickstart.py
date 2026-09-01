@@ -1,11 +1,15 @@
 from deepmedchem import Client
 
-with Client() as dmc:
-    result = dmc.search("CCO", database="enamine-real-v5a", limit=20)
-    shape_hits = dmc.search_cheese(
-        "CCO", database="enamine-real-v5a", scorer="shape", limit=20
-    )
-    motif_hits = dmc.search_substructure(
-        "C(=O)N1CCC1", query_format="smarts", database="enamine-real-v5a"
-    )
-    molecules = dmc.sample(database="enamine-real-v5a", count=100, seed=12345)
+dmc = Client(api_key="...")
+
+result = dmc.search(
+    "CC(=O)OC1=CC=CC=C1C(=O)O",
+    database="enamine-real-v5a",
+    limit=3,
+)
+
+print(f"database={result.database_id} release={result.database_release}")
+for hit in result.results:
+    print(f"{hit['rank']}  score={hit['score']:.4f}  {hit['smiles']}")
+
+dmc.close()

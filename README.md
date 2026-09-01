@@ -24,25 +24,28 @@ pip install "deepmedchem[auth]"
 ```python
 from deepmedchem import Client
 
-with Client(api_key="...") as dmc:
-    catalog = dmc.catalog()
-    hits = dmc.search("CCO", database="enamine-real-v5a", limit=20)
-    shape_hits = dmc.search_cheese(
-        "CCO",
-        database="enamine-real-v5a",
-        scorer="shape",
-        limit=20,
-    )
-    motif_hits = dmc.search_substructure(
-        "C(=O)N1CCC1",
-        query_format="smarts",
-        database="enamine-real-v5a",
-    )
-    molecules = dmc.sample(
-        database="enamine-real-v5a",
-        count=100,
-        seed=12345,
-    )
+dmc = Client(api_key="...")
+
+result = dmc.search(
+    "CC(=O)OC1=CC=CC=C1C(=O)O",  # Aspirin
+    database="enamine-real-v5a",
+    limit=3,
+)
+
+print(f"database={result.database_id} release={result.database_release}")
+for hit in result.results:
+    print(f"{hit['rank']}  score={hit['score']:.4f}  {hit['smiles']}")
+
+dmc.close()
+```
+
+Example output (the database release and search results can change):
+
+```text
+database=enamine-real-v5a release=2026-08-29.1
+1  score=0.9726  O=C(O)Oc1ccccc1C(=O)O
+2  score=0.9719  COC(=O)Oc1ccccc1C(=O)O
+3  score=0.8713  O=C(O)COc1ccccc1C(=O)O
 ```
 
 The client reads credentials from an explicit `api_key`, `DEEPMEDCHEM_API_KEY`, `DMC_API_KEY`, the
