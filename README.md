@@ -107,3 +107,6 @@ API documentation: <https://docs.deepmedchem.com/docs/python/quickstart>
 
 Runnable authenticated examples using the established Enamine query panels are in
 [`examples/live`](examples/live/README.md).
+
+For an interactive RDKit visualization of the query and a labeled result grid, open the
+[`Enamine search notebook`](examples/notebooks/enamine_search.ipynb).
