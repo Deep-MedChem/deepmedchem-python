@@ -9,11 +9,8 @@ JUNCTION_SMILES = "CNC(=O)N1CCC1"
 # and recursive expressions are not ordinary molecular SMILES.
 SMARTS_QUERIES = {
     "acyclic hydrazide": "[N;R0][N;R0]C(=O)",
-    "cationic carbonyl": "C(=O)C[N+,n+]",
-    "amino acid": (
-        "[$([NH2]),$([NH][c,CX4]),$(N([c,CX4])[c,CX4]);"
-        "!$(NC=O)][CX4]C(=O)[OH]"
-    ),
+    "acyclic urea": "[N;R0]C(=O)[N;R0]",
+    "protic amide or acid": "[O,N;H1]C(=O)",
 }
 
 with Client(api_key="...") as dmc:
