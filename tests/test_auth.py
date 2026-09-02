@@ -1,5 +1,6 @@
 import httpx
 
+from deepmedchem import __version__
 from deepmedchem.auth import browser_login
 
 
@@ -11,8 +12,8 @@ def test_browser_login_uses_caller_application_and_polls(monkeypatch) -> None:
         nonlocal polls
         assert request.headers["x-dmc-client"] == "navigator-cli"
         assert request.headers["x-dmc-client-version"] == "0.4.0"
-        assert request.headers["x-dmc-sdk-version"] == "0.2.0"
-        assert "deepmedchem/0.2.0" in request.headers["user-agent"]
+        assert request.headers["x-dmc-sdk-version"] == __version__
+        assert f"deepmedchem/{__version__}" in request.headers["user-agent"]
         if request.url.path.endswith("/start"):
             return httpx.Response(
                 200,
