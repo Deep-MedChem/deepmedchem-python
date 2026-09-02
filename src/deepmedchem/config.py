@@ -7,16 +7,16 @@ import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Optional, Protocol, Union, runtime_checkable
 
 try:
     import tomllib
-except ModuleNotFoundError:  # pragma: no cover - exercised on Python 3.10
+except ModuleNotFoundError:  # pragma: no cover - exercised on Python 3.9/3.10
     import tomli as tomllib
 from platformdirs import user_config_path
 
-DEFAULT_API_URL = "https://cheese-new-api.deepmedchem.com"
-DEFAULT_WEB_URL = "https://cheese-new.deepmedchem.com"
+DEFAULT_API_URL = "https://api.deepmedchem.com"
+DEFAULT_WEB_URL = "https://cheese.deepmedchem.com"
 DEV_API_URL = "https://api-dev.deepmedchem.com"
 DEV_WEB_URL = "https://cheese-new-dev.deepmedchem.com"
 SERVICE = "deepmedchem"
@@ -36,7 +36,9 @@ class CredentialProvider(Protocol):
     def get_api_key(self) -> str | None: ...
 
 
-CredentialSource = CredentialProvider | Callable[[], str | None]
+# Unlike annotations on functions and classes, a type alias is evaluated at
+# runtime on Python 3.9. Keep this expression free of PEP 604 ``|`` unions.
+CredentialSource = Union[CredentialProvider, Callable[[], Optional[str]]]
 
 
 @dataclass(frozen=True)
