@@ -85,6 +85,12 @@ selections/runs. Search results behave as ordered SMILES sequences (`result[0]`,
 `list(result)`) while retaining typed hits, scores, prices, metadata, warnings, and the complete raw
 response locally.
 
+The default profile calls `https://api.deepmedchem.com`. Keys created at
+`https://cheese.deepmedchem.com` work on both the legacy and v2 APIs. All keys for an account share
+one daily CHEESE Credit balance: one successful synchronous execution or durable-run item costs one
+credit. Synchronous work is terminated after 10 seconds; use the Runs API for longer work, where a
+basic item has a 60-second limit.
+
 Credentials resolve from an explicit `api_key`, `DEEPMEDCHEM_API_KEY`, compatibility environment
 variables, a custom credential provider, or the selected profile's OS-keyring entry. Use
 `deepmedchem login --profile dev` for the development service; profiles never share credentials.
