@@ -34,10 +34,19 @@ class Hit(APIModel):
     product_id: str | None = None
     reaction_id: str | None = None
     metric: str | None = None
+    price: int | None = Field(default=None, gt=0)
 
     @property
     def extra(self) -> Mapping[str, Any]:
-        common = {"smiles", "rank", "score", "product_id", "reaction_id", "metric"}
+        common = {
+            "smiles",
+            "rank",
+            "score",
+            "product_id",
+            "reaction_id",
+            "metric",
+            "price",
+        }
         return {key: value for key, value in self.raw.items() if key not in common}
 
 
@@ -98,6 +107,12 @@ class SearchResult(APIModel, Sequence[str]):
     @property
     def ranks(self) -> list[int]:
         return [hit.rank for hit in self.hits]
+
+    @property
+    def prices(self) -> list[int | None]:
+        """Return aligned whole-dollar prices already present in the response."""
+
+        return [hit.price for hit in self.hits]
 
     @property
     def meta(self) -> SearchMeta:
