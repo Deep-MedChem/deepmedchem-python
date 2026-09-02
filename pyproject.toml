@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "deepmedchem"
-version = "0.2.0b1"
+version = "0.2.0b2"
 description = "Official Python client for the DeepMedChem chemical-space platform"
 readme = "README.md"
 requires-python = ">=3.9"
