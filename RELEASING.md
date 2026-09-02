@@ -6,16 +6,12 @@ documentation, package name, and PyPI ownership have been explicitly approved.
 ## One-time setup
 
 1. Confirm that `deepmedchem` is still available on PyPI.
-2. In PyPI, configure a pending Trusted Publisher with:
-   - PyPI project: `deepmedchem`
-   - GitHub owner: `Deep-MedChem`
-   - GitHub repository: `deepmedchem-python`
-   - Workflow: `release.yml`
-   - Environment: `pypi`
+2. Store the PyPI API token as the masked GitHub Actions secret `PYPI_API_TOKEN`. Retrieve it
+   through the keyring-wrapped 1Password CLI; never write it to the repository or workflow logs.
 3. Create the protected `pypi` environment in GitHub and require an appropriate reviewer.
 4. Make the GitHub repository public when the source and documentation are ready.
 
-Trusted Publishing uses GitHub OIDC; no PyPI token or 1Password secret is placed in the repository.
+The PyPI token remains encrypted by GitHub Actions and is injected only into the publish job.
 
 ## Release gate
 
