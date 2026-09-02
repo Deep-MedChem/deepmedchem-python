@@ -57,7 +57,7 @@ price is `None`.
 | Enamine REAL | Yes |
 | eMolecules Synple | Yes |
 | eMolecules eXplore | Yes |
-| VAST | No | — |
+| XtalPi VAST 2026 H2 | Yes |
 | d2b / molecule.one | No |
 | ChemInfinita | No |
 
