@@ -3,7 +3,7 @@ import json
 
 import httpx
 
-from deepmedchem import AsyncClient, Client, Run, Selection
+from deepmedchem import AsyncClient, Client, Run, Selection, __version__
 from deepmedchem.client import DeepMedChemError
 from deepmedchem.models import SampleResult, SearchResult, SubstructureResult
 
@@ -61,9 +61,9 @@ def test_client_attribution_is_configurable() -> None:
     def handler(request: httpx.Request):
         assert request.headers["x-dmc-client"] == "navigator-cli"
         assert request.headers["x-dmc-client-version"] == "0.4.0"
-        assert request.headers["x-dmc-sdk-version"] == "0.2.0"
+        assert request.headers["x-dmc-sdk-version"] == __version__
         assert request.headers["user-agent"].startswith("navigator-cli/0.4.0 ")
-        assert "deepmedchem/0.2.0" in request.headers["user-agent"]
+        assert f"deepmedchem/{__version__}" in request.headers["user-agent"]
         return httpx.Response(200, json={"spaces": []})
 
     with Client(

@@ -3,11 +3,10 @@
 The official, chemistry-thin Python client for the DeepMedChem hosted chemical-space platform.
 It contains no RDKit, models, databases, or proprietary search implementation.
 
-> **Pre-release:** `deepmedchem` 0.2 is being prepared and is not yet published on PyPI.
+> **Beta:** `deepmedchem` 0.2 is available for early use. APIs may still change before the
+> stable release.
 
 ## Installation
-
-After the first public release:
 
 ```bash
 pip install deepmedchem
