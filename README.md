@@ -57,7 +57,7 @@ price is `None`.
 | Enamine REAL | Yes | $163 or $245, selected by the trained factorized model |
 | eMolecules Synple | Yes | Building-block prices plus reaction price |
 | eMolecules eXplore | Yes | Building-block prices plus reaction price |
-| VAST | No | — |
+| XtalPi VAST 2026 H2 | Yes | $118 one-step or $206 two-step estimate at 1 mg |
 | d2b / molecule.one | No | — |
 | ChemInfinita | No | — |
 
