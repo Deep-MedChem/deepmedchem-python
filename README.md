@@ -42,7 +42,7 @@ Example output (the database release and search results can change):
 
 ```text
 SearchResult(3 molecules, method='shape', database='enamine-real-v5a')
-1  score=0.9726  price=$163  O=C(O)Oc1ccccc1C(=O)O
+1  score=0.9726  price=$245  O=C(O)Oc1ccccc1C(=O)O
 2  score=0.9719  price=$163  COC(=O)Oc1ccccc1C(=O)O
 3  score=0.8713  price=$245  O=C(O)COc1ccccc1C(=O)O
 ```
