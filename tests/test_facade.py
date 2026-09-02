@@ -15,7 +15,9 @@ def _handler(request: httpx.Request) -> httpx.Response:
         json={
             "database_id": body["database_id"],
             "scorer": body.get("scorer", "morgan"),
-            "results": [{"rank": 1, "smiles": "CCO", "score": 1.0}],
+            "results": [
+                {"rank": 1, "smiles": "CCO", "score": 1.0, "price": 163}
+            ],
         },
     )
 
@@ -29,7 +31,29 @@ def test_module_level_operations_use_scientific_surface() -> None:
     result = dmc.search("CCO", database="db", method="shape", **options)
     assert list(result) == ["CCO"]
     assert result.method == "shape"
+    assert result.prices == [163]
     assert dmc.catalog(**options) == {"spaces": []}
+
+
+def test_prices_are_read_from_the_search_response_without_an_extra_request() -> None:
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return _handler(request)
+
+    result = dmc.search(
+        "CCO",
+        database="db",
+        api_key="token",
+        api_url="https://example.test",
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert result.prices == [163]
+    assert result.hits[0].price == 163
+    assert result.prices == [163]
+    assert len(requests) == 1
 
 
 def test_async_namespace_matches_sync_semantics() -> None:

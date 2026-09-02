@@ -244,7 +244,13 @@ def test_lightweight_result_is_an_aligned_molecule_sequence() -> None:
             "timing_ms": {"total": 12.5},
             "new_server_field": {"kept": True},
             "results": [
-                {"rank": 1, "smiles": "CCO", "score": 0.9, "product_id": "p1"},
+                {
+                    "rank": 1,
+                    "smiles": "CCO",
+                    "score": 0.9,
+                    "product_id": "p1",
+                    "price": 163,
+                },
                 {"rank": 2, "smiles": "CCN", "score": None, "new_hit_field": 7},
             ],
         }
@@ -254,6 +260,8 @@ def test_lightweight_result_is_an_aligned_molecule_sequence() -> None:
     assert result[0] == "CCO"
     assert result[:] == ["CCO", "CCN"]
     assert result.scores == [0.9, None]
+    assert result.prices == [163, None]
+    assert result.hits[0].price == 163
     assert result.ids == ["p1", None]
     assert result.hits[1].extra == {"new_hit_field": 7}
     assert result.meta.release == "2026.09"

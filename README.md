@@ -34,17 +34,32 @@ result = dmc.search(
 
 print(result)
 for hit in result.hits:
-    print(f"{hit.rank}  score={hit.score:.4f}  {hit.smiles}")
+    print(f"{hit.rank}  score={hit.score:.4f}  price=${hit.price}  {hit.smiles}")
 ```
 
 Example output (the database release and search results can change):
 
 ```text
 SearchResult(3 molecules, method='shape', database='enamine-real-v5a')
-1  score=0.9726  O=C(O)Oc1ccccc1C(=O)O
-2  score=0.9719  COC(=O)Oc1ccccc1C(=O)O
-3  score=0.8713  O=C(O)COc1ccccc1C(=O)O
+1  score=0.9726  price=$163  O=C(O)Oc1ccccc1C(=O)O
+2  score=0.9719  price=$163  COC(=O)Oc1ccccc1C(=O)O
+3  score=0.8713  price=$245  O=C(O)COc1ccccc1C(=O)O
 ```
+
+Prices are whole US dollars for delivery to the United States and default to 1 mg where the
+vendor uses pack sizes. They are returned in the original search response, so both `hit.price`
+and the aligned `result.prices` list are available without another API request. An unavailable
+price is `None`.
+
+| Database | Price available | Basis |
+| --- | --- | --- |
+| Freedom Space 5 | Yes | $250 at 1 mg |
+| Enamine REAL | Yes | $163 or $245, selected by the trained factorized model |
+| eMolecules Synple | Yes | Building-block prices plus reaction price |
+| eMolecules eXplore | Yes | Building-block prices plus reaction price |
+| VAST | No | — |
+| d2b / molecule.one | No | — |
+| ChemInfinita | No | — |
 
 ## SMILES and SMARTS substructure search
 
@@ -67,7 +82,7 @@ SQC-derived SMARTS queries. Complex recursive SMARTS can require a longer timeou
 Module-level `search`, `substructure`, `sample`, and `catalog` operations create and close a small
 internal client. The explicit `Client` remains available for connection reuse and advanced
 selections/runs. Search results behave as ordered SMILES sequences (`result[0]`, `result[:3]`,
-`list(result)`) while retaining typed hits, scores, metadata, warnings, and the complete raw
+`list(result)`) while retaining typed hits, scores, prices, metadata, warnings, and the complete raw
 response locally.
 
 Credentials resolve from an explicit `api_key`, `DEEPMEDCHEM_API_KEY`, compatibility environment
