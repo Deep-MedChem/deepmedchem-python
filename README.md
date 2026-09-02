@@ -34,7 +34,8 @@ result = dmc.search(
 
 print(result)
 for hit in result.hits:
-    print(f"{hit.rank}  score={hit.score:.4f}  price=${hit.price}  {hit.smiles}")
+    price = f"${hit.price}" if hit.price is not None else "unavailable"
+    print(f"{hit.rank}  score={hit.score:.4f}  price={price}  {hit.smiles}")
 ```
 
 Example output (the database release and search results can change):
@@ -64,7 +65,7 @@ price is `None`.
 ## SMILES and SMARTS substructure search
 
 Use `format="smiles"` for a concrete molecular graph, including the existing
-junction-spanning examples. Use `query_format="smarts"` for atom lists, ring constraints,
+junction-spanning examples. Use `format="smarts"` for atom lists, ring constraints,
 recursive expressions, and other SMARTS query features:
 
 ```python
