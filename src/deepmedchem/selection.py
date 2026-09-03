@@ -10,6 +10,19 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+class PredictedPropertyRankQuantileAcquisition(BaseModel):
+    """Experimental predicted-property shortlist acquisition directive."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["predicted_property_rank_quantile"] = (
+        "predicted_property_rank_quantile"
+    )
+    endpoint_id: str = Field(min_length=1, max_length=256)
+    direction: Literal["minimize", "maximize"]
+    keep_fraction: float = Field(gt=0, le=1)
+
+
 class SelectionModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -131,6 +144,33 @@ class Selection:
             )
 
         return self._changed(update)
+
+    def acquire_predicted_property(
+        self,
+        endpoint_id: str,
+        *,
+        direction: Literal["minimize", "maximize"],
+        keep_fraction: float,
+    ) -> Selection:
+        """Reduce a similarity shortlist using an experimental predicted signal."""
+
+        acquisition = PredictedPropertyRankQuantileAcquisition(
+            endpoint_id=endpoint_id,
+            direction=direction,
+            keep_fraction=keep_fraction,
+        )
+        if self._model.strategy.get("type") != "ranked":
+            raise ValueError("predicted-property acquisition requires ranked strategy")
+        if not any(item.get("type") == "similarity" for item in self._model.objectives):
+            raise ValueError("predicted-property acquisition requires a similarity objective")
+        if "acquisition" in self._model.execution:
+            raise ValueError("selection already has an acquisition directive")
+
+        return self._changed(
+            lambda payload: payload["execution"].update(
+                acquisition=acquisition.model_dump(mode="json")
+            )
+        )
 
     def require_different_scaffold(self, method: str, *, reference: str) -> Selection:
         def update(payload):

@@ -65,6 +65,9 @@ def main() -> None:
             selection = (
                 Selection.from_database("enamine-real-v5a")
                 .sample(seed=42)
+                .require_preset("lipinski-ro5/v1")
+                .where("rdkit.mol_wt", lte=500, units="Da")
+                .include("properties")
                 .limit(1)
             )
             validation = dmc.selections.validate(selection)
@@ -72,6 +75,23 @@ def main() -> None:
             estimate = dmc.selections.estimate(validation.normalized_selection)
             assert estimate.execution_tier == "synchronous"
             assert dmc.selections.create(estimate.normalized_selection).results
+
+            combined = (
+                Selection.from_database("enamine-real-v5a")
+                .reference("query", smiles="CCO")
+                .maximize_similarity("rdkit.ecfp4_tanimoto", reference="query")
+                .where("rdkit.mol_wt", lte=500, units="Da")
+                .acquire_predicted_property(
+                    "openadmet-herg-pchembl",
+                    direction="minimize",
+                    keep_fraction=0.5,
+                )
+                .include("properties", "objective_components")
+                .limit(1)
+            )
+            combined_result = dmc.selections.create(combined)
+            assert combined_result.acquisition is not None
+            assert combined_result.hits[0].acquisition is not None
 
             template = (
                 Selection.from_database("enamine-real-v5a")
