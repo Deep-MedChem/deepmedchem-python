@@ -64,6 +64,18 @@ def _handler(request):
                 "work": {"items": 1},
             },
         )
+    if path == "/api/v2/selections":
+        return httpx.Response(
+            200,
+            json={
+                "id": "sel_docs_example",
+                "object": "selection",
+                "status": "completed",
+                "selection_hash": _hash(body),
+                "normalized_selection": body,
+                "results": [],
+            },
+        )
     if path == "/api/v2/runs:estimate":
         return httpx.Response(200, json={"admissible": True})
     if path == "/api/v2/runs":
@@ -121,6 +133,7 @@ def test_every_published_sdk_example_executes(monkeypatch):
 
     assert executed == [
         "durable_runs.py",
+        "property_filtered_sampling.py",
         "python_quickstart.py",
         "selection_builder.py",
         "substructure_search.py",

@@ -2,6 +2,7 @@ import asyncio
 import json
 
 import httpx
+import pytest
 
 from deepmedchem import AsyncClient, Client, Run, Selection, __version__
 from deepmedchem.client import DeepMedChemError
@@ -124,6 +125,111 @@ def test_selection_accepts_normalized_unpinned_database_release() -> None:
     payload = Selection.from_database("enamine-real-v5a").sample(seed=42).to_dict()
     payload["database"]["release_id"] = None
     assert Selection.model_validate(payload).to_dict()["database"]["release_id"] is None
+
+
+def _combined_selection() -> Selection:
+    return (
+        Selection.from_database("enamine-real-v5a")
+        .reference("query", smiles="CCO")
+        .maximize_similarity("rdkit.ecfp4_tanimoto", reference="query")
+        .require_preset("lipinski-ro5/v1")
+        .where("rdkit.mol_wt", lte=450, units="Da")
+        .acquire_predicted_property(
+            "openadmet-herg-pchembl",
+            direction="minimize",
+            keep_fraction=0.25,
+        )
+        .include("properties", "objective_components")
+        .limit(100)
+    )
+
+
+def _selection_response(selection: Selection) -> dict:
+    return {
+        "id": "sel_1",
+        "object": "selection",
+        "status": "completed",
+        "selection_hash": "abc",
+        "normalized_selection": selection.to_dict(),
+        "results": [
+            {
+                "rank": 1,
+                "smiles": "CCO",
+                "properties": {"MolWt": 46.07},
+                "acquisition": {
+                    "endpoint_id": "openadmet-herg-pchembl",
+                    "predicted_value": 4.2,
+                    "applicable": True,
+                },
+            }
+        ],
+        "acquisition": {
+            "endpoint_id": "openadmet-herg-pchembl",
+            "model_version": "herg@abc123",
+            "direction": "minimize",
+            "units": "pChEMBL",
+            "qualification": "experimental-acquisition-only",
+            "candidates_before": 400,
+            "candidates_after": 100,
+        },
+    }
+
+
+def test_sync_selection_emits_combined_document_and_models_acquisition() -> None:
+    selection = _combined_selection()
+
+    def handler(request: httpx.Request):
+        assert json.loads(request.content) == selection.to_dict()
+        return httpx.Response(200, json=_selection_response(selection))
+
+    with Client(
+        api_key="token",
+        api_url="https://example.test",
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        result = client.selections.create(selection)
+
+    assert result.acquisition.qualification == "experimental-acquisition-only"
+    assert result.hits[0].acquisition.predicted_value == 4.2
+    assert result.hits[0].properties == {"MolWt": 46.07}
+
+
+def test_async_selection_emits_the_same_combined_document() -> None:
+    async def scenario():
+        selection = _combined_selection()
+
+        async def handler(request: httpx.Request):
+            assert json.loads(request.content) == selection.to_dict()
+            return httpx.Response(200, json=_selection_response(selection))
+
+        async with AsyncClient(
+            api_key="token",
+            api_url="https://example.test",
+            transport=httpx.MockTransport(handler),
+        ) as client:
+            result = await client.selections.create(selection)
+        assert result.acquisition.candidates_before == 400
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"endpoint_id": "", "direction": "minimize", "keep_fraction": 0.25},
+        {"endpoint_id": "herg", "direction": "lower", "keep_fraction": 0.25},
+        {"endpoint_id": "herg", "direction": "minimize", "keep_fraction": 0},
+        {"endpoint_id": "herg", "direction": "minimize", "keep_fraction": 1.1},
+    ],
+)
+def test_acquisition_builder_validates_arguments_locally(arguments) -> None:
+    selection = (
+        Selection.from_database("db")
+        .reference("query", smiles="CCO")
+        .maximize_similarity("rdkit.ecfp4_tanimoto", reference="query")
+    )
+    with pytest.raises(ValueError):
+        selection.acquire_predicted_property(**arguments)
 
 
 def test_run_builder_creates_shared_template_and_unique_bindings() -> None:
