@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator, Mapping, Sequence
 from typing import Any, overload
 
@@ -152,6 +153,27 @@ class SearchResult(APIModel, Sequence[str]):
     def to_records(self) -> list[dict[str, Any]]:
         return [dict(row) for row in self.results]
 
+    def to_csv(self, path: str | os.PathLike[str]) -> int:
+        """Write the hits to a CSV file and return the number of rows written."""
+
+        from .export import write_csv
+
+        return write_csv(self, path)
+
+    def to_sdf(self, path: str | os.PathLike[str]) -> int:
+        """Write the hits to an SDF file (requires RDKit) with scores and prices as tags."""
+
+        from .export import write_sdf
+
+        return write_sdf(self, path)
+
+    def to_file(self, path: str | os.PathLike[str], *, format: str | None = None) -> int:
+        """Write the hits to ``path`` as CSV, SDF, SMILES, or JSON, inferred from the suffix."""
+
+        from .export import write_result
+
+        return write_result(self, path, format=format)
+
     def to_pandas(self):
         try:
             import pandas as pd
@@ -177,6 +199,46 @@ class SampleResult(SearchResult):
     @property
     def method(self) -> str:
         return "sample"
+
+
+class UsagePromotion(APIModel):
+    """A temporary multiplier applied to the daily credit allowance."""
+
+    id: str | None = None
+    label: str | None = None
+    multiplier: float | None = None
+    base_limit: int | None = Field(default=None, alias="baseLimit")
+    starts_at: str | None = Field(default=None, alias="startsAt")
+    ends_at: str | None = Field(default=None, alias="endsAt")
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+
+class Usage(APIModel):
+    """Daily CHEESE Credit usage for the account that owns the API key."""
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    plan: str | None = None
+    limit: int | None = None
+    used: int = 0
+    remaining: int | None = None
+    unlimited: bool = False
+    window: str | None = "day"
+    reset_at: str | None = Field(default=None, alias="resetAt")
+    seconds_to_reset: int | None = Field(default=None, alias="secondsToReset")
+    promo: UsagePromotion | None = None
+    user_id: str | None = Field(default=None, alias="userId")
+
+    @property
+    def tier(self) -> str | None:
+        """Alias for ``plan``: free, registered, private, premium, ..."""
+
+        return self.plan
+
+    def __repr__(self) -> str:
+        credits = "unlimited" if self.unlimited else f"{self.remaining}/{self.limit} remaining"
+        return f"Usage(plan={self.plan!r}, credits={credits})"
 
 
 class SelectionValidation(APIModel):

@@ -12,8 +12,9 @@ from .client import (
     DMCError,
 )
 from .config import Config, CredentialError, CredentialProvider
-from .facade import catalog, sample, search, substructure
-from .models import Hit, SampleResult, SearchMeta, SearchResult, SubstructureResult
+from .facade import catalog, sample, search, substructure, usage
+from .models import Hit, SampleResult, SearchMeta, SearchResult, SubstructureResult, Usage
+from .ordering import OrderBundle, OrderDraft, OrderMolecule, prepare_order
 from .selection import Run, Selection
 
 __all__ = [
@@ -27,16 +28,22 @@ __all__ = [
     "DMCClient",
     "DMCError",
     "Hit",
+    "OrderBundle",
+    "OrderDraft",
+    "OrderMolecule",
     "Run",
     "SampleResult",
     "SearchMeta",
     "SearchResult",
     "Selection",
     "SubstructureResult",
+    "Usage",
     "aio",
     "catalog",
+    "prepare_order",
     "sample",
     "search",
     "substructure",
+    "usage",
     "__version__",
 ]

@@ -6,7 +6,7 @@ from typing import Any
 
 from .client import Client
 from .config import CredentialSource
-from .models import SampleResult, SearchResult, SubstructureResult
+from .models import SampleResult, SearchResult, SubstructureResult, Usage
 
 
 def _client_options(
@@ -157,3 +157,27 @@ def catalog(
         )
     ) as client:
         return client.catalog()
+
+
+def usage(
+    *,
+    api_key: str | None = None,
+    api_url: str | None = None,
+    profile: str | None = None,
+    credential_provider: CredentialSource | None = None,
+    timeout: float = 45.0,
+    transport: Any = None,
+) -> Usage:
+    """Return the account plan and remaining daily credits, then close the transport."""
+
+    with Client(
+        **_client_options(
+            api_key=api_key,
+            api_url=api_url,
+            profile=profile,
+            credential_provider=credential_provider,
+            timeout=timeout,
+            transport=transport,
+        )
+    ) as client:
+        return client.usage()

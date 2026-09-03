@@ -39,6 +39,9 @@ dependencies = [
 
 [project.optional-dependencies]
 auth = []
+sdf = [
+  "rdkit>=2023.9",
+]
 test = [
   "build>=1.2,<2",
   "pytest>=8.2,<10",
