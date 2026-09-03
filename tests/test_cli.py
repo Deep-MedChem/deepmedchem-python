@@ -1,6 +1,31 @@
+import functools
 import io
 
+import httpx
+
 import deepmedchem.cli as cli
+from deepmedchem import Client
+
+
+def _mock_client(monkeypatch, status_code: int):
+    def handler(request):
+        if status_code == 200:
+            return httpx.Response(200, json={"libraries": []})
+        return httpx.Response(
+            status_code, json={"error": {"code": "unauthorized", "message": "A valid API key."}}
+        )
+
+    monkeypatch.setattr(
+        cli,
+        "Client",
+        functools.partial(
+            Client,
+            api_key="secret-value",
+            api_url="https://api.example.test",
+            transport=httpx.MockTransport(handler),
+            max_retries=0,
+        ),
+    )
 
 
 def test_token_is_never_a_command_line_option() -> None:
@@ -15,9 +40,21 @@ def test_login_from_stdin_saves_only_to_selected_profile(monkeypatch, capsys) ->
     saved = []
     monkeypatch.setattr(cli.sys, "stdin", io.StringIO("secret-value\n"))
     monkeypatch.setattr(cli, "save_api_key", lambda token, profile: saved.append((token, profile)))
+    _mock_client(monkeypatch, 200)
     assert cli.main(["login", "--profile", "dev", "--token-stdin"]) == 0
     assert saved == [("secret-value", "dev")]
     assert "secret-value" not in capsys.readouterr().out
+
+
+def test_login_warns_when_the_api_rejects_the_saved_key(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(cli.sys, "stdin", io.StringIO("secret-value\n"))
+    monkeypatch.setattr(cli, "save_api_key", lambda token, profile: cli.FILE_STORE)
+    _mock_client(monkeypatch, 401)
+    assert cli.main(["login", "--token-stdin"]) == 1
+    captured = capsys.readouterr()
+    assert "Authenticated" in captured.out
+    assert "rejected the approved key" in captured.err
+    assert "secret-value" not in captured.out + captured.err
 
 
 def test_headless_login_prints_url_and_reports_file_store(monkeypatch, capsys) -> None:
@@ -31,6 +68,7 @@ def test_headless_login_prints_url_and_reports_file_store(monkeypatch, capsys) -
     monkeypatch.setattr(cli, "browser_login", fake_browser_login)
     monkeypatch.setattr(cli, "can_open_browser", lambda: False)
     monkeypatch.setattr(cli, "save_api_key", lambda token, profile: cli.FILE_STORE)
+    _mock_client(monkeypatch, 200)
     assert cli.main(["login"]) == 0
     out = capsys.readouterr().out
     assert calls["open_browser"] is False

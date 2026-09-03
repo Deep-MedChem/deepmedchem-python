@@ -81,7 +81,6 @@ def _score(value: float | None) -> str:
     return f"{value:.4f}" if value is not None else "-"
 
 
-
 def _duration(seconds: int | None) -> str:
     if seconds is None:
         return "?"
@@ -108,8 +107,7 @@ def _print_database_table(catalog: dict[str, Any]) -> None:
     print(_format_table(["database", "name", "availability", "orders"], rows))
     print()
     print(
-        f"{len(rows)} databases. Order or request quotes by email, "
-        "or run `dmc order results.csv`."
+        f"{len(rows)} databases. Order or request quotes by email, or run `dmc order results.csv`."
     )
 
 
@@ -338,6 +336,25 @@ def _login(args) -> int:
         )
     else:
         print(f"Authenticated (profile: {profile}). Credential saved in the OS credential store.")
+    return _verify_saved_key(profile)
+
+
+def _verify_saved_key(profile: str) -> int:
+    """Confirm the stored key is accepted by the API so a bad key surfaces at login time."""
+
+    try:
+        with Client(profile=profile) as client:
+            client.catalog()
+    except DeepMedChemError as error:
+        if error.status_code == 401:
+            print(
+                "warning: the API rejected the approved key (it may be expired or revoked). "
+                "Run `dmc login` again and choose 'Create a new key' or enable auto-renew "
+                "on the approval page.",
+                file=sys.stderr,
+            )
+            return 1
+        print(f"warning: could not verify the key yet: {error}", file=sys.stderr)
     return 0
 
 
