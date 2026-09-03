@@ -170,6 +170,10 @@ class SearchResult(APIModel, Sequence[str]):
             f"method={self.method!r}, database={self.database_id!r})"
         )
 
+    def __str__(self) -> str:
+        # Without this, pydantic's field dump would print every row of every result.
+        return repr(self)
+
     def to_records(self) -> list[dict[str, Any]]:
         return [dict(row) for row in self.results]
 
@@ -259,6 +263,10 @@ class Usage(APIModel):
     def __repr__(self) -> str:
         credits = "unlimited" if self.unlimited else f"{self.remaining}/{self.limit} remaining"
         return f"Usage(plan={self.plan!r}, credits={credits})"
+
+    def __str__(self) -> str:
+        # Without this, pydantic's field dump would print the whole quota payload.
+        return repr(self)
 
 
 class SelectionValidation(APIModel):
