@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       publish_pypi:
-        description: Publish this build with the configured PyPI Trusted Publisher
+        description: Publish this build to PyPI with the configured PYPI_API_TOKEN secret
         type: boolean
         required: true
         default: false
@@ -36,8 +36,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: pypi
-    permissions:
-      id-token: write
     steps:
       - uses: actions/download-artifact@v4
         with:
