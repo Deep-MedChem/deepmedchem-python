@@ -81,6 +81,14 @@ def _score(value: float | None) -> str:
     return f"{value:.4f}" if value is not None else "-"
 
 
+def _date(value: str | None) -> str:
+    """Trim an ISO timestamp to its calendar date for compact display."""
+
+    if value and len(value) >= 10 and value[4] == "-" and value[7] == "-":
+        return value[:10]
+    return value or "?"
+
+
 def _duration(seconds: int | None) -> str:
     if seconds is None:
         return "?"
@@ -96,45 +104,82 @@ def _print_database_table(catalog: dict[str, Any]) -> None:
     for library in libraries:
         database_id = str(library.get("database_id") or "")
         contact = contacts.get(database_id.casefold())
+        pricing = library.get("pricing") or {}
         rows.append(
             [
                 database_id,
-                library.get("name"),
-                DELIVERY_TIME,
+                _human_count(library.get("product_count")),
+                "yes" if pricing.get("available") else "-",
                 contact.email if contact else "-",
             ]
         )
-    print(_format_table(["database", "name", "availability", "orders"], rows))
-    print()
-    print(
-        f"{len(rows)} databases. Order or request quotes by email, or run `dmc order results.csv`."
-    )
-
-
-def _print_result_table(result: SearchResult, *, query: str | None = None) -> None:
-    meta = result.meta
-    rows = [
-        [hit.rank, _score(hit.score), _price(hit.price), hit.product_id or "-", hit.smiles]
-        for hit in result.hits
-    ]
     print(
         _format_table(
-            ["rank", "score", "price", "product_id", "smiles"],
+            ["database", "molecules", "prices", "orders"],
             rows,
-            align_right=[True, True, True, False, False],
+            align_right=[False, True, False, False],
         )
     )
-    details = [f"{len(result)} molecules", f"method={meta.method}", f"database={meta.database}"]
-    if meta.release:
-        details.append(f"release={meta.release}")
-    if meta.metric:
-        details.append(f"metric={meta.metric!r}")
-    if meta.elapsed_ms is not None:
-        details.append(f"{meta.elapsed_ms:.0f} ms")
     print()
-    print(", ".join(details))
-    for warning in result.warnings:
-        print(f"warning: {warning.message or warning.code}", file=sys.stderr)
+    print(f"{len(rows)} databases, made on demand and delivered in {DELIVERY_TIME}.")
+    print("Order or request quotes by email, or run `dmc order results.csv`.")
+
+
+def _catalog_entry(client: Client, database_id: str | None) -> dict[str, Any] | None:
+    """Look up the catalog record of ``database_id`` (name, size); ``None`` when unavailable."""
+
+    if not database_id:
+        return None
+    try:
+        catalog = client.catalog()
+    except DeepMedChemError:
+        return None
+    wanted = database_id.casefold()
+    for library in catalog.get("libraries") or []:
+        if str(library.get("database_id") or "").casefold() == wanted:
+            return library
+    return None
+
+
+def _result_summary(result: SearchResult, library: dict[str, Any] | None) -> list[str]:
+    """Short, human sentences about what was searched and how the hits scored."""
+
+    meta = result.meta
+    name = (library or {}).get("name") or meta.database or "the database"
+    size = _human_count((library or {}).get("product_count")) if library else "-"
+    space = f"{size} molecules ({name})" if size != "-" else str(name)
+    elapsed = f" in {meta.elapsed_ms:.0f} ms" if meta.elapsed_ms is not None else ""
+    count = len(result)
+    if meta.method == "sample":
+        return [f"Random sample of {count} from {space}."]
+    if meta.method == "substructure":
+        return [f"Searched {space}{elapsed}.", f"{count} exact substructure matches returned."]
+    lines = [f"Searched {space}{elapsed}."]
+    scores = [score for score in result.scores if score is not None]
+    if scores:
+        metric = meta.metric or meta.method or "similarity"
+        lines.append(f"Similarity range: {min(scores):.2f}-{max(scores):.2f} {metric}.")
+    return lines
+
+
+def _print_result_table(result: SearchResult, *, library: dict[str, Any] | None = None) -> None:
+    method = result.meta.method
+    if method == "substructure":
+        headers = ["rank", "match", "price", "smiles"]
+        rows = [[hit.rank, "exact", _price(hit.price), hit.smiles] for hit in result.hits]
+        right = [True, False, True, False]
+    elif method == "sample":
+        headers = ["rank", "price", "smiles"]
+        rows = [[hit.rank, _price(hit.price), hit.smiles] for hit in result.hits]
+        right = [True, True, False]
+    else:
+        headers = ["rank", "score", "price", "smiles"]
+        rows = [[hit.rank, _score(hit.score), _price(hit.price), hit.smiles] for hit in result.hits]
+        right = [True, True, True, False]
+    print(_format_table(headers, rows, align_right=right))
+    print()
+    for line in _result_summary(result, library):
+        print(line)
 
 
 def _print_usage(usage: Usage) -> None:
@@ -155,7 +200,7 @@ def _print_usage(usage: Usage) -> None:
         if promo.base_limit is not None:
             extra.append(f"base {promo.base_limit:,}/day")
         if promo.ends_at:
-            extra.append(f"until {promo.ends_at}")
+            extra.append(f"until {_date(promo.ends_at)}")
         print(f"promo:     {promo.label} ({', '.join(extra)})")
 
 
@@ -427,12 +472,15 @@ def _databases(args) -> int:
     return 0
 
 
-def _emit_result(args, result: SearchResult) -> int:
+def _emit_result(args, result: SearchResult, client: Client | None = None) -> int:
+    library = None
+    if not args.json and client is not None:
+        library = _catalog_entry(client, result.meta.database)
     if args.output:
         selected = args.format or infer_format(args.output)
         written = write_result(result, args.output, format=selected)
         if not args.json:
-            _print_result_table(result)
+            _print_result_table(result, library=library)
             print(f"Saved {written} molecules to {args.output} ({selected}).")
         else:
             print(json.dumps(result.raw, indent=2, sort_keys=True))
@@ -441,7 +489,7 @@ def _emit_result(args, result: SearchResult) -> int:
     if args.json:
         print(json.dumps(result.raw, indent=2, sort_keys=True))
     else:
-        _print_result_table(result)
+        _print_result_table(result, library=library)
     return 0
 
 
@@ -455,7 +503,7 @@ def _search(args) -> int:
             shortlist_multiplier=args.shortlist_multiplier,
             include_synthons=args.include_synthons,
         )
-    return _emit_result(args, result)
+        return _emit_result(args, result, client)
 
 
 def _substructure(args) -> int:
@@ -468,7 +516,7 @@ def _substructure(args) -> int:
             timeout_seconds=args.timeout_seconds,
             include_synthons=args.include_synthons,
         )
-    return _emit_result(args, result)
+        return _emit_result(args, result, client)
 
 
 def _sample(args) -> int:
@@ -479,7 +527,7 @@ def _sample(args) -> int:
             seed=args.seed,
             include_synthons=args.include_synthons,
         )
-    return _emit_result(args, result)
+        return _emit_result(args, result, client)
 
 
 def _order(args) -> int:
