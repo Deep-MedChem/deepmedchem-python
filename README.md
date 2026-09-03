@@ -19,12 +19,19 @@ It contains no RDKit, models, databases, or proprietary search implementation.
 pip install deepmedchem
 ```
 
-Authenticate once with the OS credential store, or set `DEEPMEDCHEM_API_KEY` in automation:
+Authenticate once, or set `DEEPMEDCHEM_API_KEY` in automation:
 
 ```bash
 deepmedchem login
 deepmedchem status
 ```
+
+`deepmedchem login` prints a short code and an approval URL. On a desktop it opens the URL in your
+browser; on a headless server, container, or SSH session it only prints the URL, which you can open
+on any device. Sign in or create a CHEESE account there, approve the connection, and the CLI finishes
+on its own. The key goes to the OS keyring when one is available, otherwise to a `credentials.json`
+file (mode 0600) next to the SDK config. Use `--no-browser` to force the print-only behaviour and
+`--token-stdin` to paste an existing key from a pipe.
 
 ## Quickstart
 
@@ -99,8 +106,10 @@ credit. Synchronous work is terminated after 10 seconds; use the Runs API for lo
 basic item has a 60-second limit.
 
 Credentials resolve from an explicit `api_key`, `DEEPMEDCHEM_API_KEY`, compatibility environment
-variables, a custom credential provider, or the selected profile's OS-keyring entry. Use
-`deepmedchem login --profile dev` for the development service; profiles never share credentials.
+variables, a custom credential provider, the selected profile's OS-keyring entry, or the
+`credentials.json` fallback file. Set `DEEPMEDCHEM_CREDENTIAL_STORE=file` or `=keyring` to force one
+store. Use `deepmedchem login --profile dev` for the development service; profiles never share
+credentials.
 
 Every request identifies its source with `X-DMC-Client`, `X-DMC-Client-Version`, and
 `X-DMC-SDK-Version`. The default values attribute direct SDK use to `deepmedchem-python`; an
