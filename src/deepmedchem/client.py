@@ -9,6 +9,7 @@ import httpx
 
 from . import __version__
 from .config import (
+    DEFAULT_ACCOUNT_URL,
     DEFAULT_API_URL,
     CredentialSource,
     load_config,
@@ -26,8 +27,11 @@ from .models import (
     SelectionResult,
     SelectionValidation,
     SubstructureResult,
+    Usage,
 )
 from .selection import Run, Selection
+
+USAGE_PATH = "/rate-limit/status"
 
 
 class DeepMedChemError(RuntimeError):
@@ -221,6 +225,7 @@ class Client:
         application_version: str | None = None,
         max_retries: int = 2,
         retry_backoff: float = 0.25,
+        account_url: str | None = None,
     ) -> None:
         if max_retries < 0:
             raise ValueError("max_retries must be non-negative")
@@ -228,7 +233,11 @@ class Client:
             raise ValueError("retry_backoff must be non-negative")
         config = load_config()
         selected_profile = resolve_profile(profile, config)
-        configured_url = api_url or config.profile(selected_profile).api_url or DEFAULT_API_URL
+        selected = config.profile(selected_profile)
+        configured_url = api_url or selected.api_url or DEFAULT_API_URL
+        self._account_url = (account_url or selected.account_url or DEFAULT_ACCOUNT_URL).rstrip(
+            "/"
+        )
         token = _credentials(api_key, credential_provider, profile=selected_profile)
         client_version = application_version or __version__
         self._client = httpx.Client(
@@ -287,6 +296,11 @@ class Client:
 
     def catalog(self) -> dict[str, Any]:
         return self._request("GET", "/api/v2/catalog")
+
+    def usage(self) -> Usage:
+        """Return the account plan and today's CHEESE Credit usage for this key."""
+
+        return Usage.model_validate(self._request("GET", f"{self._account_url}{USAGE_PATH}"))
 
     def search(
         self,
@@ -533,6 +547,7 @@ class AsyncClient:
         application_version: str | None = None,
         max_retries: int = 2,
         retry_backoff: float = 0.25,
+        account_url: str | None = None,
     ) -> None:
         if max_retries < 0:
             raise ValueError("max_retries must be non-negative")
@@ -540,7 +555,11 @@ class AsyncClient:
             raise ValueError("retry_backoff must be non-negative")
         config = load_config()
         selected_profile = resolve_profile(profile, config)
-        configured_url = api_url or config.profile(selected_profile).api_url or DEFAULT_API_URL
+        selected = config.profile(selected_profile)
+        configured_url = api_url or selected.api_url or DEFAULT_API_URL
+        self._account_url = (account_url or selected.account_url or DEFAULT_ACCOUNT_URL).rstrip(
+            "/"
+        )
         token = _credentials(api_key, credential_provider, profile=selected_profile)
         client_version = application_version or __version__
         self._client = httpx.AsyncClient(
@@ -599,6 +618,13 @@ class AsyncClient:
 
     async def catalog(self) -> dict[str, Any]:
         return await self._request("GET", "/api/v2/catalog")
+
+    async def usage(self) -> Usage:
+        """Return the account plan and today's CHEESE Credit usage for this key."""
+
+        return Usage.model_validate(
+            await self._request("GET", f"{self._account_url}{USAGE_PATH}")
+        )
 
     async def search(self, smiles: str, **kwargs) -> SearchResult:
         method = kwargs.pop("method", "morgan")

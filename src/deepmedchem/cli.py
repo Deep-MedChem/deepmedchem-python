@@ -1,17 +1,21 @@
-"""Small standard-library CLI for DeepMedChem authentication."""
+"""Standard-library CLI for DeepMedChem: authentication, catalog, searches, and usage."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import sys
+from collections.abc import Iterable, Sequence
+from typing import Any
 
 from . import __version__
-from .auth import LoginError, browser_login
+from .auth import LoginError, browser_login, can_open_browser
 from .client import Client, DeepMedChemError
 from .config import (
+    FILE_STORE,
     CredentialError,
     config_path,
+    credentials_path,
     delete_all_api_keys,
     delete_api_key,
     get_stored_api_key,
@@ -19,10 +23,191 @@ from .config import (
     resolve_profile,
     save_api_key,
 )
+from .export import FORMATS, infer_format, write_result
+from .models import SearchResult, Usage
+from .ordering import open_order_drafts, prepare_order
+
+SEARCH_METHODS = ("morgan", "shape", "esp")
+
+
+# --- Presentation helpers ----------------------------------------------------
+
+
+def _format_table(
+    headers: Sequence[str],
+    rows: Iterable[Sequence[Any]],
+    *,
+    align_right: Sequence[bool] | None = None,
+) -> str:
+    """Render a plain, monospace table with a single header rule."""
+
+    cells = [[("" if value is None else str(value)) for value in row] for row in rows]
+    widths = [len(header) for header in headers]
+    for row in cells:
+        for index, value in enumerate(row):
+            widths[index] = max(widths[index], len(value))
+    right = list(align_right or [False] * len(headers))
+
+    def render(row: Sequence[str]) -> str:
+        parts = []
+        for index, value in enumerate(row):
+            width = widths[index]
+            parts.append(value.rjust(width) if right[index] else value.ljust(width))
+        return "  ".join(parts).rstrip()
+
+    lines = [render(list(headers)), "  ".join("-" * width for width in widths)]
+    lines.extend(render(row) for row in cells)
+    return "\n".join(lines)
+
+
+def _human_count(value: Any) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "-"
+    for suffix, scale in (("T", 1e12), ("B", 1e9), ("M", 1e6), ("K", 1e3)):
+        if number >= scale:
+            return f"{number / scale:.1f}{suffix}"
+    return f"{int(number)}"
+
+
+def _price(value: int | None) -> str:
+    return f"${value}" if value is not None else "-"
+
+
+def _score(value: float | None) -> str:
+    return f"{value:.4f}" if value is not None else "-"
+
+
+def _pricing_summary(pricing: Any) -> str:
+    if not isinstance(pricing, dict) or not pricing.get("available"):
+        return "-"
+    parts = [str(pricing.get("currency") or "USD")]
+    amount = pricing.get("default_amount_mg")
+    if amount is not None:
+        parts.append(f"{amount} mg")
+    ship_to = pricing.get("ship_to")
+    if ship_to:
+        parts.append(f"to {ship_to}")
+    return ", ".join(parts)
+
+
+def _duration(seconds: int | None) -> str:
+    if seconds is None:
+        return "?"
+    hours, rest = divmod(max(int(seconds), 0), 3600)
+    minutes = rest // 60
+    return f"{hours}h {minutes:02d}m"
+
+
+def _print_database_table(catalog: dict[str, Any]) -> None:
+    libraries = catalog.get("libraries") or []
+    rows = []
+    for library in libraries:
+        capabilities = library.get("capabilities") or {}
+        methods = ["morgan"] if capabilities.get("search") else []
+        methods.extend(capabilities.get("search_cheese") or [])
+        rows.append(
+            [
+                library.get("database_id"),
+                library.get("name"),
+                _human_count(library.get("product_count")),
+                _pricing_summary(library.get("pricing")),
+                ", ".join(methods) or "-",
+                "yes" if capabilities.get("search_substructure") else "no",
+            ]
+        )
+    print(
+        _format_table(
+            ["database", "name", "size", "pricing", "similarity", "substructure"],
+            rows,
+            align_right=[False, False, True, False, False, False],
+        )
+    )
+    print()
+    print(
+        f"{len(rows)} databases. Size is the number of enumerable molecules. Prices are whole "
+        "US dollars at the listed pack size; '-' means the search response carries no price."
+    )
+
+
+def _print_result_table(result: SearchResult, *, query: str | None = None) -> None:
+    meta = result.meta
+    rows = [
+        [hit.rank, _score(hit.score), _price(hit.price), hit.product_id or "-", hit.smiles]
+        for hit in result.hits
+    ]
+    print(
+        _format_table(
+            ["rank", "score", "price", "product_id", "smiles"],
+            rows,
+            align_right=[True, True, True, False, False],
+        )
+    )
+    details = [f"{len(result)} molecules", f"method={meta.method}", f"database={meta.database}"]
+    if meta.release:
+        details.append(f"release={meta.release}")
+    if meta.metric:
+        details.append(f"metric={meta.metric!r}")
+    if meta.elapsed_ms is not None:
+        details.append(f"{meta.elapsed_ms:.0f} ms")
+    print()
+    print(", ".join(details))
+    for warning in result.warnings:
+        print(f"warning: {warning.message or warning.code}", file=sys.stderr)
+
+
+def _print_usage(usage: Usage) -> None:
+    print(f"plan:      {usage.plan or 'unknown'}")
+    if usage.unlimited:
+        print(f"credits:   unlimited ({usage.used:,} used today)")
+    else:
+        remaining = "?" if usage.remaining is None else f"{usage.remaining:,}"
+        limit = "?" if usage.limit is None else f"{usage.limit:,}"
+        print(f"credits:   {remaining} of {limit} remaining today ({usage.used:,} used)")
+        if usage.reset_at:
+            print(f"resets:    {usage.reset_at} (in {_duration(usage.seconds_to_reset)})")
+    promo = usage.promo
+    if promo is not None and promo.label:
+        extra = []
+        if promo.multiplier:
+            extra.append(f"{promo.multiplier:g}x")
+        if promo.base_limit is not None:
+            extra.append(f"base {promo.base_limit:,}/day")
+        if promo.ends_at:
+            extra.append(f"until {promo.ends_at}")
+        print(f"promo:     {promo.label} ({', '.join(extra)})")
+
+
+# --- Argument parsing ----------------------------------------------------------
+
+
+def _add_connection_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--profile", help="Named profile (default: active profile)")
+    parser.add_argument("--api-url", help=argparse.SUPPRESS)
+    parser.add_argument("--json", action="store_true", help="Print the raw JSON response")
+
+
+def _add_output_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "-o",
+        "--output",
+        metavar="FILE",
+        help="Save results to FILE (.csv, .sdf, .smi, or .json; inferred from the suffix)",
+    )
+    parser.add_argument(
+        "--format",
+        choices=FORMATS,
+        help="Output format when it cannot be inferred from --output",
+    )
+    parser.add_argument("--include-synthons", action="store_true", help=argparse.SUPPRESS)
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="deepmedchem")
+    parser = argparse.ArgumentParser(
+        prog="deepmedchem",
+        description="Search DeepMedChem chemical spaces from the terminal.",
+    )
     parser.add_argument("--version", action="version", version=__version__)
     commands = parser.add_subparsers(dest="command", required=True)
 
@@ -40,13 +225,89 @@ def _parser() -> argparse.ArgumentParser:
     logout = commands.add_parser("logout", help="Remove locally stored credentials")
     logout.add_argument("--profile")
     logout.add_argument("--all", action="store_true")
+
+    usage = commands.add_parser("usage", help="Show account plan and remaining daily credits")
+    _add_connection_options(usage)
+
+    databases = commands.add_parser(
+        "databases", aliases=["catalog"], help="List searchable databases and their pricing"
+    )
+    _add_connection_options(databases)
+
+    search = commands.add_parser("search", help="Similarity search for a SMILES query")
+    search.add_argument("smiles", help="Query molecule as SMILES")
+    search.add_argument("-d", "--database", required=True, help="Database id, see `databases`")
+    search.add_argument(
+        "-m", "--method", choices=SEARCH_METHODS, default="morgan", help="Similarity method"
+    )
+    search.add_argument("-n", "--limit", type=int, default=20, help="Number of hits")
+    search.add_argument("--shortlist-multiplier", type=int, default=10, help=argparse.SUPPRESS)
+    _add_output_options(search)
+    _add_connection_options(search)
+
+    substructure = commands.add_parser("substructure", help="Exact SMILES/SMARTS substructure")
+    substructure.add_argument("query", help="Substructure query")
+    substructure.add_argument("-d", "--database", required=True, help="Database id")
+    substructure.add_argument(
+        "-f",
+        "--format-in",
+        choices=("smiles", "smarts"),
+        default="smarts",
+        dest="query_format",
+        help="Query language (default: smarts)",
+    )
+    substructure.add_argument("-n", "--limit", type=int, default=100, help="Number of hits")
+    substructure.add_argument(
+        "--timeout-seconds", type=int, default=30, help="Server-side search budget"
+    )
+    _add_output_options(substructure)
+    _add_connection_options(substructure)
+
+    sample = commands.add_parser("sample", help="Draw random molecules from a database")
+    sample.add_argument("-d", "--database", required=True, help="Database id")
+    sample.add_argument("-n", "--count", type=int, default=100, help="Number of molecules")
+    sample.add_argument("--seed", type=int, help="Reproducible sampling seed")
+    _add_output_options(sample)
+    _add_connection_options(sample)
+
+    order = commands.add_parser(
+        "order", help="Prepare vendor email drafts from a DeepMedChem results CSV"
+    )
+    order.add_argument("input", metavar="RESULTS.csv", help="Search results CSV")
+    order.add_argument(
+        "--get-quote",
+        action="store_true",
+        help="Ask vendors to confirm price and availability instead of initiating an order",
+    )
+    order.add_argument(
+        "-d",
+        "--database",
+        help="Database ID when the input CSV has no database/database_id column",
+    )
+    order.add_argument("--output-dir", metavar="DIR", help="Directory for request artifacts")
+    order.add_argument("--to", help="Override the vendor recipient (combines all rows)")
+    order.add_argument("--cc", default="info@deepmedchem.com", help=argparse.SUPPRESS)
+    order.add_argument("--amount-mg", type=float, help="Requested amount per molecule")
+    order.add_argument("--name", help="Name used in the email closing")
+    order.add_argument(
+        "--no-open", action="store_true", help="Create files without opening an email client"
+    )
     return parser
+
+
+# --- Commands -----------------------------------------------------------------
 
 
 def _profile(args, config) -> str:
     selected = resolve_profile(args.profile, config)
     config.profile(selected)
     return selected
+
+
+def _open_client(args) -> Client:
+    config = load_config()
+    profile = _profile(args, config)
+    return Client(profile=profile, api_url=getattr(args, "api_url", None))
 
 
 def _login(args) -> int:
@@ -58,24 +319,43 @@ def _login(args) -> int:
             raise ValueError("stdin did not contain an API key")
     else:
         target = config.profile(profile)
+        open_browser = not args.no_browser and can_open_browser()
 
         def started(code: str, url: str) -> None:
-            print(f"Approval code: {code}")
-            print(f"Approval URL: {url}")
+            print()
+            print(f"  Approval code: {code}")
+            print(f"  Approval URL:  {url}")
+            print()
+            if open_browser:
+                print("If the browser did not open, paste the URL into any browser.")
+            else:
+                print(
+                    "Open the URL in a browser on any device, sign in or create a CHEESE account,"
+                )
+                print("and approve the connection. The code above must match what the page shows.")
+            print("Waiting for approval… (Ctrl+C to cancel)", flush=True)
 
-        if args.no_browser:
-            print(f"Starting browser-assisted login for {target.web_url} without opening it…")
-        else:
+        if open_browser:
             print(f"Opening {target.web_url} to approve this device…")
+        elif args.no_browser:
+            print(f"Starting login for {target.web_url} without opening a browser…")
+        else:
+            print(f"No display detected; starting login for {target.web_url} without a browser…")
         token, _, _ = browser_login(
             target.web_url,
             application="deepmedchem-python",
-            open_browser=not args.no_browser,
+            open_browser=open_browser,
             timeout=args.timeout,
             on_started=started,
         )
-    save_api_key(token, profile=profile)
-    print(f"Authenticated (profile: {profile}). Credential saved in the OS credential store.")
+    store = save_api_key(token, profile=profile)
+    if store == FILE_STORE:
+        print(
+            f"Authenticated (profile: {profile}). No OS keyring is available here, so the "
+            f"credential was saved to {credentials_path()} (mode 0600)."
+        )
+    else:
+        print(f"Authenticated (profile: {profile}). Credential saved in the OS credential store.")
     return 0
 
 
@@ -88,6 +368,7 @@ def _status(args) -> int:
         "profile": profile,
         "api_url": target.api_url,
         "web_url": target.web_url,
+        "account_url": target.account_url,
         "config_path": str(config_path()),
         "authenticated": authenticated,
     }
@@ -99,7 +380,11 @@ def _status(args) -> int:
             try:
                 with Client(profile=profile) as client:
                     client.catalog()
+                    usage = client.usage()
                 payload["verified"] = True
+                payload["plan"] = usage.plan
+                payload["credits_remaining"] = "unlimited" if usage.unlimited else usage.remaining
+                payload["credits_limit"] = usage.limit
             except DeepMedChemError as error:
                 payload["verified"] = False
                 payload["error"] = str(error)
@@ -123,16 +408,140 @@ def _logout(args) -> int:
     return 0
 
 
+def _usage(args) -> int:
+    with _open_client(args) as client:
+        usage = client.usage()
+    if args.json:
+        print(json.dumps(usage.raw, indent=2, sort_keys=True))
+    else:
+        _print_usage(usage)
+    return 0
+
+
+def _databases(args) -> int:
+    with _open_client(args) as client:
+        catalog = client.catalog()
+    if args.json:
+        print(json.dumps(catalog, indent=2, sort_keys=True))
+    else:
+        _print_database_table(catalog)
+    return 0
+
+
+def _emit_result(args, result: SearchResult) -> int:
+    if args.output:
+        selected = args.format or infer_format(args.output)
+        written = write_result(result, args.output, format=selected)
+        if not args.json:
+            _print_result_table(result)
+            print(f"Saved {written} molecules to {args.output} ({selected}).")
+        else:
+            print(json.dumps(result.raw, indent=2, sort_keys=True))
+            print(f"Saved {written} molecules to {args.output} ({selected}).", file=sys.stderr)
+        return 0
+    if args.json:
+        print(json.dumps(result.raw, indent=2, sort_keys=True))
+    else:
+        _print_result_table(result)
+    return 0
+
+
+def _search(args) -> int:
+    with _open_client(args) as client:
+        result = client.search(
+            args.smiles,
+            database=args.database,
+            method=args.method,
+            limit=args.limit,
+            shortlist_multiplier=args.shortlist_multiplier,
+            include_synthons=args.include_synthons,
+        )
+    return _emit_result(args, result)
+
+
+def _substructure(args) -> int:
+    with _open_client(args) as client:
+        result = client.search_substructure(
+            args.query,
+            query_format=args.query_format,
+            database=args.database,
+            limit=args.limit,
+            timeout_seconds=args.timeout_seconds,
+            include_synthons=args.include_synthons,
+        )
+    return _emit_result(args, result)
+
+
+def _sample(args) -> int:
+    with _open_client(args) as client:
+        result = client.sample(
+            database=args.database,
+            count=args.count,
+            seed=args.seed,
+            include_synthons=args.include_synthons,
+        )
+    return _emit_result(args, result)
+
+
+def _order(args) -> int:
+    bundle = prepare_order(
+        args.input,
+        get_quote=args.get_quote,
+        database=args.database,
+        output_dir=args.output_dir,
+        to=args.to,
+        cc=args.cc,
+        amount_mg=args.amount_mg,
+        name=args.name,
+    )
+    print(
+        f"Prepared {len(bundle.drafts)} vendor request(s) for {bundle.molecule_count} molecule(s) "
+        f"in {bundle.directory}."
+    )
+    for draft in bundle.drafts:
+        print(f"  {draft.vendor}: {len(draft.molecules)} molecules -> {draft.email}")
+
+    if args.no_open:
+        print("Email drafts were not opened (--no-open). Use each vendor's email.txt.")
+        return 0
+    if not can_open_browser():
+        print("No graphical mail client detected. Use each vendor's email.txt and molecules.csv.")
+        return 0
+    opened = open_order_drafts(bundle)
+    if opened == len(bundle.drafts):
+        print(f"Requested opening {opened} email draft(s). Review them before sending.")
+    else:
+        print(
+            f"Requested opening {opened} of {len(bundle.drafts)} email draft(s). "
+            "Use email.txt for any draft that did not open."
+        )
+    return 0
+
+
+_COMMANDS = {
+    "login": _login,
+    "status": _status,
+    "logout": _logout,
+    "usage": _usage,
+    "databases": _databases,
+    "catalog": _databases,
+    "search": _search,
+    "substructure": _substructure,
+    "sample": _sample,
+    "order": _order,
+}
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        if args.command == "login":
-            return _login(args)
-        if args.command == "status":
-            return _status(args)
-        return _logout(args)
-    except (CredentialError, LoginError, ValueError) as error:
+        return _COMMANDS[args.command](args)
+    except (CredentialError, LoginError, ValueError, ImportError, OSError) as error:
         print(str(error), file=sys.stderr)
+        return 1
+    except DeepMedChemError as error:
+        suffix = f" [{error.code}]" if error.code else ""
+        print(f"error: {error}{suffix}", file=sys.stderr)
         return 1
 
 

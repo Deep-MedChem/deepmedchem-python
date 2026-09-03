@@ -1,5 +1,12 @@
 # DeepMedChem Python SDK
 
+[![PyPI](https://img.shields.io/pypi/v/deepmedchem?style=flat-square&logo=pypi&logoColor=white)](https://pypi.org/project/deepmedchem/)
+[![Python](https://img.shields.io/pypi/pyversions/deepmedchem?style=flat-square&logo=python&logoColor=white)](https://pypi.org/project/deepmedchem/)
+[![CI](https://img.shields.io/github/actions/workflow/status/Deep-MedChem/deepmedchem-python/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/Deep-MedChem/deepmedchem-python/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
+[![Production API](https://img.shields.io/badge/API-api.deepmedchem.com-0A7EA4?style=flat-square)](https://api.deepmedchem.com/api/v2/docs)
+[![Documentation](https://img.shields.io/badge/docs-docs.deepmedchem.com-4B32C3?style=flat-square)](https://docs.deepmedchem.com/)
+
 The official, chemistry-thin Python client for the DeepMedChem hosted chemical-space platform.
 It contains no RDKit, models, databases, or proprietary search implementation.
 
@@ -12,11 +19,92 @@ It contains no RDKit, models, databases, or proprietary search implementation.
 pip install deepmedchem
 ```
 
-Authenticate once with the OS credential store, or set `DEEPMEDCHEM_API_KEY` in automation:
+Authenticate once, or set `DEEPMEDCHEM_API_KEY` in automation:
 
 ```bash
 deepmedchem login
 deepmedchem status
+```
+
+`deepmedchem login` prints a short code and an approval URL. On a desktop it opens the URL in your
+browser; on a headless server, container, or SSH session it only prints the URL, which you can open
+on any device. Sign in or create a CHEESE account there, approve the connection, and the CLI finishes
+on its own. The key goes to the OS keyring when one is available, otherwise to a `credentials.json`
+file (mode 0600) next to the SDK config. Use `--no-browser` to force the print-only behaviour and
+`--token-stdin` to paste an existing key from a pipe.
+
+## Command line
+
+The `deepmedchem` command covers the everyday operations without writing Python:
+
+```bash
+deepmedchem databases                        # searchable databases, sizes, pricing, capabilities
+deepmedchem usage                            # account plan and CHEESE Credits remaining today
+deepmedchem search "CC(=O)Oc1ccccc1C(=O)O" -d enamine-real-v5a -m shape -n 10
+deepmedchem search "CC(=O)Oc1ccccc1C(=O)O" -d enamine-real-v5a -o aspirin.csv
+deepmedchem substructure "[N;R0][N;R0]C(=O)" -d enamine-real-v5a -n 50 -o hydrazides.sdf
+deepmedchem sample -d freedom-space-5 -n 100 --seed 7 -o sample.smi
+deepmedchem order aspirin.csv --get-quote
+```
+
+`databases` lists every searchable space with its size, pricing, and capabilities:
+
+```text
+$ deepmedchem databases
+database                name                     size  pricing           similarity          substructure
+----------------------  --------------------  -------  ----------------  ------------------  ------------
+cheminfinita-2026-02    ChemInfinita 2026-02   794.2B  -                 morgan, shape, esp  no
+enamine-real-v5a        Enamine REAL v5a       357.4B  USD, 1 mg, to US  morgan, shape, esp  yes
+freedom-space-5         Freedom Space 5        296.4B  -                 morgan, shape, esp  no
+synple-explore-2025-10  Synple eXplore           9.5T  -                 morgan, shape, esp  no
+vast-2026-h2            VAST 2026 H2             6.8B  USD, 1 mg, to US  morgan, shape, esp  no
+```
+
+Searches print a table of rank, similarity score, price, product id, and SMILES:
+
+```text
+$ deepmedchem search "CC(=O)Oc1ccccc1C(=O)O" -d enamine-real-v5a -n 3
+rank   score  price  product_id                smiles
+----  ------  -----  ------------------------  ----------------------
+   1  0.7037   $245  46abadcde3d6af9edc2a454e  O=C(O)Oc1ccccc1C(=O)O
+   2  0.6667   $163  ed4fbbbb70795dd28f1a6189  COC(=O)Oc1ccccc1C(=O)O
+   3  0.5312   $245  43d73d7ec9d5cbae8425cebe  O=C(O)COc1ccccc1C(=O)O
+
+3 molecules, method=morgan, database=enamine-real-v5a, release=2026-09-02.1, metric='ECFP4 Tanimoto', 380 ms
+```
+
+`-o/--output` saves the hits as CSV, SDF, SMILES (`.smi`), or JSON, inferred from the file suffix
+(`--format` overrides it). CSV and SDF carry the score, price, product id, and every other field
+from the response. SDF output needs RDKit (`pip install "deepmedchem[sdf]"`); the other formats
+have no extra dependencies. Every command accepts `--json` for the raw API response and
+`--profile` to pick a configured profile.
+
+## Requesting quotes and orders
+
+Prepare vendor-ready requests directly from an exported result CSV:
+
+```bash
+deepmedchem order results.csv --get-quote          # confirm prices and availability
+deepmedchem order results.csv --amount-mg 1        # initiate a 1 mg order request
+deepmedchem order results.csv --no-open             # files only; useful over SSH
+```
+
+The command groups molecules by vendor email, creates one directory per recipient, and then asks
+the operating system to open a pre-filled email draft. It never sends email or places an order.
+Every request remains available as `email.txt` plus `molecules.csv` if no graphical mail client is
+available or a draft fails to open. DeepMedChem is CCed so vendors can attribute the request.
+
+Vendor-facing molecule files contain only the database ID, a `-DMCH` reference ID, and SMILES.
+Search scores, properties, and non-binding SDK price estimates are deliberately omitted. The
+message asks the vendor to confirm final pricing, availability, lead time, and order details before
+processing. Use `--to ADDRESS` for a private database without a configured procurement contact,
+and `--database ID` for older CSV files that do not carry a database column.
+
+```text
+$ deepmedchem usage
+plan:      premium
+credits:   9,999 of 10,000 remaining today (1 used)
+resets:    2026-09-04T00:00:00+00:00 (in 13h 35m)
 ```
 
 ## Quickstart
@@ -68,9 +156,7 @@ junction-spanning examples. Use `format="smarts"` for atom lists, ring constrain
 recursive expressions, and other SMARTS query features:
 
 ```python
-junction = dmc.substructure(
-    "CNC(=O)N1CCC1", format="smiles", database="enamine-real-v5a", limit=10
-)
+junction = dmc.substructure("CNC(=O)N1CCC1", format="smiles", database="enamine-real-v5a", limit=10)
 hydrazides = dmc.substructure(
     "[N;R0][N;R0]C(=O)", format="smarts", database="enamine-real-v5a", limit=10
 )
@@ -79,8 +165,14 @@ hydrazides = dmc.substructure(
 See the runnable [substructure example](examples/docs/substructure_search.py) for several
 SQC-derived SMARTS queries. Complex recursive SMARTS can require a longer timeout.
 
-Module-level `search`, `substructure`, `sample`, and `catalog` operations create and close a small
-internal client. The explicit `Client` remains available for connection reuse and advanced
+Any result writes itself with `result.to_csv(path)`, `result.to_sdf(path)`, or
+`result.to_file(path)` (format inferred from the suffix). `dmc.usage()` and `Client.usage()` return
+the account plan and the daily CHEESE Credit balance (`plan`, `limit`, `used`, `remaining`,
+`reset_at`, and an optional `promo`); the balance is served by the account service configured as
+the profile's `account_url`.
+
+Module-level `search`, `substructure`, `sample`, `catalog`, and `usage` operations create and close
+a small internal client. The explicit `Client` remains available for connection reuse and advanced
 selections/runs. Search results behave as ordered SMILES sequences (`result[0]`, `result[:3]`,
 `list(result)`) while retaining typed hits, scores, prices, metadata, warnings, and the complete raw
 response locally.
@@ -92,8 +184,10 @@ credit. Synchronous work is terminated after 10 seconds; use the Runs API for lo
 basic item has a 60-second limit.
 
 Credentials resolve from an explicit `api_key`, `DEEPMEDCHEM_API_KEY`, compatibility environment
-variables, a custom credential provider, or the selected profile's OS-keyring entry. Use
-`deepmedchem login --profile dev` for the development service; profiles never share credentials.
+variables, a custom credential provider, the selected profile's OS-keyring entry, or the
+`credentials.json` fallback file. Set `DEEPMEDCHEM_CREDENTIAL_STORE=file` or `=keyring` to force one
+store. Use `deepmedchem login --profile dev` for the development service; profiles never share
+credentials.
 
 Every request identifies its source with `X-DMC-Client`, `X-DMC-Client-Version`, and
 `X-DMC-SDK-Version`. The default values attribute direct SDK use to `deepmedchem-python`; an

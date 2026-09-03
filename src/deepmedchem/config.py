@@ -19,6 +19,9 @@ DEFAULT_API_URL = "https://api.deepmedchem.com"
 DEFAULT_WEB_URL = "https://cheese.deepmedchem.com"
 DEV_API_URL = "https://api-dev.deepmedchem.com"
 DEV_WEB_URL = "https://cheese-new-dev.deepmedchem.com"
+# The account service answers usage and credit questions for the same API keys.
+DEFAULT_ACCOUNT_URL = "https://api.cheese.deepmedchem.com"
+DEV_ACCOUNT_URL = "https://api.cheese-dev.deepmedchem.com"
 SERVICE = "deepmedchem"
 ACCOUNT = "default-api-key"
 LEGACY_SERVICE = "dmc-navigator"
@@ -45,11 +48,14 @@ CredentialSource = Union[CredentialProvider, Callable[[], Optional[str]]]
 class Profile:
     api_url: str
     web_url: str
+    account_url: str = DEFAULT_ACCOUNT_URL
 
 
 DEFAULT_PROFILES: Mapping[str, Profile] = {
-    "default": Profile(api_url=DEFAULT_API_URL, web_url=DEFAULT_WEB_URL),
-    "dev": Profile(api_url=DEV_API_URL, web_url=DEV_WEB_URL),
+    "default": Profile(
+        api_url=DEFAULT_API_URL, web_url=DEFAULT_WEB_URL, account_url=DEFAULT_ACCOUNT_URL
+    ),
+    "dev": Profile(api_url=DEV_API_URL, web_url=DEV_WEB_URL, account_url=DEV_ACCOUNT_URL),
 }
 
 
@@ -65,6 +71,10 @@ class Config:
     @property
     def web_url(self) -> str:
         return self.profile().web_url
+
+    @property
+    def account_url(self) -> str:
+        return self.profile().account_url
 
     def profile(self, name: str | None = None) -> Profile:
         selected = name or self.active_profile
@@ -89,6 +99,7 @@ def _profile_from_payload(payload: Mapping[str, object], fallback: Profile) -> P
     return Profile(
         api_url=str(payload.get("api_url") or fallback.api_url).rstrip("/"),
         web_url=str(payload.get("web_url") or fallback.web_url).rstrip("/"),
+        account_url=str(payload.get("account_url") or fallback.account_url).rstrip("/"),
     )
 
 
@@ -125,6 +136,9 @@ def load_config() -> Config:
             or default.api_url
         ).rstrip("/"),
         web_url=(os.environ.get("DEEPMEDCHEM_WEB_URL") or default.web_url).rstrip("/"),
+        account_url=(os.environ.get("DEEPMEDCHEM_ACCOUNT_URL") or default.account_url).rstrip(
+            "/"
+        ),
     )
     return Config(active_profile=active, profiles=profiles)
 
@@ -139,6 +153,7 @@ def save_config(config: Config) -> None:
                 f"[profiles.{name}]",
                 f'api_url = "{profile.api_url}"',
                 f'web_url = "{profile.web_url}"',
+                f'account_url = "{profile.account_url}"',
                 "",
             ]
         )
@@ -167,7 +182,7 @@ def _keyring():
     return keyring
 
 
-def get_stored_api_key(*, profile: str = "default", include_legacy: bool = True) -> str | None:
+def _keyring_get(profile: str, include_legacy: bool) -> str | None:
     try:
         keyring = _keyring()
         value = keyring.get_password(SERVICE, profile_account(profile))
@@ -179,25 +194,121 @@ def get_stored_api_key(*, profile: str = "default", include_legacy: bool = True)
         if value:
             keyring.set_password(SERVICE, profile_account(profile), value)
         return value
-    except Exception as error:
-        if isinstance(error, CredentialError):
-            return None
+    except Exception:
+        # Includes CredentialError (no keyring package) and backend errors such as
+        # keyring.errors.NoKeyringError on headless hosts.
         return None
 
 
-def save_api_key(api_key: str, *, profile: str = "default") -> None:
+# --- Encrypted-store-free fallback for headless hosts -------------------------
+#
+# Servers, containers, and SSH sessions usually have no Secret Service or
+# other OS keyring. Rather than failing `deepmedchem login` after the browser
+# approval already succeeded, credentials fall back to a 0600 JSON file next
+# to config.toml. Set DEEPMEDCHEM_CREDENTIAL_STORE=file to force the file store
+# (for example when a keyring backend exists but cannot unlock without a GUI),
+# or =keyring to disable the fallback.
+
+FILE_STORE = "file"
+KEYRING_STORE = "keyring"
+
+
+def credentials_path() -> Path:
+    return config_path().with_name("credentials.json")
+
+
+def credential_store_preference() -> str:
+    value = (os.environ.get("DEEPMEDCHEM_CREDENTIAL_STORE") or "auto").strip().lower()
+    return value if value in {"auto", FILE_STORE, KEYRING_STORE} else "auto"
+
+
+def _read_file_store() -> dict[str, str]:
+    path = credentials_path()
+    try:
+        if not path.is_file():
+            return {}
+        payload = json.loads(path.read_text())
+    except (OSError, ValueError, TypeError):
+        return {}
+    keys = payload.get("api_keys") if isinstance(payload, Mapping) else None
+    if not isinstance(keys, Mapping):
+        return {}
+    return {str(k): str(v) for k, v in keys.items() if isinstance(v, str) and v}
+
+
+def _write_file_store(keys: Mapping[str, str]) -> None:
+    path = credentials_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps({"api_keys": dict(keys)}, indent=2, sort_keys=True) + "\n")
+    os.chmod(temporary, 0o600)
+    temporary.replace(path)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def get_stored_api_key(*, profile: str = "default", include_legacy: bool = True) -> str | None:
+    preference = credential_store_preference()
+    if preference != FILE_STORE:
+        value = _keyring_get(profile, include_legacy)
+        if value:
+            return value
+    if preference != KEYRING_STORE:
+        return _read_file_store().get(profile)
+    return None
+
+
+def save_api_key(api_key: str, *, profile: str = "default") -> str:
+    """Persist an API key and return the store that holds it ("keyring" or "file")."""
+
     if not api_key or not api_key.strip():
         raise ValueError("api_key must not be empty")
-    try:
-        _keyring().set_password(SERVICE, profile_account(profile), api_key.strip())
-    except Exception as error:
+    preference = credential_store_preference()
+    keyring_error: Exception | None = None
+    if preference != FILE_STORE:
+        try:
+            _keyring().set_password(SERVICE, profile_account(profile), api_key.strip())
+        except Exception as error:  # no backend, locked backend, D-Bus missing, ...
+            keyring_error = error
+        else:
+            # A stale file entry must not shadow or outlive the keyring entry.
+            stored = _read_file_store()
+            if profile in stored:
+                del stored[profile]
+                _write_file_store(stored)
+            return KEYRING_STORE
+    if preference == KEYRING_STORE:
         raise CredentialError(
             "No usable OS credential store is available. Set DEEPMEDCHEM_API_KEY "
-            "through your environment or configure a credential provider."
+            "through your environment, unset DEEPMEDCHEM_CREDENTIAL_STORE, or "
+            "configure a credential provider."
+        ) from keyring_error
+    try:
+        stored = _read_file_store()
+        stored[profile] = api_key.strip()
+        _write_file_store(stored)
+    except OSError as error:
+        raise CredentialError(
+            f"Could not write the credential file {credentials_path()}. Set "
+            "DEEPMEDCHEM_API_KEY through your environment or configure a credential provider."
         ) from error
+    return FILE_STORE
 
 
 def delete_api_key(*, profile: str = "default", include_legacy: bool = False) -> None:
+    removed_from_file = False
+    stored = _read_file_store()
+    if profile in stored:
+        del stored[profile]
+        try:
+            _write_file_store(stored)
+        except OSError as error:
+            raise CredentialError(
+                f"Could not update the credential file {credentials_path()}."
+            ) from error
+        removed_from_file = True
     try:
         keyring = _keyring()
         targets = [(SERVICE, profile_account(profile))]
@@ -208,9 +319,9 @@ def delete_api_key(*, profile: str = "default", include_legacy: bool = False) ->
                 keyring.delete_password(service, account)
             except keyring.errors.PasswordDeleteError:
                 pass
-    except CredentialError:
-        raise
     except Exception as error:
+        if removed_from_file:
+            return
         raise CredentialError(
             "No usable OS credential store is available; no credential was removed."
         ) from error

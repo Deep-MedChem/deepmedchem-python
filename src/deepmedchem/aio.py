@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from .client import AsyncClient
-from .models import SampleResult, SearchResult, SubstructureResult
+from .models import SampleResult, SearchResult, SubstructureResult, Usage
 
 
 async def search(smiles: str, *, database: str, method: str = "morgan", **kwargs) -> SearchResult:
@@ -25,6 +25,11 @@ async def substructure(
 async def sample(*, database: str, **kwargs) -> SampleResult:
     async with AsyncClient(**_connection_options(kwargs)) as client:
         return await client.sample(database=database, **kwargs)
+
+
+async def usage(**kwargs) -> Usage:
+    async with AsyncClient(**_connection_options(kwargs)) as client:
+        return await client.usage()
 
 
 async def catalog(**kwargs) -> dict[str, Any]:

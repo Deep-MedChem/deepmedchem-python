@@ -310,3 +310,41 @@ def test_error_does_not_expose_api_key() -> None:
             raise AssertionError("expected DeepMedChemError")
     finally:
         client.close()
+
+
+def test_usage_calls_the_account_service_with_the_same_key() -> None:
+    captured = []
+
+    def handler(request: httpx.Request):
+        captured.append(request)
+        return httpx.Response(
+            200,
+            json={"plan": "premium", "limit": 100, "used": 5, "remaining": 95, "unlimited": False},
+        )
+
+    transport = httpx.MockTransport(handler)
+    with Client(
+        api_key="scoped-token",
+        api_url="https://api.example.test",
+        account_url="https://account.example.test/",
+        transport=transport,
+    ) as client:
+        usage = client.usage()
+
+    async def scenario():
+        async with AsyncClient(
+            api_key="scoped-token",
+            api_url="https://api.example.test",
+            account_url="https://account.example.test",
+            transport=httpx.MockTransport(handler),
+        ) as client:
+            return await client.usage()
+
+    async_usage = asyncio.run(scenario())
+    assert usage.tier == "premium"
+    assert usage.remaining == async_usage.remaining == 95
+    assert repr(usage) == "Usage(plan='premium', credits=95/100 remaining)"
+    assert [str(request.url) for request in captured] == [
+        "https://account.example.test/rate-limit/status"
+    ] * 2
+    assert captured[0].headers["x-api-key"] == "scoped-token"
