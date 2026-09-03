@@ -194,6 +194,58 @@ the installed SDK version separately.
 `molecule-selection/1` and `run/1` documents; all chemistry and capability validation remains on
 the API.
 
+Exact RDKit constraints and experimental predicted-property acquisition are available only through
+`Selection`. The simple `search`, `sample`, CLI, and export helpers intentionally keep their
+ordinary interfaces.
+
+```python
+from deepmedchem import Client, Selection
+
+selection = (
+    Selection.from_database("enamine-real-v5a")
+    .reference(
+        "query",
+        smiles="CCOc1ccc(C(=O)N2CCN(C)CC2)cc1",
+    )
+    .maximize_similarity("rdkit.ecfp4_tanimoto", reference="query")
+    .require_preset("lipinski-ro5/v1")
+    .where("rdkit.mol_wt", lte=450, units="Da")
+    .acquire_predicted_property(
+        "openadmet-herg-pchembl",
+        direction="minimize",
+        keep_fraction=0.25,
+    )
+    .include("properties", "objective_components")
+    .limit(100)
+)
+
+with Client() as dmc:
+    result = dmc.selections.create(selection)
+```
+
+Every returned RDKit value is calculated on the assembled product and enforced literally. CP16
+values are predicted, `experimental-acquisition-only` ranking signals: they may reduce a similarity
+shortlist, but they are not measured assay results and do not prove that an ADMET threshold is met.
+The response exposes `hit.acquisition.predicted_value`, `hit.acquisition.applicable`, and one
+response-level `result.acquisition` provenance record.
+
+Property-filtered random sampling uses the same selection contract without acquisition:
+
+```python
+selection = (
+    Selection.from_database("freedom-space-5")
+    .sample(seed=42)
+    .require_preset("lipinski-ro5/v1")
+    .where("rdkit.mol_wt", lte=450, units="Da")
+    .include("properties")
+    .limit(100)
+)
+result = Client().selections.create(selection)
+```
+
+The authenticated catalog is the source of truth for each database's available properties,
+presets, predicted-property endpoints, and supported acquisition operation.
+
 ```python
 from deepmedchem import Client, Run, Selection
 
