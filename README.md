@@ -24,6 +24,7 @@ Authenticate once, or set `DEEPMEDCHEM_API_KEY` in automation:
 ```bash
 dmc login
 dmc status
+dmc logout
 ```
 
 `dmc login` prints a short code and an approval URL. On a desktop it opens the URL in your
@@ -31,7 +32,9 @@ browser; on a headless server, container, or SSH session it only prints the URL,
 on any device. Sign in or create a CHEESE account there, approve the connection, and the CLI finishes
 on its own. The key goes to the OS keyring when one is available, otherwise to a `credentials.json`
 file (mode 0600) next to the SDK config. Use `--no-browser` to force the print-only behaviour and
-`--token-stdin` to paste an existing key from a pipe.
+`--token-stdin` to paste an existing key from a pipe. `dmc logout` removes the stored
+credential for the selected profile, and `dmc logout --all` removes it for every configured
+profile.
 
 ## Command line
 
