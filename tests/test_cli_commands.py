@@ -105,17 +105,17 @@ def _install_client(monkeypatch):
     return seen
 
 
-def test_databases_table_lists_availability_and_order_email(monkeypatch, capsys) -> None:
+def test_databases_table_lists_size_pricing_and_order_email(monkeypatch, capsys) -> None:
     _install_client(monkeypatch)
     assert cli.main(["databases"]) == 0
     out = capsys.readouterr().out
     header = out.splitlines()[0].split()
-    assert header == ["database", "name", "availability", "orders"]
+    assert header == ["database", "molecules", "prices", "orders"]
     enamine = next(line for line in out.splitlines() if line.startswith("enamine-real-v5a"))
-    assert "3-6 weeks" in enamine
-    assert enamine.endswith("info@enamine.net")
+    assert enamine.split() == ["enamine-real-v5a", "357.4B", "yes", "info@enamine.net"]
     d2b = next(line for line in out.splitlines() if line.startswith("d2b-spacem1"))
-    assert d2b.endswith("hello@molecule.one")
+    assert d2b.split() == ["d2b-spacem1", "1.5B", "-", "hello@molecule.one"]
+    assert "2 databases, made on demand and delivered in 3-6 weeks." in out
 
 
 def test_catalog_alias_prints_json(monkeypatch, capsys) -> None:
@@ -143,14 +143,20 @@ def test_usage_json_uses_raw_payload(monkeypatch, capsys) -> None:
     assert payload["remaining"] == 9999
 
 
-def test_search_prints_table_and_warnings(monkeypatch, capsys) -> None:
+def test_search_prints_table_and_summary(monkeypatch, capsys) -> None:
     seen = _install_client(monkeypatch)
     assert cli.main(["search", "CC(=O)Oc1ccccc1C(=O)O", "-d", "enamine-real-v5a", "-n", "2"]) == 0
     captured = capsys.readouterr()
-    assert "0.7037   $245  a" in captured.out
-    assert "0.6667      -  b" in captured.out
-    assert "2 molecules, method=morgan, database=enamine-real-v5a" in captured.out
-    assert "warning: Only two products." in captured.err
+    lines = captured.out.splitlines()
+    assert lines[0].split() == ["rank", "score", "price", "smiles"]
+    assert "   1  0.7037   $245  O=C(O)Oc1ccccc1C(=O)O" in lines
+    assert "   2  0.6667      -  COC(=O)Oc1ccccc1C(=O)O" in lines
+    assert "Searched 357.4B molecules (Enamine REAL v5a) in 12 ms." in lines
+    assert "Similarity range: 0.67-0.70 ECFP4 Tanimoto." in lines
+    assert "product_id" not in captured.out
+    assert captured.err == ""
+    # The search request goes out before the catalog lookup used for the summary line.
+    assert [request.url.path for request in seen] == ["/api/v2/search", "/api/v2/catalog"]
     body = json.loads(seen[0].content)
     assert body == {
         "query_smiles": "CC(=O)Oc1ccccc1C(=O)O",
@@ -197,18 +203,22 @@ def test_substructure_and_sample_reach_their_operations(monkeypatch, capsys) -> 
     seen = _install_client(monkeypatch)
     assert cli.main(["substructure", "c1ccccc1", "-d", "db", "-f", "smiles", "-n", "5"]) == 0
     assert cli.main(["sample", "-d", "db", "-n", "7", "--seed", "3"]) == 0
-    paths = [request.url.path for request in seen]
+    paths = [request.url.path for request in seen if request.url.path != "/api/v2/catalog"]
     assert paths == ["/api/v2/search_substructure", "/api/v2/sample"]
     assert json.loads(seen[0].content)["query"] == {"format": "smiles", "value": "c1ccccc1"}
-    assert json.loads(seen[1].content) == {
+    sample_request = next(request for request in seen if request.url.path == "/api/v2/sample")
+    assert json.loads(sample_request.content) == {
         "database_id": "db",
         "count": 7,
         "include_synthons": False,
         "seed": 3,
     }
     out = capsys.readouterr().out
-    assert "method=substructure" in out
-    assert "method=sample" in out
+    assert "rank  match  price  smiles" in out
+    assert "   1  exact   $245  O=C(O)Oc1ccccc1C(=O)O" in out
+    assert "1 exact substructure matches returned." in out
+    assert "rank  price  smiles" in out
+    assert "Random sample of 2 from 357.4B molecules (Enamine REAL v5a)." in out
 
 
 def test_api_errors_exit_nonzero_with_code(monkeypatch, capsys) -> None:

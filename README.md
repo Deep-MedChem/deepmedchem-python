@@ -48,33 +48,39 @@ dmc sample -d freedom-space-5 -n 100 --seed 7 -o sample.smi
 dmc order aspirin.csv --get-quote
 ```
 
-`databases` lists every searchable space with its typical delivery time and the vendor address
-for orders and quotes:
+`databases` lists every searchable space with its size, whether the vendor publishes per-compound
+prices, and the vendor address for orders and quotes:
 
 ```text
 $ dmc databases
-database                name                  availability  orders
-----------------------  --------------------  ------------  ------------------------
-cheminfinita-2026-02    ChemInfinita 2026-02  3-6 weeks     sales@otavachemicals.com
-d2b-spacem1             D2B SpaceM1           3-6 weeks     hello@molecule.one
-enamine-real-v5a        Enamine REAL v5a      3-6 weeks     info@enamine.net
-freedom-space-5         Freedom Space 5       3-6 weeks     sales@chem-space.com
-synple-explore-2025-10  Synple eXplore        3-6 weeks     sales@emolecules.com
-synple-synple-2025-10   Synple                3-6 weeks     sales@emolecules.com
-vast-2026-h2            VAST 2026 H2          3-6 weeks     contact@xtalpi.com
+database                molecules  prices  orders
+----------------------  ---------  ------  ------------------------
+cheminfinita-2026-02       794.2B  -       sales@otavachemicals.com
+d2b-spacem1                  1.5B  -       hello@molecule.one
+enamine-real-v5a           357.4B  yes     info@enamine.net
+freedom-space-5            296.4B  -       sales@chem-space.com
+synple-explore-2025-10       9.5T  -       sales@emolecules.com
+synple-synple-2025-10        7.6T  -       sales@emolecules.com
+vast-2026-h2                 6.8B  yes     contact@xtalpi.com
+
+7 databases, made on demand and delivered in 3-6 weeks.
+Order or request quotes by email, or run `dmc order results.csv`.
 ```
 
-Searches print a table of rank, similarity score, price, product id, and SMILES:
+Searches print a table of rank, similarity score, price, and SMILES, followed by what was
+searched and the score range. Substructure hits show `exact` instead of a score, and samples
+have no score column. Product ids and the other API fields are kept in `--json` and in exports:
 
 ```text
 $ dmc search "CC(=O)Oc1ccccc1C(=O)O" -d enamine-real-v5a -n 3
-rank   score  price  product_id                smiles
-----  ------  -----  ------------------------  ----------------------
-   1  0.7037   $245  46abadcde3d6af9edc2a454e  O=C(O)Oc1ccccc1C(=O)O
-   2  0.6667   $163  ed4fbbbb70795dd28f1a6189  COC(=O)Oc1ccccc1C(=O)O
-   3  0.5312   $245  43d73d7ec9d5cbae8425cebe  O=C(O)COc1ccccc1C(=O)O
+rank   score  price  smiles
+----  ------  -----  ----------------------
+   1  0.7037   $245  O=C(O)Oc1ccccc1C(=O)O
+   2  0.6667   $163  COC(=O)Oc1ccccc1C(=O)O
+   3  0.5312   $245  O=C(O)COc1ccccc1C(=O)O
 
-3 molecules, method=morgan, database=enamine-real-v5a, release=2026-09-02.1, metric='ECFP4 Tanimoto', 380 ms
+Searched 357.4B molecules (Enamine REAL v5a) in 380 ms.
+Similarity range: 0.53-0.70 ECFP4 Tanimoto.
 ```
 
 `-o/--output` saves the hits as CSV, SDF, SMILES (`.smi`), or JSON, inferred from the file suffix
