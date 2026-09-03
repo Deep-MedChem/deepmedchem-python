@@ -392,6 +392,7 @@ def test_lightweight_result_is_an_aligned_molecule_sequence() -> None:
     assert result.raw["new_server_field"] == {"kept": True}
     assert result.results[0]["smiles"] == "CCO"
     assert repr(result) == "SearchResult(2 molecules, method='shape', database='db')"
+    assert str(result) == repr(result)
 
 
 def test_exact_results_keep_aligned_none_scores() -> None:
@@ -467,6 +468,7 @@ def test_usage_calls_the_account_service_with_the_same_key() -> None:
     assert usage.tier == "premium"
     assert usage.remaining == async_usage.remaining == 95
     assert repr(usage) == "Usage(plan='premium', credits=95/100 remaining)"
+    assert str(usage) == repr(usage)
     assert [str(request.url) for request in captured] == [
         "https://account.example.test/rate-limit/status"
     ] * 2
