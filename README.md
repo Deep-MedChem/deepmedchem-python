@@ -138,20 +138,10 @@ SearchResult(3 molecules, method='shape', database='enamine-real-v5a')
 3  score=0.8713  price=$245  O=C(O)COc1ccccc1C(=O)O
 ```
 
-Prices are whole US dollars for delivery to the United States and default to 1 mg where the
-vendor uses pack sizes. They are returned in the original search response, so both `hit.price`
-and the aligned `result.prices` list are available without another API request. An unavailable
-price is `None`.
-
-| Database | Price available |
-| --- | --- |
-| Freedom Space 5 | Yes |
-| Enamine REAL | Yes |
-| eMolecules Synple | Yes |
-| eMolecules eXplore | Yes |
-| XtalPi VAST 2026 H2 | Yes |
-| d2b / molecule.one | No |
-| ChemInfinita | No |
+Prices are estimates in whole US dollars for delivery to the United States. They are returned in
+the original search response, so both `hit.price` and the aligned `result.prices` list are
+available without another API request. Databases without price estimates return `None`; run
+`dmc databases` for the current list and the vendor address to request a binding quote.
 
 ## SMILES and SMARTS substructure search
 
