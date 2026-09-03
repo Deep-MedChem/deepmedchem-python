@@ -7,11 +7,13 @@ import json
 import sys
 
 from . import __version__
-from .auth import LoginError, browser_login
+from .auth import LoginError, browser_login, can_open_browser
 from .client import Client, DeepMedChemError
 from .config import (
+    FILE_STORE,
     CredentialError,
     config_path,
+    credentials_path,
     delete_all_api_keys,
     delete_api_key,
     get_stored_api_key,
@@ -58,24 +60,43 @@ def _login(args) -> int:
             raise ValueError("stdin did not contain an API key")
     else:
         target = config.profile(profile)
+        open_browser = not args.no_browser and can_open_browser()
 
         def started(code: str, url: str) -> None:
-            print(f"Approval code: {code}")
-            print(f"Approval URL: {url}")
+            print()
+            print(f"  Approval code: {code}")
+            print(f"  Approval URL:  {url}")
+            print()
+            if open_browser:
+                print("If the browser did not open, paste the URL into any browser.")
+            else:
+                print(
+                    "Open the URL in a browser on any device, sign in or create a CHEESE account,"
+                )
+                print("and approve the connection. The code above must match what the page shows.")
+            print("Waiting for approval… (Ctrl+C to cancel)", flush=True)
 
-        if args.no_browser:
-            print(f"Starting browser-assisted login for {target.web_url} without opening it…")
-        else:
+        if open_browser:
             print(f"Opening {target.web_url} to approve this device…")
+        elif args.no_browser:
+            print(f"Starting login for {target.web_url} without opening a browser…")
+        else:
+            print(f"No display detected; starting login for {target.web_url} without a browser…")
         token, _, _ = browser_login(
             target.web_url,
             application="deepmedchem-python",
-            open_browser=not args.no_browser,
+            open_browser=open_browser,
             timeout=args.timeout,
             on_started=started,
         )
-    save_api_key(token, profile=profile)
-    print(f"Authenticated (profile: {profile}). Credential saved in the OS credential store.")
+    store = save_api_key(token, profile=profile)
+    if store == FILE_STORE:
+        print(
+            f"Authenticated (profile: {profile}). No OS keyring is available here, so the "
+            f"credential was saved to {credentials_path()} (mode 0600)."
+        )
+    else:
+        print(f"Authenticated (profile: {profile}). Credential saved in the OS credential store.")
     return 0
 
 
