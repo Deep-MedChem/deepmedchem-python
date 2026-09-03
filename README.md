@@ -227,6 +227,25 @@ The `navigator` terminal application is distributed separately as `dmc-navigator
 this SDK and adds file handling, login commands, terminal presentation, and Navigator-specific
 workflows.
 
+## Use with AI coding agents
+
+The repository ships an [Agent Skill](https://agentskills.io) in
+[`skills/deepmedchem`](skills/deepmedchem/SKILL.md) that teaches Claude Code, Codex, Cursor, and
+other skill-aware agents how to search chemical space with this package and the `dmc` command.
+
+```bash
+# Claude Code: add the marketplace once, then install the plugin
+/plugin marketplace add Deep-MedChem/deepmedchem-python
+/plugin install deepmedchem@deep-medchem
+
+# Any agent that supports the open skills format
+npx skills add Deep-MedChem/deepmedchem-python
+```
+
+You can also copy `skills/deepmedchem/` into `.claude/skills/` of a project (or `~/.claude/skills/`
+for every project), or zip the folder and upload it as a custom skill in Claude.ai or through the
+Skills API.
+
 ## Development
 
 ```bash

@@ -1,0 +1,24 @@
+{
+  "name": "deep-medchem",
+  "owner": {
+    "name": "Deep MedChem",
+    "url": "https://deepmedchem.com"
+  },
+  "metadata": {
+    "description": "Agent skills for the DeepMedChem chemical-space platform",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "deepmedchem",
+      "description": "Search make-on-demand chemical spaces with the deepmedchem Python package and dmc CLI: similarity, substructure, sampling, exports, credits, selections, runs, and vendor quotes.",
+      "source": "./",
+      "strict": false,
+      "skills": ["./skills/deepmedchem"],
+      "homepage": "https://docs.deepmedchem.com/docs/guides/python/quickstart",
+      "repository": "https://github.com/Deep-MedChem/deepmedchem-python",
+      "license": "MIT",
+      "keywords": ["cheminformatics", "drug-discovery", "chemical-space", "enamine-real"]
+    }
+  ]
+}
