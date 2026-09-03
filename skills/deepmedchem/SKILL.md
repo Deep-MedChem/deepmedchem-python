@@ -54,6 +54,7 @@ dmc status --verify                # confirms the profile and that the API accep
 | Random molecules from a space | `dmc sample -d DB -n N --seed S` | `dmc.sample(database=DB, count=N, seed=S)` |
 | Plan and remaining daily credits | `dmc usage` | `dmc.usage()` |
 | Multi-constraint or multi-query work | see references | `Selection`, `Run`, `Client.runs` |
+| Exact RDKit property filters, experimental ADMET acquisition | see references | `Selection.where`, `.require_preset`, `.acquire_predicted_property` |
 | Ask vendors for quotes or orders | `dmc order results.csv --get-quote` | `prepare_order(...)` |
 
 Database ids are strings such as `enamine-real-v5a` or `freedom-space-5`. Do not guess them:
@@ -121,6 +122,10 @@ with Client() as client:                   # api_key=..., profile=..., timeout=4
   none. Binding quotes come from the vendor via `dmc order --get-quote`.
 - **Ordering never sends anything.** `dmc order` and `prepare_order` only write `email.txt`
   and a price-free `molecules.csv` per vendor and open a local mail draft.
+- **Predicted ADMET is not a measurement.** `acquire_predicted_property` only reranks and trims
+  a similarity shortlist; its values are `experimental-acquisition-only` predictions. Never
+  describe them as measured, safe, or as meeting an ADMET threshold. Only `where` and
+  `require_preset` enforce a literal threshold, and only on exact assembled-product RDKit values.
 - **Do not invent endpoints** such as batch search URLs or pricing APIs. The public v2
   operations are `search`, `search_cheese`, `search_substructure`, `sample`, `catalog`,
   `selections`, and `runs`, all reached through this package.

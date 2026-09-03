@@ -127,6 +127,44 @@ with Client() as client:
 presets, pattern ids, and metrics are validated server-side; the catalog lists what a release
 supports. When `estimate.execution_tier` is not synchronous, submit the selection as a run.
 
+### Exact RDKit constraints and predicted-property acquisition
+
+`where` and `require_preset` are literal constraints: the API recalculates every RDKit descriptor
+on the assembled product and enforces the threshold exactly, so a returned molecule always
+satisfies the constraint.
+
+`acquire_predicted_property` adds one experimental acquisition stage that reranks and trims a
+similarity shortlist. It requires a ranked strategy and a similarity objective, and the database
+must advertise the endpoint.
+
+```python
+sel = (
+    Selection.from_database("enamine-real-v5a")
+    .reference("query", smiles="CCOc1ccc(C(=O)N2CCN(C)CC2)cc1")
+    .maximize_similarity("rdkit.ecfp4_tanimoto", reference="query")
+    .require_preset("lipinski-ro5/v1")
+    .where("rdkit.mol_wt", lte=450, units="Da")
+    .acquire_predicted_property(
+        "openadmet-herg-pchembl", direction="minimize", keep_fraction=0.25
+    )
+    .include("properties", "objective_components")
+    .limit(100)
+)
+result = client.selections.create(sel)
+result.acquisition            # endpoint_id, model_version, direction, units, qualification,
+                              # candidates_before, candidates_after
+result.hits[0].properties     # exact assembled-product RDKit values
+result.hits[0].acquisition    # predicted_value, applicable
+```
+
+CP16 values are `predicted`, `experimental-acquisition-only` ranking signals. They are not assay
+results and never establish that an ADMET threshold is met; only `where`/`require_preset` do that.
+A database that lacks the loaded property or CP16 assets answers `capability_unavailable` before
+any credit is reserved, so read the catalog (`client.catalog()`) for each library's `properties`,
+`presets`, `predicted_property_endpoints`, and
+`capabilities.predicted_property_acquisition`. These controls exist only on `Selection`; the simple
+`search`/`sample` helpers, the CLI, and the export helpers keep their ordinary interfaces.
+
 ## Durable runs (`run/1`)
 
 Use runs for anything that would exceed the 10 second synchronous budget or for many queries at
