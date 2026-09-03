@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "deepmedchem"
-version = "0.2.0b2"
+version = "0.2.0b3"
 description = "Official Python client for the DeepMedChem chemical-space platform"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -56,6 +56,7 @@ Repository = "https://github.com/Deep-MedChem/deepmedchem-python"
 Issues = "https://github.com/Deep-MedChem/deepmedchem-python/issues"
 
 [project.scripts]
+dmc = "deepmedchem.cli:main"
 deepmedchem = "deepmedchem.cli:main"
 
 [tool.hatch.build.targets.wheel]

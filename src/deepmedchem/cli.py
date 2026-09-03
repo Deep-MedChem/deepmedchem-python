@@ -25,9 +25,11 @@ from .config import (
 )
 from .export import FORMATS, infer_format, write_result
 from .models import SearchResult, Usage
-from .ordering import open_order_drafts, prepare_order
+from .ordering import open_order_drafts, prepare_order, procurement_contacts
 
 SEARCH_METHODS = ("morgan", "shape", "esp")
+# Typical make-on-demand delivery time quoted by every vendor in the catalog.
+DELIVERY_TIME = "3-6 weeks"
 
 
 # --- Presentation helpers ----------------------------------------------------
@@ -79,18 +81,6 @@ def _score(value: float | None) -> str:
     return f"{value:.4f}" if value is not None else "-"
 
 
-def _pricing_summary(pricing: Any) -> str:
-    if not isinstance(pricing, dict) or not pricing.get("available"):
-        return "-"
-    parts = [str(pricing.get("currency") or "USD")]
-    amount = pricing.get("default_amount_mg")
-    if amount is not None:
-        parts.append(f"{amount} mg")
-    ship_to = pricing.get("ship_to")
-    if ship_to:
-        parts.append(f"to {ship_to}")
-    return ", ".join(parts)
-
 
 def _duration(seconds: int | None) -> str:
     if seconds is None:
@@ -102,32 +92,24 @@ def _duration(seconds: int | None) -> str:
 
 def _print_database_table(catalog: dict[str, Any]) -> None:
     libraries = catalog.get("libraries") or []
+    contacts = procurement_contacts()
     rows = []
     for library in libraries:
-        capabilities = library.get("capabilities") or {}
-        methods = ["morgan"] if capabilities.get("search") else []
-        methods.extend(capabilities.get("search_cheese") or [])
+        database_id = str(library.get("database_id") or "")
+        contact = contacts.get(database_id.casefold())
         rows.append(
             [
-                library.get("database_id"),
+                database_id,
                 library.get("name"),
-                _human_count(library.get("product_count")),
-                _pricing_summary(library.get("pricing")),
-                ", ".join(methods) or "-",
-                "yes" if capabilities.get("search_substructure") else "no",
+                DELIVERY_TIME,
+                contact.email if contact else "-",
             ]
         )
-    print(
-        _format_table(
-            ["database", "name", "size", "pricing", "similarity", "substructure"],
-            rows,
-            align_right=[False, False, True, False, False, False],
-        )
-    )
+    print(_format_table(["database", "name", "availability", "orders"], rows))
     print()
     print(
-        f"{len(rows)} databases. Size is the number of enumerable molecules. Prices are whole "
-        "US dollars at the listed pack size; '-' means the search response carries no price."
+        f"{len(rows)} databases. Order or request quotes by email, "
+        "or run `dmc order results.csv`."
     )
 
 
@@ -205,7 +187,7 @@ def _add_output_options(parser: argparse.ArgumentParser) -> None:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="deepmedchem",
+        prog="dmc",
         description="Search DeepMedChem chemical spaces from the terminal.",
     )
     parser.add_argument("--version", action="version", version=__version__)

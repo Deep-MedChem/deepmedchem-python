@@ -203,7 +203,7 @@ def _keyring_get(profile: str, include_legacy: bool) -> str | None:
 # --- Encrypted-store-free fallback for headless hosts -------------------------
 #
 # Servers, containers, and SSH sessions usually have no Secret Service or
-# other OS keyring. Rather than failing `deepmedchem login` after the browser
+# other OS keyring. Rather than failing `dmc login` after the browser
 # approval already succeeded, credentials fall back to a 0600 JSON file next
 # to config.toml. Set DEEPMEDCHEM_CREDENTIAL_STORE=file to force the file store
 # (for example when a keyring backend exists but cannot unlock without a GUI),

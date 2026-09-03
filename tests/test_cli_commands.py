@@ -105,16 +105,17 @@ def _install_client(monkeypatch):
     return seen
 
 
-def test_databases_table_lists_pricing_and_capabilities(monkeypatch, capsys) -> None:
+def test_databases_table_lists_availability_and_order_email(monkeypatch, capsys) -> None:
     _install_client(monkeypatch)
     assert cli.main(["databases"]) == 0
     out = capsys.readouterr().out
-    assert "enamine-real-v5a" in out
-    assert "357.4B" in out
-    assert "USD, 1 mg, to US" in out
-    assert "morgan, shape, esp" in out
-    lines = [line for line in out.splitlines() if line.startswith("d2b-spacem1")]
-    assert lines and "  -  " in lines[0]
+    header = out.splitlines()[0].split()
+    assert header == ["database", "name", "availability", "orders"]
+    enamine = next(line for line in out.splitlines() if line.startswith("enamine-real-v5a"))
+    assert "3-6 weeks" in enamine
+    assert enamine.endswith("info@enamine.net")
+    d2b = next(line for line in out.splitlines() if line.startswith("d2b-spacem1"))
+    assert d2b.endswith("hello@molecule.one")
 
 
 def test_catalog_alias_prints_json(monkeypatch, capsys) -> None:

@@ -13,5 +13,5 @@ pip install jupyterlab pandas rdkit
 jupyter lab examples/notebooks/enamine_search.ipynb
 ```
 
-Run `deepmedchem login` first, or provide `DEEPMEDCHEM_API_KEY` through your environment. Never
+Run `dmc login` first, or provide `DEEPMEDCHEM_API_KEY` through your environment. Never
 put a real key in a notebook or commit one.

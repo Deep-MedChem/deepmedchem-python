@@ -61,7 +61,7 @@ def _credentials(
     if not value:
         raise DeepMedChemError(
             f"No DeepMedChem credential is configured for profile {profile!r}. "
-            f"Run `deepmedchem login --profile {profile}` or set DEEPMEDCHEM_API_KEY.",
+            f"Run `dmc login --profile {profile}` or set DEEPMEDCHEM_API_KEY.",
             code="missing_api_key",
         )
     return value

@@ -22,11 +22,11 @@ pip install deepmedchem
 Authenticate once, or set `DEEPMEDCHEM_API_KEY` in automation:
 
 ```bash
-deepmedchem login
-deepmedchem status
+dmc login
+dmc status
 ```
 
-`deepmedchem login` prints a short code and an approval URL. On a desktop it opens the URL in your
+`dmc login` prints a short code and an approval URL. On a desktop it opens the URL in your
 browser; on a headless server, container, or SSH session it only prints the URL, which you can open
 on any device. Sign in or create a CHEESE account there, approve the connection, and the CLI finishes
 on its own. The key goes to the OS keyring when one is available, otherwise to a `credentials.json`
@@ -35,35 +35,39 @@ file (mode 0600) next to the SDK config. Use `--no-browser` to force the print-o
 
 ## Command line
 
-The `deepmedchem` command covers the everyday operations without writing Python:
+The `dmc` command (also installed as `deepmedchem`) covers the everyday operations without
+writing Python:
 
 ```bash
-deepmedchem databases                        # searchable databases, sizes, pricing, capabilities
-deepmedchem usage                            # account plan and CHEESE Credits remaining today
-deepmedchem search "CC(=O)Oc1ccccc1C(=O)O" -d enamine-real-v5a -m shape -n 10
-deepmedchem search "CC(=O)Oc1ccccc1C(=O)O" -d enamine-real-v5a -o aspirin.csv
-deepmedchem substructure "[N;R0][N;R0]C(=O)" -d enamine-real-v5a -n 50 -o hydrazides.sdf
-deepmedchem sample -d freedom-space-5 -n 100 --seed 7 -o sample.smi
-deepmedchem order aspirin.csv --get-quote
+dmc databases                        # searchable databases, delivery time, order emails
+dmc usage                            # account plan and CHEESE Credits remaining today
+dmc search "CC(=O)Oc1ccccc1C(=O)O" -d enamine-real-v5a -m shape -n 10
+dmc search "CC(=O)Oc1ccccc1C(=O)O" -d enamine-real-v5a -o aspirin.csv
+dmc substructure "[N;R0][N;R0]C(=O)" -d enamine-real-v5a -n 50 -o hydrazides.sdf
+dmc sample -d freedom-space-5 -n 100 --seed 7 -o sample.smi
+dmc order aspirin.csv --get-quote
 ```
 
-`databases` lists every searchable space with its size, pricing, and capabilities:
+`databases` lists every searchable space with its typical delivery time and the vendor address
+for orders and quotes:
 
 ```text
-$ deepmedchem databases
-database                name                     size  pricing           similarity          substructure
-----------------------  --------------------  -------  ----------------  ------------------  ------------
-cheminfinita-2026-02    ChemInfinita 2026-02   794.2B  -                 morgan, shape, esp  no
-enamine-real-v5a        Enamine REAL v5a       357.4B  USD, 1 mg, to US  morgan, shape, esp  yes
-freedom-space-5         Freedom Space 5        296.4B  -                 morgan, shape, esp  no
-synple-explore-2025-10  Synple eXplore           9.5T  -                 morgan, shape, esp  no
-vast-2026-h2            VAST 2026 H2             6.8B  USD, 1 mg, to US  morgan, shape, esp  no
+$ dmc databases
+database                name                  availability  orders
+----------------------  --------------------  ------------  ------------------------
+cheminfinita-2026-02    ChemInfinita 2026-02  3-6 weeks     sales@otavachemicals.com
+d2b-spacem1             D2B SpaceM1           3-6 weeks     hello@molecule.one
+enamine-real-v5a        Enamine REAL v5a      3-6 weeks     info@enamine.net
+freedom-space-5         Freedom Space 5       3-6 weeks     sales@chem-space.com
+synple-explore-2025-10  Synple eXplore        3-6 weeks     sales@emolecules.com
+synple-synple-2025-10   Synple                3-6 weeks     sales@emolecules.com
+vast-2026-h2            VAST 2026 H2          3-6 weeks     contact@xtalpi.com
 ```
 
 Searches print a table of rank, similarity score, price, product id, and SMILES:
 
 ```text
-$ deepmedchem search "CC(=O)Oc1ccccc1C(=O)O" -d enamine-real-v5a -n 3
+$ dmc search "CC(=O)Oc1ccccc1C(=O)O" -d enamine-real-v5a -n 3
 rank   score  price  product_id                smiles
 ----  ------  -----  ------------------------  ----------------------
    1  0.7037   $245  46abadcde3d6af9edc2a454e  O=C(O)Oc1ccccc1C(=O)O
@@ -84,9 +88,9 @@ have no extra dependencies. Every command accepts `--json` for the raw API respo
 Prepare vendor-ready requests directly from an exported result CSV:
 
 ```bash
-deepmedchem order results.csv --get-quote          # confirm prices and availability
-deepmedchem order results.csv --amount-mg 1        # initiate a 1 mg order request
-deepmedchem order results.csv --no-open             # files only; useful over SSH
+dmc order results.csv --get-quote          # confirm prices and availability
+dmc order results.csv --amount-mg 1        # initiate a 1 mg order request
+dmc order results.csv --no-open             # files only; useful over SSH
 ```
 
 The command groups molecules by vendor email, creates one directory per recipient, and then asks
@@ -101,7 +105,7 @@ processing. Use `--to ADDRESS` for a private database without a configured procu
 and `--database ID` for older CSV files that do not carry a database column.
 
 ```text
-$ deepmedchem usage
+$ dmc usage
 plan:      premium
 credits:   9,999 of 10,000 remaining today (1 used)
 resets:    2026-09-04T00:00:00+00:00 (in 13h 35m)
@@ -186,7 +190,7 @@ basic item has a 60-second limit.
 Credentials resolve from an explicit `api_key`, `DEEPMEDCHEM_API_KEY`, compatibility environment
 variables, a custom credential provider, the selected profile's OS-keyring entry, or the
 `credentials.json` fallback file. Set `DEEPMEDCHEM_CREDENTIAL_STORE=file` or `=keyring` to force one
-store. Use `deepmedchem login --profile dev` for the development service; profiles never share
+store. Use `dmc login --profile dev` for the development service; profiles never share
 credentials.
 
 Every request identifies its source with `X-DMC-Client`, `X-DMC-Client-Version`, and
