@@ -26,13 +26,15 @@ class WarningMessage(APIModel):
 
 class PredictedPropertyAcquisitionHit(APIModel):
     endpoint_id: str
+    approximate_value: float
     predicted_value: float
     applicable: bool
 
 
 class PredictedPropertyAcquisitionResult(APIModel):
     endpoint_id: str
-    model_version: str
+    approximate_model_version: str
+    predicted_model_version: str
     direction: str
     units: str
     qualification: str
@@ -53,6 +55,7 @@ class Hit(APIModel):
     metric: str | None = None
     price: int | None = Field(default=None, gt=0)
     properties: dict[str, float] | None = None
+    predicted_properties: dict[str, float] | None = None
     acquisition: PredictedPropertyAcquisitionHit | None = None
 
     @property
@@ -66,6 +69,7 @@ class Hit(APIModel):
             "metric",
             "price",
             "properties",
+            "predicted_properties",
             "acquisition",
         }
         return {key: value for key, value in self.raw.items() if key not in common}

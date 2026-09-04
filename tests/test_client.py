@@ -107,7 +107,6 @@ def test_selection_builder_is_copy_on_write_and_round_trips() -> None:
         .require_pattern("alpha-amino-acid/v1", min_count=1)
         .where("rdkit.mol_wt", gt=250, units="Da")
         .limit(100)
-        .shortlist_multiplier(0)
         .max_per_scaffold(5)
         .include("properties", "constraint_evidence", "execution_plan")
     )
@@ -115,7 +114,7 @@ def test_selection_builder_is_copy_on_write_and_round_trips() -> None:
     payload = aspirin.to_dict()
     assert payload["constraints"]["properties"][0]["operator"] == "gt"
     assert payload["constraints"]["relationships"][0]["operator"] == "different"
-    assert payload["execution"]["shortlist_multiplier"] == 0
+    assert "shortlist_multiplier" not in payload["execution"]
     assert Selection.model_validate(json.loads(aspirin.to_json())).to_dict() == payload
     loaded_yaml = __import__("yaml").safe_load(aspirin.to_yaml())
     assert Selection.model_validate(loaded_yaml).to_dict() == payload
@@ -144,6 +143,22 @@ def _combined_selection() -> Selection:
     )
 
 
+def test_selection_builds_exact_predicted_property_range() -> None:
+    selection = (
+        Selection.from_database("enamine-real-v5a")
+        .reference("query", smiles="CCO")
+        .maximize_similarity("rdkit.ecfp4_tanimoto", reference="query")
+        .where_predicted_property(
+            "openadmet-herg-pchembl", units="pChEMBL", lte=5.0
+        )
+    )
+
+    condition = selection.to_dict()["constraints"]["predicted_properties"][0]
+    assert condition["required_fidelity"] == "pinned_assembled_product_teacher"
+    assert condition["operator"] == "lte"
+    assert condition["value"] == 5.0
+
+
 def _selection_response(selection: Selection) -> dict:
     return {
         "id": "sel_1",
@@ -158,6 +173,7 @@ def _selection_response(selection: Selection) -> dict:
                 "properties": {"MolWt": 46.07},
                 "acquisition": {
                     "endpoint_id": "openadmet-herg-pchembl",
+                    "approximate_value": 4.0,
                     "predicted_value": 4.2,
                     "applicable": True,
                 },
@@ -165,7 +181,8 @@ def _selection_response(selection: Selection) -> dict:
         ],
         "acquisition": {
             "endpoint_id": "openadmet-herg-pchembl",
-            "model_version": "herg@abc123",
+            "approximate_model_version": "herg-cp16@abc123",
+            "predicted_model_version": "herg-teacher@def456",
             "direction": "minimize",
             "units": "pChEMBL",
             "qualification": "experimental-acquisition-only",
