@@ -10,6 +10,7 @@ Set the key without putting it in source code or shell arguments:
 export DEEPMEDCHEM_API_KEY="..."
 python examples/live/enamine_named_drugs.py
 python examples/live/enamine_known_product.py
+python examples/live/property_and_admet_filters.py
 ```
 
 `DMC_API_KEY` and the experiment workspace's existing `CHEESE_API_KEY` are also supported. The
@@ -47,3 +48,14 @@ query=q01 database=enamine-real-v5a release=2026-08-29.1
 
 Morgan fingerprints can give stereochemical variants the same score, so the known-product
 example reports exact SMILES equality separately from similarity.
+
+`property_and_admet_filters.py` contains three checked examples:
+
+- seeded sampling with exact assembled-product `lipinski-ro5/v1` enforcement;
+- soft hERG acquisition using factorized CP16 before assembly and the pinned
+  OpenADMET teacher afterward;
+- a hard `pChEMBL <= 5.0` hERG range enforced by that exact product teacher.
+
+The ADMET examples use the durable Runs API. This makes them reliable even on
+the first request after a worker deployment, when the teacher model is loaded
+into memory, and shows the approximate and exact predictions separately.
