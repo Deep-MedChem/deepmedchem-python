@@ -266,7 +266,6 @@ def _parser() -> argparse.ArgumentParser:
         "-m", "--method", choices=SEARCH_METHODS, default="morgan", help="Similarity method"
     )
     search.add_argument("-n", "--limit", type=int, default=20, help="Number of hits")
-    search.add_argument("--shortlist-multiplier", type=int, default=10, help=argparse.SUPPRESS)
     _add_output_options(search)
     _add_connection_options(search)
 
@@ -500,7 +499,6 @@ def _search(args) -> int:
             database=args.database,
             method=args.method,
             limit=args.limit,
-            shortlist_multiplier=args.shortlist_multiplier,
             include_synthons=args.include_synthons,
         )
         return _emit_result(args, result, client)

@@ -309,7 +309,6 @@ class Client:
         database: str,
         method: str = "morgan",
         limit: int = 20,
-        shortlist_multiplier: int = 10,
         include_synthons: bool = False,
     ) -> SearchResult:
         if method not in {"morgan", "shape", "esp"}:
@@ -320,7 +319,6 @@ class Client:
                 database=database,
                 scorer=method,
                 limit=limit,
-                shortlist_multiplier=shortlist_multiplier,
                 include_synthons=include_synthons,
             )
         return SearchResult.model_validate(
@@ -331,7 +329,6 @@ class Client:
                     "query_smiles": smiles,
                     "database_id": database,
                     "limit": limit,
-                    "shortlist_multiplier": shortlist_multiplier,
                     "include_synthons": include_synthons,
                 },
             )
@@ -344,7 +341,6 @@ class Client:
         database: str,
         scorer: str,
         limit: int = 20,
-        shortlist_multiplier: int = 10,
         include_synthons: bool = False,
     ) -> SearchResult:
         return SearchResult.model_validate(
@@ -356,7 +352,6 @@ class Client:
                     "database_id": database,
                     "scorer": scorer,
                     "limit": limit,
-                    "shortlist_multiplier": shortlist_multiplier,
                     "include_synthons": include_synthons,
                 },
             )
@@ -636,7 +631,6 @@ class AsyncClient:
             "query_smiles": smiles,
             "database_id": kwargs.pop("database"),
             "limit": kwargs.pop("limit", 20),
-            "shortlist_multiplier": kwargs.pop("shortlist_multiplier", 10),
             "include_synthons": kwargs.pop("include_synthons", False),
         }
         if kwargs:
@@ -651,7 +645,6 @@ class AsyncClient:
             "database_id": kwargs.pop("database"),
             "scorer": kwargs.pop("scorer"),
             "limit": kwargs.pop("limit", 20),
-            "shortlist_multiplier": kwargs.pop("shortlist_multiplier", 10),
             "include_synthons": kwargs.pop("include_synthons", False),
         }
         if kwargs:

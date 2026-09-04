@@ -200,9 +200,9 @@ the installed SDK version separately.
 `molecule-selection/1` and `run/1` documents; all chemistry and capability validation remains on
 the API.
 
-Exact RDKit constraints and experimental predicted-property acquisition are available only through
-`Selection`. The simple `search`, `sample`, CLI, and export helpers intentionally keep their
-ordinary interfaces.
+Exact RDKit constraints, fast predicted-property acquisition, and hard assembled-product predicted
+ranges are available through `Selection`. The simple `search`, `sample`, CLI, and export helpers
+keep their ordinary interfaces.
 
 ```python
 from deepmedchem import Client, Selection
@@ -229,11 +229,27 @@ with Client() as dmc:
     result = dmc.selections.create(selection)
 ```
 
-Every returned RDKit value is calculated on the assembled product and enforced literally. CP16
-values are predicted, `experimental-acquisition-only` ranking signals: they may reduce a similarity
-shortlist, but they are not measured assay results and do not prove that an ADMET threshold is met.
-The response exposes `hit.acquisition.predicted_value`, `hit.acquisition.applicable`, and one
-response-level `result.acquisition` provenance record.
+Every returned RDKit value is calculated on the assembled product and enforced literally. For
+predicted-property acquisition, factorized CP16 scores cheaply narrow the candidate pool before
+assembly and the pinned OpenADMET teacher predicts every unique surviving assembled product. The
+response exposes the two stages separately as `hit.acquisition.approximate_value` and
+`hit.acquisition.predicted_value`. These remain model predictions rather than assay measurements.
+
+A hard predicted-property range is enforced only by the assembled-product teacher:
+
+```python
+selection = (
+    Selection.from_database("enamine-real-v5a")
+    .reference("query", smiles="CC(=O)Oc1ccccc1C(=O)O")
+    .maximize_similarity("rdkit.ecfp4_tanimoto", reference="query")
+    .where_predicted_property(
+        "openadmet-herg-pchembl",
+        lte=5.0,
+        units="pChEMBL",
+    )
+    .limit(20)
+)
+```
 
 Property-filtered random sampling uses the same selection contract without acquisition:
 

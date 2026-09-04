@@ -162,7 +162,6 @@ def test_search_prints_table_and_summary(monkeypatch, capsys) -> None:
         "query_smiles": "CC(=O)Oc1ccccc1C(=O)O",
         "database_id": "enamine-real-v5a",
         "limit": 2,
-        "shortlist_multiplier": 10,
         "include_synthons": False,
     }
 
