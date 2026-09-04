@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class PredictedPropertyRankQuantileAcquisition(BaseModel):
-    """Experimental predicted-property shortlist acquisition directive."""
+    """Fast factorized preselection followed by an exact product prediction."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -152,7 +152,7 @@ class Selection:
         direction: Literal["minimize", "maximize"],
         keep_fraction: float,
     ) -> Selection:
-        """Reduce a similarity shortlist using an experimental predicted signal."""
+        """Trim candidates with CP16, then predict unique products with the teacher."""
 
         acquisition = PredictedPropertyRankQuantileAcquisition(
             endpoint_id=endpoint_id,
@@ -237,17 +237,45 @@ class Selection:
 
         return self._changed(update)
 
+    def where_predicted_property(
+        self,
+        endpoint_id: str,
+        *,
+        units: str,
+        **operator_value: Any,
+    ) -> Selection:
+        """Require a range using the pinned assembled-product prediction model."""
+
+        allowed = {"gt", "gte", "lt", "lte", "range"}
+        supplied = allowed & set(operator_value)
+        if len(supplied) != 1 or set(operator_value) - allowed:
+            raise ValueError("provide exactly one of gt, gte, lt, lte, or range")
+        operator = supplied.pop()
+        value = operator_value[operator]
+        if operator == "range" and isinstance(value, list | tuple):
+            if len(value) != 2:
+                raise ValueError("range requires two endpoints")
+            value = {"lower": value[0], "upper": value[1]}
+
+        def update(payload):
+            payload["constraints"].setdefault("predicted_properties", []).append(
+                {
+                    "type": "predicted_property",
+                    "endpoint_id": endpoint_id,
+                    "operator": operator,
+                    "value": value,
+                    "units": units,
+                    "required_fidelity": "pinned_assembled_product_teacher",
+                    "missing": "reject",
+                }
+            )
+
+        return self._changed(update)
+
     def limit(self, value: int) -> Selection:
         if not 1 <= value <= 1_000:
             raise ValueError("selection limit must be between 1 and 1,000")
         return self._changed(lambda payload: payload["portfolio"].update(limit=value))
-
-    def shortlist_multiplier(self, value: int) -> Selection:
-        if not 0 <= value <= 200:
-            raise ValueError("shortlist multiplier must be between 0 and 200")
-        return self._changed(
-            lambda payload: payload["execution"].update(shortlist_multiplier=value)
-        )
 
     def max_per_scaffold(self, value: int) -> Selection:
         if value < 1:
