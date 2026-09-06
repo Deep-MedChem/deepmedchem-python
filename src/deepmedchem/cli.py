@@ -23,6 +23,7 @@ from .config import (
     resolve_profile,
     save_api_key,
 )
+from .databases import DATABASE_DETAILS, DATABASE_DISPLAY_ORDER
 from .export import FORMATS, infer_format, write_result
 from .models import SearchResult, Usage
 from .ordering import open_order_drafts, prepare_order, procurement_contacts
@@ -97,32 +98,64 @@ def _duration(seconds: int | None) -> str:
     return f"{hours}h {minutes:02d}m"
 
 
-def _print_database_table(catalog: dict[str, Any]) -> None:
-    libraries = catalog.get("libraries") or []
+def _print_database_table(catalog: dict[str, Any], *, detailed: bool = False) -> None:
+    priority = {database_id: index for index, database_id in enumerate(DATABASE_DISPLAY_ORDER)}
+    libraries = sorted(
+        catalog.get("libraries") or [],
+        key=lambda library: priority.get(str(library.get("database_id") or ""), len(priority)),
+    )
     contacts = procurement_contacts()
     rows = []
     for library in libraries:
         database_id = str(library.get("database_id") or "")
         contact = contacts.get(database_id.casefold())
         pricing = library.get("pricing") or {}
-        rows.append(
-            [
+        details = DATABASE_DETAILS.get(database_id, {})
+        row = [
+            details.get("abbreviation", database_id),
+            _human_count(library.get("product_count")),
+            "yes" if pricing.get("available") else "-",
+            contact.email if contact else "-",
+        ]
+        if detailed:
+            row = [
+                row[0],
                 database_id,
-                _human_count(library.get("product_count")),
-                "yes" if pricing.get("available") else "-",
-                contact.email if contact else "-",
+                details.get("biosolveit", "-"),
+                details.get("type", "-"),
+                row[1],
+                details.get("availability", "-"),
+                details.get("success", "-"),
+                row[2],
+                row[3],
+                details.get("url", "-"),
             ]
-        )
-    print(
-        _format_table(
-            ["database", "molecules", "prices", "orders"],
-            rows,
-            align_right=[False, True, False, False],
-        )
-    )
+        rows.append(row)
+    headers = ["abbreviation", "molecules", "prices", "orders"]
+    if detailed:
+        headers = [
+            "abbreviation",
+            "database_id",
+            "biosolveit_mapping",
+            "type",
+            "molecules",
+            "availability",
+            "success",
+            "prices",
+            "orders",
+            "link",
+        ]
+    print(_format_table(headers, rows, align_right=[h == "molecules" for h in headers]))
     print()
     print(f"{len(rows)} databases, made on demand and delivered in {DELIVERY_TIME}.")
     print("Order or request quotes by email, or run `dmc order results.csv`.")
+    if detailed:
+        print("Availability and success: provider estimates; releases may differ.")
+        print("* No direct mapping: CHEMriya is a related Otava collection.")
+        print("** No direct mapping: our Enamine version uses public Enamine building blocks.")
+        print(
+            "Only live API catalog entries are listed; other CHEESE UI databases are coming soon."
+        )
 
 
 def _catalog_entry(client: Client, database_id: str | None) -> dict[str, Any] | None:
@@ -258,10 +291,15 @@ def _parser() -> argparse.ArgumentParser:
         "databases", aliases=["catalog"], help="List searchable databases and their pricing"
     )
     _add_connection_options(databases)
+    databases.add_argument(
+        "--detailed", action="store_true", help="Show full IDs, mappings and provider details"
+    )
 
     search = commands.add_parser("search", help="Similarity search for a SMILES query")
     search.add_argument("smiles", help="Query molecule as SMILES")
-    search.add_argument("-d", "--database", required=True, help="Database id, see `databases`")
+    search.add_argument(
+        "-d", "--database", required=True, help="Database abbreviation or full ID, see `databases`"
+    )
     search.add_argument(
         "-m", "--method", choices=SEARCH_METHODS, default="morgan", help="Similarity method"
     )
@@ -271,7 +309,9 @@ def _parser() -> argparse.ArgumentParser:
 
     substructure = commands.add_parser("substructure", help="Exact SMILES/SMARTS substructure")
     substructure.add_argument("query", help="Substructure query")
-    substructure.add_argument("-d", "--database", required=True, help="Database id")
+    substructure.add_argument(
+        "-d", "--database", required=True, help="Database abbreviation or full ID"
+    )
     substructure.add_argument(
         "-f",
         "--format-in",
@@ -288,7 +328,7 @@ def _parser() -> argparse.ArgumentParser:
     _add_connection_options(substructure)
 
     sample = commands.add_parser("sample", help="Draw random molecules from a database")
-    sample.add_argument("-d", "--database", required=True, help="Database id")
+    sample.add_argument("-d", "--database", required=True, help="Database abbreviation or full ID")
     sample.add_argument("-n", "--count", type=int, default=100, help="Number of molecules")
     sample.add_argument("--seed", type=int, help="Reproducible sampling seed")
     _add_output_options(sample)
@@ -467,7 +507,7 @@ def _databases(args) -> int:
     if args.json:
         print(json.dumps(catalog, indent=2, sort_keys=True))
     else:
-        _print_database_table(catalog)
+        _print_database_table(catalog, detailed=args.detailed)
     return 0
 
 
