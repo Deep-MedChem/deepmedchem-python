@@ -1,7 +1,8 @@
 """Display metadata and release-pinned shorthand IDs (September 2026).
 
 Live catalog counts/pricing remain authoritative. Shipping and feasibility estimates:
-https://www.alipheron.com/spaces/ . BioSolveIT analogues:
+https://www.alipheron.com/spaces/ , except VAST: XtalPi Library Overview 2026 H2.
+BioSolveIT analogues:
 https://www.biosolveit.de/chemical-spaces/ . Asterisks denote indirect mappings.
 """
 
@@ -60,8 +61,8 @@ DATABASE_DETAILS: dict[str, dict[str, str]] = {
         "abbreviation": "vast",
         "biosolveit": "VAST_4bn_2026-05",
         "type": "Make-On-Demand",
-        "availability": "2-3 weeks",
-        "success": ">80%",
+        "availability": "2-4 weeks",
+        "success": "85%+",
         "url": "https://aifchem.com/",
     },
     "MCULE-IN-STOCK": {

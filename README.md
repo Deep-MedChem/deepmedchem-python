@@ -66,7 +66,7 @@ vast               6.8B  yes     contact@xtalpi.com
 cheminfinita     794.2B  -       sales@otavachemicals.com
 spacem1            1.5B  -       hello@molecule.one
 
-7 databases, made on demand and delivered in 3-6 weeks.
+7 databases. Lead times vary by database; see --detailed.
 Order or request quotes by email, or run `dmc order results.csv`.
 ```
 
@@ -99,7 +99,7 @@ have no extra dependencies. Every command accepts `--json` for the raw API respo
 Snapshot: September 6, 2026. Use the abbreviation in `database="enamine"` or `dmc search ... -d enamine`.
 Full database IDs remain supported. Abbreviations resolve to the releases listed by `dmc databases --detailed`.
 
-| Abbreviation | Type[^python-availability] | Molecules | Availability | Success rate | Prices | Orders | Link |
+| Abbreviation | Type[^python-availability] | Molecules | Availability | Success rate | Prices[^price-estimates] | Orders | Link |
 | --- | --- | ---: | --- | --- | :---: | --- | :---: |
 | `enamine` | Make-On-Demand | 336.7B | 3–4 weeks | >80% | yes | info@enamine.net | [🔗](https://enamine.net/compound-collections/real-compounds/real-space-navigator) |
 | `freedom` | Make-On-Demand | 296.4B | 5–6 weeks | >80% | yes | sales@chem-space.com | [🔗](https://chem-space.com/freedom-space) |
@@ -107,7 +107,7 @@ Full database IDs remain supported. Abbreviations resolve to the releases listed
 | `synple` | Make-On-Demand | 7.6T | 3–4 weeks | >85% | yes | sales@emolecules.com | [🔗](https://www.emolecules.com/products/explore) |
 | `cheminfinita` | Make-On-Demand | 794.2B | 5–8 weeks | 55–85% | - | sales@otavachemicals.com | [🔗](https://www.otavachemicals.com/) |
 | `spacem1` | Make-On-Demand | 1.5B | 2–6 weeks | >85% | - | hello@molecule.one | [🔗](https://molecule.one/) |
-| `vast` | Make-On-Demand | 6.8B | 2–3 weeks | >80% | yes | contact@xtalpi.com | [🔗](https://aifchem.com/) |
+| `vast` | Make-On-Demand | 6.8B | 2–4 weeks | 85%+ | yes | contact@xtalpi.com | [🔗](https://aifchem.com/) |
 | `mcule-in-stock` | In-Stock | 7.2M | Immediate | 100% | yes | order@mcule.com | [🔗](https://mcule.com/) |
 | `mcule-full` | In-Stock | 140.4M | Immediate | 100% | yes | order@mcule.com | [🔗](https://mcule.com/) |
 | `molport` | In-Stock | 5.9M | Immediate | 100% | yes | sales@molport.com | [🔗](https://molport.com/) |
@@ -116,9 +116,11 @@ Full database IDs remain supported. Abbreviations resolve to the releases listed
 
 [^python-availability]: Currently only **Make-On-Demand** spaces are available through this Python package. The rest are coming soon and are currently available only in the [CHEESE UI](https://cheese.deepmedchem.com/).
 
+[^price-estimates]: Prices are planning estimates per compound, before any discounts are applied, and generally assume a low number of molecules ordered. VAST H2 2026 uses **$118 for one-step (primary)** and **$206 for two-step (advanced)** synthesis, at **1 mg per compound in a 50-compound order**. Other databases similarly assume small orders; the exact basis varies by vendor. Request a final quote for your actual quantity and order size.
+
 Counts and price support for Make-On-Demand spaces
 come from the live API catalog. Shipping and synthesis-success figures are provider estimates from
-[Alipheron](https://www.alipheron.com/spaces/), across potentially different releases. In-Stock rows
+[Alipheron](https://www.alipheron.com/spaces/), across potentially different releases, except VAST H2 2026: its 2–4 week average lead time and 85%+ success rate come from XtalPi’s VAST Library Overview, 2026 H2. In-Stock rows
 use immediate availability and 100% success as stock-catalog conventions; confirm fulfillment with
 the vendor. MCULE-FULL includes the full purchasable catalog. Enumerative sizes are recorded dataset
 counts; Molport, Chemspace Screening, and ZINC15 use an archived metadata snapshot.
