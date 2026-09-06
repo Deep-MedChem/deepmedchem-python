@@ -96,6 +96,13 @@ def _duration(seconds: int | None) -> str:
     return f"{hours}h {minutes:02d}m"
 
 
+def _library_count(library: dict[str, Any]) -> str:
+    size = _human_count(library.get("product_count"))
+    if size != "-" and (library.get("population") or {}).get("count_is_estimate"):
+        return f"~{size}"
+    return size
+
+
 def _print_database_table(catalog: dict[str, Any], *, detailed: bool = False) -> None:
     priority = {database_id: index for index, database_id in enumerate(DATABASE_DISPLAY_ORDER)}
     libraries = sorted(
@@ -111,7 +118,7 @@ def _print_database_table(catalog: dict[str, Any], *, detailed: bool = False) ->
         details = DATABASE_DETAILS.get(database_id, {})
         row = [
             details.get("abbreviation", database_id),
-            _human_count(library.get("product_count")),
+            _library_count(library),
             "yes" if pricing.get("available") else "-",
             contact.email if contact else "-",
         ]
@@ -179,8 +186,9 @@ def _result_summary(result: SearchResult, library: dict[str, Any] | None) -> lis
 
     meta = result.meta
     name = (library or {}).get("name") or meta.database or "the database"
-    size = _human_count((library or {}).get("product_count")) if library else "-"
-    space = f"{size} molecules ({name})" if size != "-" else str(name)
+    size = _library_count(library) if library else "-"
+    unit = "source combinations" if (library or {}).get("population") else "molecules"
+    space = f"{size} {unit} ({name})" if size != "-" else str(name)
     elapsed = f" in {meta.elapsed_ms:.0f} ms" if meta.elapsed_ms is not None else ""
     count = len(result)
     if meta.method == "sample":
