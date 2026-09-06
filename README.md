@@ -10,7 +10,7 @@
 The official, chemistry-thin Python client for the DeepMedChem hosted chemical-space platform.
 It contains no RDKit, models, databases, or proprietary search implementation.
 
-> **Beta:** `deepmedchem` 0.2 is available for early use. APIs may still change before the
+> **Beta:** `deepmedchem` 0.3 is available for early use. APIs may still change before the
 > stable release.
 
 ## Installation
@@ -49,8 +49,8 @@ dmc sample -d freedom -n 100 --seed 7 -o sample.smi
 dmc order aspirin.csv --get-quote
 ```
 
-`databases` lists every searchable space with its size, whether the vendor publishes per-compound
-prices, and the vendor address for orders and quotes. Output captured on September 6, 2026;
+`databases` lists every searchable space with its size, whether per-compound price estimates
+are available, and the vendor address for orders and quotes. Output captured on September 6, 2026;
 the catalog can change. `--detailed` adds full IDs, BioSolveIT mappings, type, availability,
 success estimates, and vendor links. `--json` always returns the unmodified API catalog:
 
@@ -58,7 +58,7 @@ success estimates, and vendor links. `--json` always returns the unmodified API 
 $ dmc databases
 abbreviation  molecules  prices  orders
 ------------  ---------  ------  ------------------------
-enamine          336.7B  -       info@enamine.net
+enamine          336.7B  yes     info@enamine.net
 freedom          296.4B  yes     sales@chem-space.com
 explore            9.5T  yes     sales@emolecules.com
 synple             7.6T  yes     sales@emolecules.com
@@ -74,14 +74,19 @@ Searches print a table of rank, similarity score, price, and SMILES, followed by
 searched and the score range. Substructure hits show `exact` instead of a score, and samples
 have no score column. Product ids and the other API fields are kept in `--json` and in exports.
 
-The search example currently fails against the hosted API (September 6, 2026):
+Example output from the production API (September 6, 2026):
 
 ```text
 $ dmc search "CC(=O)Oc1ccccc1C(=O)O" -d enamine -n 3
-error: Extra inputs are not permitted [invalid_schema]
-```
+rank   score  price  smiles
+----  ------  -----  -----------------------------
+   1  0.7037   $245  O=C(O)Oc1ccccc1C(=O)O
+   2  0.6667   $163  COC(=O)Oc1ccccc1C(=O)O
+   3  0.6061   $163  CC(C)(C)OC(=O)Oc1ccccc1C(=O)O
 
-A refreshed successful search output is pending resolution of this schema error.
+Searched 336.7B molecules (Enamine REAL v5a) in 476 ms.
+Similarity range: 0.61-0.70 ECFP4 Tanimoto.
+```
 
 `-o/--output` saves the hits as CSV, SDF, SMILES (`.smi`), or JSON, inferred from the file suffix
 (`--format` overrides it). CSV and SDF carry the score, price, product id, and every other field
@@ -96,7 +101,7 @@ Full database IDs remain supported. Abbreviations resolve to the releases listed
 
 | Abbreviation | Type[^python-availability] | Molecules | Availability | Success rate | Prices | Orders | Link |
 | --- | --- | ---: | --- | --- | :---: | --- | :---: |
-| `enamine` | Make-On-Demand | 336.7B | 3–4 weeks | >80% | - | info@enamine.net | [🔗](https://enamine.net/compound-collections/real-compounds/real-space-navigator) |
+| `enamine` | Make-On-Demand | 336.7B | 3–4 weeks | >80% | yes | info@enamine.net | [🔗](https://enamine.net/compound-collections/real-compounds/real-space-navigator) |
 | `freedom` | Make-On-Demand | 296.4B | 5–6 weeks | >80% | yes | sales@chem-space.com | [🔗](https://chem-space.com/freedom-space) |
 | `explore` | Make-On-Demand | 9.5T | 3–4 weeks | >85% | yes | sales@emolecules.com | [🔗](https://www.emolecules.com/products/explore) |
 | `synple` | Make-On-Demand | 7.6T | 3–4 weeks | >85% | yes | sales@emolecules.com | [🔗](https://www.emolecules.com/products/explore) |
@@ -186,9 +191,14 @@ for hit in result.hits:
     print(f"{hit.rank}  score={hit.score:.4f}  price={price}  {hit.smiles}")
 ```
 
-The quickstart also currently fails against the hosted API (September 6, 2026), raising
-`deepmedchem.client.DeepMedChemError: Extra inputs are not permitted` before producing results.
-Successful example output will be refreshed once the schema error is resolved.
+Example output from the production API (September 6, 2026):
+
+```text
+SearchResult(3 molecules, method='shape', database='enamine-real-v5a')
+1  score=0.9726  price=$245  O=C(O)Oc1ccccc1C(=O)O
+2  score=0.9719  price=$163  COC(=O)Oc1ccccc1C(=O)O
+3  score=0.9551  price=$163  COC(=O)Oc1ccccc1C(C)=O
+```
 
 Prices are estimates in whole US dollars for delivery to the United States. They are returned in
 the original search response, so both `hit.price` and the aligned `result.prices` list are
