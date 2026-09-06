@@ -56,7 +56,7 @@ _register(
     "CHEMSPACE-5B-RO5",
     "CHEMSPACE-5B-FREEDOM",
 )
-_register(VendorContact("XtalPi", "contact@xtalpi.com"), "vast-2026-h2", "XTALPI", "XTALPI-SYNTHON")
+_register(VendorContact("XtalPi", "VAST@XtalPi.com"), "vast-2026-h2", "XTALPI", "XTALPI-SYNTHON")
 _register(
     VendorContact("OTAVA Chemicals", "sales@otavachemicals.com"),
     "cheminfinita-2026-02",

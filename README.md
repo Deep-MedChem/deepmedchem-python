@@ -62,7 +62,7 @@ enamine          336.7B  yes     info@enamine.net
 freedom          296.4B  yes     sales@chem-space.com
 explore            9.5T  yes     sales@emolecules.com
 synple             7.6T  yes     sales@emolecules.com
-vast               6.8B  yes     contact@xtalpi.com
+vast               6.8B  yes     VAST@XtalPi.com
 cheminfinita     794.2B  -       sales@otavachemicals.com
 spacem1            1.5B  -       hello@molecule.one
 
@@ -107,7 +107,7 @@ Full database IDs remain supported. Abbreviations resolve to the releases listed
 | `synple` | Make-On-Demand | 7.6T | 3–4 weeks | >85% | yes | sales@emolecules.com | [🔗](https://www.emolecules.com/products/explore) |
 | `cheminfinita` | Make-On-Demand | 794.2B | 5–8 weeks | 55–85% | - | sales@otavachemicals.com | [🔗](https://www.otavachemicals.com/) |
 | `spacem1` | Make-On-Demand | 1.5B | 2–6 weeks | >85% | - | hello@molecule.one | [🔗](https://molecule.one/) |
-| `vast` | Make-On-Demand | 6.8B | 2–4 weeks | 85%+ | yes | contact@xtalpi.com | [🔗](https://aifchem.com/) |
+| `vast` | Make-On-Demand | 6.8B | 2–4 weeks | 85%+ | yes | VAST@XtalPi.com | [🔗](https://aifchem.com/) |
 | `mcule-in-stock` | In-Stock | 7.2M | Immediate | 100% | yes | order@mcule.com | [🔗](https://mcule.com/) |
 | `mcule-full` | In-Stock | 140.4M | Immediate | 100% | yes | order@mcule.com | [🔗](https://mcule.com/) |
 | `molport` | In-Stock | 5.9M | Immediate | 100% | yes | sales@molport.com | [🔗](https://molport.com/) |
