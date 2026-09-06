@@ -94,6 +94,29 @@ from the response. SDF output needs RDKit (`pip install "deepmedchem[sdf]"`); th
 have no extra dependencies. Every command accepts `--json` for the raw API response and
 `--profile` to pick a configured profile.
 
+### Enamine development population
+
+The development API uses the filtered Enamine release `2026-09-06.2` by default for
+`database="enamine"`, including sampling, similarity, selections, runs, and substructure search.
+It applies MW ≤500, logP ≤5, HBA ≤10, HBD ≤5, rotatable bonds ≤10, and TPSA ≤140 Å²
+on the assembled product after selecting the first valid source topology. Price estimates
+remain available on the returned products.
+
+The updated estimate is **93.41B** source combinations (95% interval: 93.19–93.63B),
+based on 18.7 million draws. This replaces the earlier 92.8B estimate of the same definition.
+The catalogue reports the estimate and its confidence interval. The CLI marks
+estimated counts with `~`; this population counts source reagent combinations, which may
+produce the same molecular graph. The production snapshots below describe the existing
+production release until the development release is promoted.
+
+```python
+from deepmedchem import Client
+
+with Client(api_url="https://api-dev.deepmedchem.com") as client:
+    sample = client.sample(database="enamine", count=20, seed=7)
+    matches = client.search_substructure("C(=O)N", database="enamine", limit=20)
+```
+
 ## DeepMedChem All Chemical Spaces
 
 Snapshot: September 6, 2026. Use the abbreviation in `database="enamine"` or `dmc search ... -d enamine`.
