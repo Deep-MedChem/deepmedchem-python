@@ -9,6 +9,8 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .databases import resolve_database
+
 
 class PredictedPropertyRankQuantileAcquisition(BaseModel):
     """Fast factorized preselection followed by an exact product prediction."""
@@ -56,7 +58,7 @@ class Selection:
 
     @classmethod
     def from_database(cls, database: str, *, release: str | None = None) -> Selection:
-        database_value = {"database_id": database}
+        database_value = {"database_id": resolve_database(database)}
         if release:
             database_value["release_id"] = release
         return cls(
