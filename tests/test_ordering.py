@@ -179,7 +179,7 @@ def test_cli_no_open_creates_copyable_fallback(tmp_path, capsys) -> None:
         == 0
     )
     out = capsys.readouterr().out
-    assert "XtalPi: 1 molecules -> contact@xtalpi.com" in out
+    assert "XtalPi: 1 molecules -> VAST@XtalPi.com" in out
     assert "--no-open" in out
     assert (target / "xtalpi" / "email.txt").exists()
     assert (target / "xtalpi" / "molecules.csv").exists()
