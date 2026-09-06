@@ -114,16 +114,9 @@ Full database IDs remain supported. Abbreviations resolve to the releases listed
 | `chemspace-screening` | In-Stock | 7.5M | Immediate | 100% | yes | sales@chem-space.com | [🔗](https://chem-space.com/) |
 | `zinc15` | Other | 697.1M | No availability info | N/A | unknown | N/A | [🔗](https://zinc15.docking.org/) |
 
-[^python-availability]: Currently only **Make-On-Demand** spaces are available through this Python package. The rest are coming soon and are currently available only in the [CHEESE UI](https://cheese.deepmedchem.com/).
+[^python-availability]: Currently only **Make-On-Demand** spaces are available through this Python package. The rest are coming soon and are currently available only in the [CHEESE UI](https://cheese.deepmedchem.com/), but all spaces are searchable through the API.
 
-[^price-estimates]: Prices are planning estimates per compound, before any discounts are applied, and generally assume a low number of molecules ordered. VAST H2 2026 uses **$118 for one-step (primary)** and **$206 for two-step (advanced)** synthesis, at **1 mg per compound in a 50-compound order**. Other databases similarly assume small orders; the exact basis varies by vendor. Request a final quote for your actual quantity and order size.
-
-Counts and price support for Make-On-Demand spaces
-come from the live API catalog. Shipping and synthesis-success figures are provider estimates from
-[Alipheron](https://www.alipheron.com/spaces/), across potentially different releases, except VAST H2 2026: its 2–4 week average lead time and 85%+ success rate come from XtalPi’s VAST Library Overview, 2026 H2. In-Stock rows
-use immediate availability and 100% success as stock-catalog conventions; confirm fulfillment with
-the vendor. MCULE-FULL includes the full purchasable catalog. Enumerative sizes are recorded dataset
-counts; Molport, Chemspace Screening, and ZINC15 use an archived metadata snapshot.
+[^price-estimates]: Prices are planning estimates per compound, before any discounts are applied, and generally assume a low number of molecules ordered and price per 1 mg. For instance VAST H2 2026 uses 1 mg per compound in a 50-compound order. Other databases similarly assume small orders; the exact basis varies by vendor. Request a final quote for your actual quantity and order size. Counts and price support for Make-On-Demand spaces come from the live API catalog. In-Stock rows use immediate availability and 100% success as stock-catalog conventions; confirm fulfillment with the vendor. MCULE-FULL includes the full purchasable catalog.
 
 ## Migrating from BioSolveIT InfiniSee
 
