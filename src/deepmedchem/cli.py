@@ -29,8 +29,6 @@ from .models import SearchResult, Usage
 from .ordering import open_order_drafts, prepare_order, procurement_contacts
 
 SEARCH_METHODS = ("morgan", "shape", "esp")
-# Typical make-on-demand delivery time quoted by every vendor in the catalog.
-DELIVERY_TIME = "3-6 weeks"
 
 
 # --- Presentation helpers ----------------------------------------------------
@@ -147,10 +145,12 @@ def _print_database_table(catalog: dict[str, Any], *, detailed: bool = False) ->
         ]
     print(_format_table(headers, rows, align_right=[h == "molecules" for h in headers]))
     print()
-    print(f"{len(rows)} databases, made on demand and delivered in {DELIVERY_TIME}.")
+    print(f"{len(rows)} databases. Lead times vary by database; see --detailed.")
     print("Order or request quotes by email, or run `dmc order results.csv`.")
     if detailed:
         print("Availability and success: provider estimates; releases may differ.")
+        if any(row[1] == "vast-2026-h2" for row in rows):
+            print("VAST H2 2026: average lead time 2-4 weeks; synthesis success 85%+ (XtalPi).")
         print("* No direct mapping: CHEMriya is a related Otava collection.")
         print("** No direct mapping: our Enamine version uses public Enamine building blocks.")
         print(

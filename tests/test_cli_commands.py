@@ -115,7 +115,7 @@ def test_databases_table_lists_size_pricing_and_order_email(monkeypatch, capsys)
     assert enamine.split() == ["enamine", "357.4B", "yes", "info@enamine.net"]
     d2b = next(line for line in out.splitlines() if line.startswith("spacem1"))
     assert d2b.split() == ["spacem1", "1.5B", "-", "hello@molecule.one"]
-    assert "2 databases, made on demand and delivered in 3-6 weeks." in out
+    assert "2 databases. Lead times vary by database; see --detailed." in out
 
 
 def test_catalog_alias_prints_json(monkeypatch, capsys) -> None:
