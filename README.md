@@ -10,7 +10,7 @@
 The official, chemistry-thin Python client for the DeepMedChem hosted chemical-space platform.
 It contains no RDKit, models, databases, or proprietary search implementation.
 
-> **Beta:** `deepmedchem` 0.2 is available for early use. APIs may still change before the
+> **Beta:** `deepmedchem` 0.3 is available for early use. APIs may still change before the
 > stable release.
 
 ## Installation
@@ -39,29 +39,32 @@ The `dmc` command (also installed as `deepmedchem`) covers the everyday operatio
 writing Python:
 
 ```bash
-dmc databases                        # searchable databases, delivery time, order emails
+dmc databases                        # abbreviations, sizes, prices, order emails
+dmc databases --detailed             # full IDs, BioSolveIT mappings, availability, links
 dmc usage                            # account plan and CHEESE Credits remaining today
-dmc search "CC(=O)Oc1ccccc1C(=O)O" -d enamine-real-v5a -m shape -n 10
-dmc search "CC(=O)Oc1ccccc1C(=O)O" -d enamine-real-v5a -o aspirin.csv
-dmc substructure "[N;R0][N;R0]C(=O)" -d enamine-real-v5a -n 50 -o hydrazides.sdf
-dmc sample -d freedom-space-5 -n 100 --seed 7 -o sample.smi
+dmc search "CC(=O)Oc1ccccc1C(=O)O" -d enamine -m shape -n 10
+dmc search "CC(=O)Oc1ccccc1C(=O)O" -d enamine -o aspirin.csv
+dmc substructure "[N;R0][N;R0]C(=O)" -d enamine -n 50 -o hydrazides.sdf
+dmc sample -d freedom -n 100 --seed 7 -o sample.smi
 dmc order aspirin.csv --get-quote
 ```
 
-`databases` lists every searchable space with its size, whether the vendor publishes per-compound
-prices, and the vendor address for orders and quotes:
+`databases` lists every searchable space with its size, whether per-compound price estimates
+are available, and the vendor address for orders and quotes. Output captured on September 6, 2026;
+the catalog can change. `--detailed` adds full IDs, BioSolveIT mappings, type, availability,
+success estimates, and vendor links. `--json` always returns the unmodified API catalog:
 
 ```text
 $ dmc databases
-database                molecules  prices  orders
-----------------------  ---------  ------  ------------------------
-cheminfinita-2026-02       794.2B  -       sales@otavachemicals.com
-d2b-spacem1                  1.5B  -       hello@molecule.one
-enamine-real-v5a           357.4B  yes     info@enamine.net
-freedom-space-5            296.4B  -       sales@chem-space.com
-synple-explore-2025-10       9.5T  -       sales@emolecules.com
-synple-synple-2025-10        7.6T  -       sales@emolecules.com
-vast-2026-h2                 6.8B  yes     contact@xtalpi.com
+abbreviation  molecules  prices  orders
+------------  ---------  ------  ------------------------
+enamine          336.7B  yes     info@enamine.net
+freedom          296.4B  yes     sales@chem-space.com
+explore            9.5T  yes     sales@emolecules.com
+synple             7.6T  yes     sales@emolecules.com
+vast               6.8B  yes     contact@xtalpi.com
+cheminfinita     794.2B  -       sales@otavachemicals.com
+spacem1            1.5B  -       hello@molecule.one
 
 7 databases, made on demand and delivered in 3-6 weeks.
 Order or request quotes by email, or run `dmc order results.csv`.
@@ -69,18 +72,20 @@ Order or request quotes by email, or run `dmc order results.csv`.
 
 Searches print a table of rank, similarity score, price, and SMILES, followed by what was
 searched and the score range. Substructure hits show `exact` instead of a score, and samples
-have no score column. Product ids and the other API fields are kept in `--json` and in exports:
+have no score column. Product ids and the other API fields are kept in `--json` and in exports.
+
+Example output from the production API (September 6, 2026):
 
 ```text
-$ dmc search "CC(=O)Oc1ccccc1C(=O)O" -d enamine-real-v5a -n 3
+$ dmc search "CC(=O)Oc1ccccc1C(=O)O" -d enamine -n 3
 rank   score  price  smiles
-----  ------  -----  ----------------------
+----  ------  -----  -----------------------------
    1  0.7037   $245  O=C(O)Oc1ccccc1C(=O)O
    2  0.6667   $163  COC(=O)Oc1ccccc1C(=O)O
-   3  0.5312   $245  O=C(O)COc1ccccc1C(=O)O
+   3  0.6061   $163  CC(C)(C)OC(=O)Oc1ccccc1C(=O)O
 
-Searched 357.4B molecules (Enamine REAL v5a) in 380 ms.
-Similarity range: 0.53-0.70 ECFP4 Tanimoto.
+Searched 336.7B molecules (Enamine REAL v5a) in 476 ms.
+Similarity range: 0.61-0.70 ECFP4 Tanimoto.
 ```
 
 `-o/--output` saves the hits as CSV, SDF, SMILES (`.smi`), or JSON, inferred from the file suffix
@@ -88,6 +93,54 @@ Similarity range: 0.53-0.70 ECFP4 Tanimoto.
 from the response. SDF output needs RDKit (`pip install "deepmedchem[sdf]"`); the other formats
 have no extra dependencies. Every command accepts `--json` for the raw API response and
 `--profile` to pick a configured profile.
+
+## DeepMedChem All Chemical Spaces
+
+Snapshot: September 6, 2026. Use the abbreviation in `database="enamine"` or `dmc search ... -d enamine`.
+Full database IDs remain supported. Abbreviations resolve to the releases listed by `dmc databases --detailed`.
+
+| Abbreviation | Type[^python-availability] | Molecules | Availability | Success rate | Prices | Orders | Link |
+| --- | --- | ---: | --- | --- | :---: | --- | :---: |
+| `enamine` | Make-On-Demand | 336.7B | 3–4 weeks | >80% | yes | info@enamine.net | [🔗](https://enamine.net/compound-collections/real-compounds/real-space-navigator) |
+| `freedom` | Make-On-Demand | 296.4B | 5–6 weeks | >80% | yes | sales@chem-space.com | [🔗](https://chem-space.com/freedom-space) |
+| `explore` | Make-On-Demand | 9.5T | 3–4 weeks | >85% | yes | sales@emolecules.com | [🔗](https://www.emolecules.com/products/explore) |
+| `synple` | Make-On-Demand | 7.6T | 3–4 weeks | >85% | yes | sales@emolecules.com | [🔗](https://www.emolecules.com/products/explore) |
+| `cheminfinita` | Make-On-Demand | 794.2B | 5–8 weeks | 55–85% | - | sales@otavachemicals.com | [🔗](https://www.otavachemicals.com/) |
+| `spacem1` | Make-On-Demand | 1.5B | 2–6 weeks | >85% | - | hello@molecule.one | [🔗](https://molecule.one/) |
+| `vast` | Make-On-Demand | 6.8B | 2–3 weeks | >80% | yes | contact@xtalpi.com | [🔗](https://aifchem.com/) |
+| `mcule-in-stock` | In-Stock | 7.2M | Immediate | 100% | yes | order@mcule.com | [🔗](https://mcule.com/) |
+| `mcule-full` | In-Stock | 140.4M | Immediate | 100% | yes | order@mcule.com | [🔗](https://mcule.com/) |
+| `molport` | In-Stock | 5.9M | Immediate | 100% | yes | sales@molport.com | [🔗](https://molport.com/) |
+| `chemspace-screening` | In-Stock | 7.5M | Immediate | 100% | yes | sales@chem-space.com | [🔗](https://chem-space.com/) |
+| `zinc15` | Other | 697.1M | No availability info | N/A | unknown | N/A | [🔗](https://zinc15.docking.org/) |
+
+[^python-availability]: Currently only **Make-On-Demand** spaces are available through this Python package. The rest are coming soon and are currently available only in the [CHEESE UI](https://cheese.deepmedchem.com/).
+
+Counts and price support for Make-On-Demand spaces
+come from the live API catalog. Shipping and synthesis-success figures are provider estimates from
+[Alipheron](https://www.alipheron.com/spaces/), across potentially different releases. In-Stock rows
+use immediate availability and 100% success as stock-catalog conventions; confirm fulfillment with
+the vendor. MCULE-FULL includes the full purchasable catalog. Enumerative sizes are recorded dataset
+counts; Molport, Chemspace Screening, and ZINC15 use an archived metadata snapshot.
+
+## Migrating from BioSolveIT InfiniSee
+
+Use the DeepMedChem abbreviation in Python or with `-d`. The BioSolveIT slugs below identify
+analogous collections; they are not accepted as DeepMedChem database IDs. Releases and molecule
+counts differ. [BioSolveIT download catalog](https://www.biosolveit.de/chemical-spaces/).
+
+| DeepMedChem abbreviation | BioSolveIT slug |
+| --- | --- |
+| `enamine` | `REALSpace_95bn_2026-04`** |
+| `freedom` | `FreedomSpace_296bn_2026-03` |
+| `explore` | `eXplore_8tr_2026-06` |
+| `synple` | `Synple_8tr_2026-06` |
+| `cheminfinita` | `CHEMriya_55bn_2025-10`* |
+| `vast` | `VAST_4bn_2026-05` |
+
+\* No direct mapping: CHEMriya is a related Otava collection, not ChemInfinita. But it might be very similar. Contact Otava for details.
+
+\*\* No direct mapping: our Enamine version is built from public Enamine building blocks, so it is not identical to the BioSolveIT version. But it is very similar.
 
 ## Requesting quotes and orders
 
@@ -110,11 +163,14 @@ message asks the vendor to confirm final pricing, availability, lead time, and o
 processing. Use `--to ADDRESS` for a private database without a configured procurement contact,
 and `--database ID` for older CSV files that do not carry a database column.
 
+Account-specific usage snapshot from September 6, 2026:
+
 ```text
 $ dmc usage
 plan:      premium
-credits:   9,999 of 10,000 remaining today (1 used)
-resets:    2026-09-04T00:00:00+00:00 (in 13h 35m)
+credits:   9,992 of 10,000 remaining today (8 used)
+resets:    2026-09-07T00:00:00+00:00 (in 10h 59m)
+promo:     10x September promo (10x, base 1,000/day, until 2026-10-01)
 ```
 
 ## Quickstart
@@ -124,7 +180,7 @@ import deepmedchem as dmc
 
 result = dmc.search(
     "CC(=O)OC1=CC=CC=C1C(=O)O",  # Aspirin
-    database="enamine-real-v5a",
+    database="enamine",
     method="shape",
     limit=3,
 )
@@ -135,13 +191,13 @@ for hit in result.hits:
     print(f"{hit.rank}  score={hit.score:.4f}  price={price}  {hit.smiles}")
 ```
 
-Example output (the database release and search results can change):
+Example output from the production API (September 6, 2026):
 
 ```text
 SearchResult(3 molecules, method='shape', database='enamine-real-v5a')
 1  score=0.9726  price=$245  O=C(O)Oc1ccccc1C(=O)O
 2  score=0.9719  price=$163  COC(=O)Oc1ccccc1C(=O)O
-3  score=0.8713  price=$245  O=C(O)COc1ccccc1C(=O)O
+3  score=0.9551  price=$163  COC(=O)Oc1ccccc1C(C)=O
 ```
 
 Prices are estimates in whole US dollars for delivery to the United States. They are returned in
@@ -339,3 +395,12 @@ Runnable authenticated examples using the established Enamine query panels are i
 
 For interactive RDKit visualization of similarity and SMARTS substructure queries, open the
 [`Enamine search notebook`](examples/notebooks/enamine_search.ipynb).
+
+## Links
+
+- [DeepMedChem website](https://deepmedchem.com/)
+- [CHEESE UI](https://cheese.deepmedchem.com/) and [database overview](https://cheese.deepmedchem.com/about)
+- [API](https://api.deepmedchem.com/) and [API reference](https://api.deepmedchem.com/api/v2/docs)
+- [Documentation](https://docs.deepmedchem.com/) and [Python quickstart](https://docs.deepmedchem.com/docs/python/quickstart)
+- [Python package on PyPI](https://pypi.org/project/deepmedchem/)
+- [Python SDK on GitHub](https://github.com/Deep-MedChem/deepmedchem-python)

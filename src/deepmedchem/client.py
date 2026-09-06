@@ -16,6 +16,7 @@ from .config import (
     resolve_api_key,
     resolve_profile,
 )
+from .databases import resolve_database
 from .models import (
     Page,
     RunEvent,
@@ -327,7 +328,7 @@ class Client:
                 "/api/v2/search",
                 json={
                     "query_smiles": smiles,
-                    "database_id": database,
+                    "database_id": resolve_database(database),
                     "limit": limit,
                     "include_synthons": include_synthons,
                 },
@@ -349,7 +350,7 @@ class Client:
                 "/api/v2/search_cheese",
                 json={
                     "query_smiles": smiles,
-                    "database_id": database,
+                    "database_id": resolve_database(database),
                     "scorer": scorer,
                     "limit": limit,
                     "include_synthons": include_synthons,
@@ -373,7 +374,7 @@ class Client:
                 "/api/v2/search_substructure",
                 json={
                     "query": {"format": query_format, "value": query},
-                    "database_id": database,
+                    "database_id": resolve_database(database),
                     "limit": limit,
                     "timeout_seconds": timeout_seconds,
                     "include_synthons": include_synthons,
@@ -390,7 +391,7 @@ class Client:
         include_synthons: bool = False,
     ) -> SampleResult:
         payload = {
-            "database_id": database,
+            "database_id": resolve_database(database),
             "count": count,
             "include_synthons": include_synthons,
         }
@@ -629,7 +630,7 @@ class AsyncClient:
             return await self.search_cheese(smiles, scorer=method, **kwargs)
         payload = {
             "query_smiles": smiles,
-            "database_id": kwargs.pop("database"),
+            "database_id": resolve_database(kwargs.pop("database")),
             "limit": kwargs.pop("limit", 20),
             "include_synthons": kwargs.pop("include_synthons", False),
         }
@@ -642,7 +643,7 @@ class AsyncClient:
     async def search_cheese(self, smiles: str, **kwargs) -> SearchResult:
         payload = {
             "query_smiles": smiles,
-            "database_id": kwargs.pop("database"),
+            "database_id": resolve_database(kwargs.pop("database")),
             "scorer": kwargs.pop("scorer"),
             "limit": kwargs.pop("limit", 20),
             "include_synthons": kwargs.pop("include_synthons", False),
@@ -656,7 +657,7 @@ class AsyncClient:
     async def search_substructure(self, query: str, **kwargs) -> SubstructureResult:
         payload = {
             "query": {"format": kwargs.pop("query_format", "smarts"), "value": query},
-            "database_id": kwargs.pop("database"),
+            "database_id": resolve_database(kwargs.pop("database")),
             "limit": kwargs.pop("limit", 100),
             "timeout_seconds": kwargs.pop("timeout_seconds", 30),
             "include_synthons": kwargs.pop("include_synthons", False),
@@ -669,7 +670,7 @@ class AsyncClient:
 
     async def sample(self, **kwargs) -> SampleResult:
         payload = {
-            "database_id": kwargs.pop("database"),
+            "database_id": resolve_database(kwargs.pop("database")),
             "count": kwargs.pop("count", 100),
             "include_synthons": kwargs.pop("include_synthons", False),
         }
