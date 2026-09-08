@@ -3,8 +3,13 @@ name: ci
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [develop, main]
   release:
     types: [published]
+
+permissions:
+  contents: read
 
 concurrency:
   group: deepmedchem-python-ci-${{ github.workflow }}-${{ github.ref }}
@@ -21,6 +26,11 @@ jobs:
         python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          # This job now builds and runs code from the pull request head. Nothing
+          # here uses git auth after checkout, so the token has no reason to stay
+          # in .git/config while that code executes.
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
