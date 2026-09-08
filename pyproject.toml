@@ -51,7 +51,7 @@ test = [
 
 [project.urls]
 Homepage = "https://deepmedchem.com"
-Documentation = "https://docs.deepmedchem.com/docs/python/quickstart"
+Documentation = "https://docs.deepmedchem.com/docs/guides/python/quickstart"
 Repository = "https://github.com/Deep-MedChem/deepmedchem-python"
 Issues = "https://github.com/Deep-MedChem/deepmedchem-python/issues"
 

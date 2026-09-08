@@ -406,7 +406,7 @@ python -m build
 twine check dist/*
 ```
 
-API documentation: <https://docs.deepmedchem.com/docs/python/quickstart>
+API documentation: <https://docs.deepmedchem.com/docs/guides/python/quickstart>
 
 Runnable authenticated examples using the established Enamine query panels are in
 [`examples/live`](examples/live/README.md).
@@ -419,6 +419,6 @@ For interactive RDKit visualization of similarity and SMARTS substructure querie
 - [DeepMedChem website](https://deepmedchem.com/)
 - [CHEESE UI](https://cheese.deepmedchem.com/) and [database overview](https://cheese.deepmedchem.com/about)
 - [API](https://api.deepmedchem.com/) and [API reference](https://api.deepmedchem.com/api/v2/docs)
-- [Documentation](https://docs.deepmedchem.com/) and [Python quickstart](https://docs.deepmedchem.com/docs/python/quickstart)
+- [Documentation](https://docs.deepmedchem.com/) and [Python quickstart](https://docs.deepmedchem.com/docs/guides/python/quickstart)
 - [Python package on PyPI](https://pypi.org/project/deepmedchem/)
 - [Python SDK on GitHub](https://github.com/Deep-MedChem/deepmedchem-python)
