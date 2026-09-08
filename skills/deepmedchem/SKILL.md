@@ -54,7 +54,7 @@ dmc status --verify                # confirms the profile and that the API accep
 | Random molecules from a space | `dmc sample -d DB -n N --seed S` | `dmc.sample(database=DB, count=N, seed=S)` |
 | Plan and remaining daily credits | `dmc usage` | `dmc.usage()` |
 | Multi-constraint or multi-query work | see references | `Selection`, `Run`, `Client.runs` |
-| Exact RDKit property filters, experimental ADMET acquisition | see references | `Selection.where`, `.require_preset`, `.acquire_predicted_property` |
+| Exact RDKit property filters, experimental ADMET acquisition | see references | `Selection.where`, `.require_preset`, `.acquire_predicted_property`, `.where_predicted_property` |
 | Ask vendors for quotes or orders | `dmc order results.csv --get-quote` | `prepare_order(...)` |
 
 Database ids are strings such as `enamine-real-v5a` or `freedom-space-5`. Do not guess them:
@@ -90,7 +90,7 @@ hits.to_csv("hits.csv")                    # or .to_sdf(), .to_file(path), .to_p
 
 subs = dmc.substructure("[N;R0]C(=O)[N;R0]", database="enamine-real-v5a", limit=100, timeout_seconds=60)
 rand = dmc.sample(database="freedom-space-5", count=50, seed=1)
-print(dmc.usage())                         # plan, limit, used, remaining, reset_at
+usage = dmc.usage()                        # .plan .limit .used .remaining .reset_at
 ```
 
 Module-level functions open and close a client per call. For many calls, reuse one client:
@@ -123,9 +123,10 @@ with Client() as client:                   # api_key=..., profile=..., timeout=4
 - **Ordering never sends anything.** `dmc order` and `prepare_order` only write `email.txt`
   and a price-free `molecules.csv` per vendor and open a local mail draft.
 - **Predicted ADMET is not a measurement.** `acquire_predicted_property` only reranks and trims
-  a similarity shortlist; its values are `experimental-acquisition-only` predictions. Never
-  describe them as measured, safe, or as meeting an ADMET threshold. Only `where` and
-  `require_preset` enforce a literal threshold, and only on exact assembled-product RDKit values.
+  a similarity shortlist; `where_predicted_property` does enforce a hard range, but on the pinned
+  assembled-product prediction. Both are `experimental-acquisition-only` predictions, so never
+  describe either as measured, safe, or as meeting an assayed ADMET threshold. Only `where` and
+  `require_preset` enforce a literal threshold on exact assembled-product RDKit values.
 - **Do not invent endpoints** such as batch search URLs or pricing APIs. The public v2
   operations are `search`, `search_cheese`, `search_substructure`, `sample`, `catalog`,
   `selections`, and `runs`, all reached through this package.
