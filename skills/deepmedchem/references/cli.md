@@ -20,16 +20,18 @@ Global behaviour:
 | --- | --- |
 | `dmc login [--profile P] [--no-browser] [--token-stdin] [--timeout S]` | Device login. Prints an approval code and URL, opens a browser when a display exists, waits for approval, stores the key. `--token-stdin` reads an existing key from stdin instead. |
 | `dmc status [--verify] [--json]` | Shows the active profile, API URL, and credential store. `--verify` makes one request to confirm the key is accepted. |
-| `dmc logout [--profile P]` | Removes the locally stored key for the profile. |
+| `dmc logout [--profile P] [--all]` | Removes the locally stored key for the profile. `--all` removes it for every configured profile, including the legacy shared entry. |
 | `dmc usage [--json]` | Plan, daily CHEESE Credit limit, used, remaining, reset time, and any active promotion. |
 
 ## Discovery
 
 | Command | Purpose |
 | --- | --- |
-| `dmc databases` (alias `dmc catalog`) | Lists every searchable database with its `database_id`, size, whether per-compound prices are published, and the vendor email for quotes and orders. `--json` returns the full catalog document including releases and capability limits. |
+| `dmc databases` (alias `dmc catalog`) | Lists every searchable database with its abbreviation, size, whether per-compound prices are published, and the vendor email for quotes and orders. `--json` returns the full catalog document including releases and capability limits. |
+| `dmc databases --detailed` | Adds the full `database_id`, the release each abbreviation resolves to, and per-database provider details. |
 
-Use the `database_id` column verbatim as the `-d/--database` value below.
+The first column is the abbreviation, such as `enamine` or `freedom`. Pass it verbatim as
+`-d/--database`; the full `database_id` shown by `--detailed` is accepted there too.
 
 ## Searching
 
