@@ -205,7 +205,7 @@ result = dmc.search(
     limit=3,
 )
 
-print(repr(result))
+print(result)
 for hit in result.hits:
     price = f"${hit.price}" if hit.price is not None else "unavailable"
     print(f"{hit.rank}  score={hit.score:.4f}  price={price}  {hit.smiles}")
