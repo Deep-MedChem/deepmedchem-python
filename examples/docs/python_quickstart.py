@@ -1,8 +1,8 @@
 import deepmedchem as dmc
 
 result = dmc.search(
-    "CC(=O)OC1=CC=CC=C1C(=O)O",
-    database="enamine-real-v5a",
+    "CC(=O)OC1=CC=CC=C1C(=O)O",  # Aspirin
+    database="enamine",
     method="shape",
     limit=3,
 )
