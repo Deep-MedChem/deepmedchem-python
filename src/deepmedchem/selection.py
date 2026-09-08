@@ -219,7 +219,7 @@ class Selection:
             raise ValueError("provide exactly one of gt, gte, lt, lte, or range")
         operator = supplied.pop()
         value = operator_value[operator]
-        if operator == "range" and isinstance(value, list | tuple):
+        if operator == "range" and isinstance(value, (list, tuple)):
             if len(value) != 2:
                 raise ValueError("range requires two endpoints")
             value = {"lower": value[0], "upper": value[1]}
@@ -254,7 +254,7 @@ class Selection:
             raise ValueError("provide exactly one of gt, gte, lt, lte, or range")
         operator = supplied.pop()
         value = operator_value[operator]
-        if operator == "range" and isinstance(value, list | tuple):
+        if operator == "range" and isinstance(value, (list, tuple)):
             if len(value) != 2:
                 raise ValueError("range requires two endpoints")
             value = {"lower": value[0], "upper": value[1]}
