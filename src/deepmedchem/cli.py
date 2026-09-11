@@ -289,8 +289,10 @@ def _parser() -> argparse.ArgumentParser:
     status.add_argument("--json", action="store_true")
 
     logout = commands.add_parser("logout", help="Remove locally stored credentials")
-    logout.add_argument("--profile")
-    logout.add_argument("--all", action="store_true")
+    logout.add_argument("--profile", help="Named profile (default: active profile)")
+    logout.add_argument(
+        "--all", action="store_true", help="Remove the credential for every configured profile"
+    )
 
     usage = commands.add_parser("usage", help="Show account plan and remaining daily credits")
     _add_connection_options(usage)
