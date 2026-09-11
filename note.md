@@ -365,3 +365,128 @@ chatbot. The realistic paths if it's ever needed are a commercial tool (ChemDraw
 environment (not the shared `deepmedchem` env, given the old TensorFlow pin risks breaking
 other things) — neither was attempted here. This is the asymmetric counterpart to Issue 7:
 name→structure is a solved, freely-available problem (OPSIN); structure→name is not.
+
+## Issue 10 — PubChem's name-search API returns the SMILES under a different property
+key than requested (found building 008)
+
+Requesting `.../property/CanonicalSMILES,MolecularFormula/JSON` from PubChem's PUG-REST for
+a name search (e.g. `lapatinib`) returns a response whose SMILES field is actually named
+`ConnectivitySMILES`, not `CanonicalSMILES` — the requested key silently isn't present at
+all, rather than erroring. Trusting the requested key name (`props["CanonicalSMILES"]`)
+raises `KeyError` even though the request itself succeeds (HTTP 200, valid JSON, a real
+CID). **Fix: read whichever key is present** —
+`props.get("CanonicalSMILES") or props["ConnectivitySMILES"]` — rather than assuming the
+requested property name is what comes back. Worth checking for the same pattern with any
+other PubChem property request before trusting a hardcoded key name.
+
+## Issue 11 — ranking by overall shape/ESP similarity silently conserves whichever
+substituent dominates the pharmacophore, even when the prompt says "modify all decorations"
+
+Found by the user after reviewing `008`'s first grid: every one of the top-25 results kept
+lapatinib's chloro-fluorobenzyloxy-aniline branch completely unchanged, only varying the
+other (sulfonamide) branch — despite the prompt saying "modify all its decorations."
+
+- Not a bug in the query: this is what ranking by *overall* 3D similarity does by
+  construction. One branch contributes more to the molecule's shape/electrostatics than the
+  other, so changing it drops a candidate out of the high-shape+ESP pool faster than
+  changing the smaller branch does. Quinazoline-retention alone doesn't prevent this — it
+  only guarantees the ring system stays, not that *every* attached branch varies.
+- **Fix:** decompose each candidate into its R-group fragments at the retained core with
+  `Chem.ReplaceCore(mol, core_smarts, labelByIndex=True)` (then `Chem.GetMolFrags` to split
+  them out), do the same for the original query molecule, and require that **none** of a
+  candidate's fragments match the original's corresponding fragment — i.e. every branch
+  must genuinely differ, not just "the molecule as a whole is different enough." This is a
+  general, reusable technique for "vary all decorations off a retained core," not specific
+  to lapatinib.
+- Applied here: dropped the pool from 339 to 245 (confirmed live), and the resulting grid
+  visibly varies both branches. Worth adding to `guidelines.md` as a general pattern:
+  "modify all decorations" prompts need a per-branch difference check, not just core
+  retention + a similarity ranking.
+
+## Status of `examples/prompts/008_.ipynb`
+
+Done, rebuilt once (see Issue 11). Lapatinib resolved via PubChem (OPSIN correctly failed
+first, per the Issue 7 routing rule — it's an INN, not a systematic name). Searched all 7
+databases; used shape+ESP intersection as the *correct* application of that technique here
+(wanting both metrics high, not the Step 4 anti-pattern of wanting one low), with
+quinazoline retention checked locally via RDKit rather than through `dmc.substructure()`
+(sidesteps needing per-database substructure-search capability entirely). 339 analogues
+found retaining quinazoline, retention rate varies sharply by database (0 for
+`vast-2026-h2`, 146 for `d2b-spacem1`) — a real per-database chemistry difference, not a
+bug. Then filtered to 245 requiring both branches to differ from lapatinib's (Issue 11). 5x5
+grid of the top 25 by combined score (now visibly varying both branches); UMAP on ECFP4
+fingerprints colored by that score (validated single-hue blue ramp); CSV export
+(`id, smiles, vendor, email, price`) using `deepmedchem.ordering.procurement_contacts()`
+for vendor/email, not invented values.
+
+## Issue 12 — an unbracketed SMARTS atom matches more than the intended functional group;
+and substructure search has a hard, deterministic 200-hit ceiling regardless of query phrasing
+
+Found building `009` (query: "Xtalpi VAST" = `vast-2026-h2`, find molecules with a
+tetrazole core and a benzyl group, Mw < 400 Da, logP < 4).
+
+- **SMARTS false positive:** `Cc1ccccc1` (unbracketed `C`) was meant to mean "a benzyl
+  group" but actually matches *any* non-aromatic carbon attached to a phenyl ring — an amide
+  carbonyl carbon, a vinyl carbon, anything — because a plain SMARTS atom doesn't constrain
+  hydrogen count/substitution beyond what's drawn (the same permissiveness noted for ring
+  atoms in earlier notes, here biting on a simple substituent instead). Caught live: a real
+  search hit, `O=C(NCC(F)F)c1cccc(-c2nnn[nH]2)c1`, matched the pattern despite having no
+  benzyl group at all — the amide's carbonyl carbon satisfied it. **Fix:** use `[CH2]` (an
+  explicit, exact hydrogen-count atom) instead of a bare `C` whenever the intent is
+  specifically a methylene bridge, not "any carbon here." Validate any SMARTS fragment
+  pattern against a known true-positive reference molecule *and* check a few actual live
+  hits for false positives before trusting it — don't stop at the reference-molecule check
+  alone (it would have passed here too, since losartan's benzyl is also a genuine `[CH2]`).
+- **Two required fragments in one query:** SMARTS's dot syntax (`fragmentA.fragmentB`,
+  disconnected components that must all be present somewhere in the target) works correctly
+  against `dmc.substructure()` — confirmed live, all returned hits genuinely contained both
+  fragments once the SMARTS itself was fixed.
+- **200-hit ceiling is real and query-phrasing-independent:** this query returned exactly
+  200 hits, and four differently-phrased but logically equivalent versions (reordering the
+  two fragments, an "any-bond" generic tetrazole pattern, the 1H-tetrazole tautomer's SMARTS
+  instead of the plain aromatic one) all returned the **exact same 200 molecules**, not a
+  different sample. So for a query like this, 200 is the actual full retrievable population
+  through the public substructure endpoint, not an artifact of how the query happened to be
+  written — there's no way to "rephrase around" the cap the way neighbor expansion works
+  around a similarity-search's top-K (Issue 5/6). Of those 200, 193 also satisfied the
+  Mw/logP thresholds; reported as 193, not padded to the requested 200.
+
+## Issue 13 — "benzyl group" was ambiguous, and the two readings give materially
+different result sets; the chatbot should ask rather than pick one silently
+
+The user's own follow-up after seeing the first `009` results: "benzyl cannot have any
+other substituent - just CH2-Ph." The original SMARTS (`[CH2]c1ccccc1`) required the
+bridging carbon to be a plain, unsubstituted CH2, but — per the usual SMARTS permissiveness
+— still allowed the *ring* to carry substituents, since a plain lowercase `c` doesn't
+constrain that either. Live results under the loose reading included methyl-, hydroxy-,
+fluoro-, and bromo-substituted "benzyl" rings.
+
+- **Fix:** require an explicit H on every non-attachment ring position:
+  `[CH2]c1[cH][cH][cH][cH][cH]1`. Each `[cH]` demands exactly one hydrogen, which no further
+  ring substituent can satisfy.
+- Re-validating this stricter pattern caught a mistake in the *original* Issue 12 validation
+  too: losartan (used there as the "benzyl-containing" reference) doesn't actually have a
+  plain benzyl group — its CH2 connects to a biphenyl system (the attached ring is
+  para-substituted by the second phenyl ring carrying the tetrazole), so it correctly fails
+  the stricter pattern. Re-validated instead against benzylamine (`NCc1ccccc1`), a genuine
+  plain-benzyl reference. Worth remembering generally: a molecule used to validate one
+  reading of a pattern isn't necessarily a valid reference for a *stricter* reading of the
+  same nominal group.
+- Result count changed materially between readings: 193 of 200 satisfied Mw/logP under the
+  loose "benzyl" reading, 165 of 200 under the strict one — a real, substantive difference
+  in which molecules get returned, not a rounding difference.
+- **General principle (the user's explicit ask):** when a prompt names a substituent or
+  fragment in a way that has more than one reasonable chemical reading (here: "benzyl,"
+  which could mean "any CH2 bridging to a phenyl-bearing carbon" or "CH2 bridging to an
+  entirely unsubstituted phenyl") and the two readings produce materially different result
+  sets, **the chatbot should ask a clarifying question rather than silently choosing one
+  interpretation and running with it.** This is now documented as a behavioral requirement
+  in `guidelines.md`, not just an API-capability note — it applies however the substructure
+  ends up being expressed.
+
+## Status of `examples/prompts/009_substructure_Mw_limited.ipynb`
+
+Done, rebuilt once more (see Issue 13). Combined tetrazole+strict-unsubstituted-benzyl
+substructure query on `vast-2026-h2` (200 hits, the confirmed ceiling), filtered locally to
+165 satisfying Mw<400 Da and logP<4, 5x5 grid of a random 25 of those 165 (seeded for
+reproducibility).

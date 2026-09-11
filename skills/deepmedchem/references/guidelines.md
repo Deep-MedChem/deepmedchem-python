@@ -167,6 +167,73 @@ before concluding a variable part isn't actually varying. In one case this surfa
 reaction using the identical retained synthon, with a class of products (piperazine-free
 analogues) that pure neighbor expansion never found across hundreds of hits.
 
+## Step 10 — "Modify all decorations off a core" needs a per-branch check, not just
+core retention plus a similarity ranking
+
+Retaining a core substructure (Step 8/9) guarantees the ring system stays; it does **not**
+guarantee every attached branch actually varies. Ranking candidates by overall similarity
+(shape, ESP, Tanimoto — any of them) will silently conserve whichever branch contributes
+more to that similarity score, even across hundreds of results, because changing that branch
+drops a candidate out of the high-similarity pool faster than changing a less-influential
+branch does. A prompt asking to "modify all decorations" or vary multiple substituent
+positions independently needs an explicit per-branch difference check, not just "core
+retained + high similarity."
+
+The check: `Chem.ReplaceCore(mol, core_smarts, labelByIndex=True)` followed by
+`Chem.GetMolFrags(..., asMols=True)` splits a molecule into its R-group fragments at the
+retained core. Do this for the original query and for each candidate, and keep only
+candidates where **none** of the fragments match the query's corresponding fragment — i.e.
+every branch position genuinely differs. (Found live: a lapatinib-analogue search that
+retained its quinazoline core and ranked by shape+ESP kept one branch identical across every
+one of the top 25 results, until this check was added.)
+
+## Step 11 — an unbracketed SMARTS atom matches more than the intended functional group
+
+A plain SMARTS atom (`C`, `N`, ...) doesn't constrain hydrogen count or substitution beyond
+what's explicitly drawn — it matches "at least this," not "exactly this." Writing
+`Cc1ccccc1` to mean "a benzyl group" actually matches *any* non-aromatic carbon attached to
+a phenyl ring: an amide carbonyl carbon, a vinyl carbon, anything. Confirmed live — that
+pattern matched `O=C(NCC(F)F)c1cccc(-c2nnn[nH]2)c1`, a molecule with no benzyl group at all,
+because the amide's carbonyl carbon satisfied it. Use an explicit hydrogen count (`[CH2]`)
+whenever the intent is a specific group like a methylene bridge, not "any atom here."
+
+Validating a fragment SMARTS against one known true-positive reference molecule is
+necessary but not sufficient — a reference molecule's own instance of the group is often
+exactly the well-formed case the pattern is too permissive around, so it passes the
+reference check and still produces false positives elsewhere. Also spot-check a few actual
+live search hits for whether they contain the intended group, not just whether they match
+the pattern.
+
+Note also that a molecule validated as a true positive for one reading of a group isn't
+necessarily valid for a *stricter* reading of the same nominal group — losartan validated
+"contains a benzyl-like CH2-aryl linkage" but turned out not to have a plain, unsubstituted
+benzyl group at all (its CH2 connects to a biphenyl system, para-substituted by a second
+ring), so it correctly fails a stricter "no ring substitution allowed" version of the same
+pattern. Re-check the reference molecule itself when tightening a definition, don't assume
+it still applies.
+
+## Step 12 — When a substituent/fragment name has more than one reasonable chemical
+reading, ask — don't silently pick one
+
+Chemical shorthand in a prompt ("benzyl group," "quinazoline core," "phenyl ring") often has
+more than one defensible reading, and different readings can produce materially different
+result sets — not a rounding difference, a different set of molecules. Confirmed live:
+"benzyl group" read loosely (a CH2 bridging to any phenyl-bearing carbon, substituents on
+the ring allowed) vs. strictly (CH2 bridging to a completely unsubstituted phenyl) changed
+which molecules passed a property filter by a large margin (193 vs. 165 out of the same 200
+structural matches) — genuinely different chemistry, not noise.
+
+**When translating an ambiguous substituent/fragment description into a query, the correct
+behavior is to ask a clarifying question before committing to an interpretation**, rather
+than silently choosing the more permissive (or any other) reading and presenting the result
+as if it were the only possible one. This applies whether the query ends up expressed as
+SMARTS, an exact-synthon match, or anything else — the ambiguity is in the chemistry the
+prompt names, not in how it gets encoded. Reasonable signals that a term needs
+disambiguating rather than a best-guess default: the term names a common substructure that
+chemists routinely draw both substituted and unsubstituted (benzyl, phenyl, tolyl...); the
+prompt doesn't explicitly say whether substitution is allowed; and a quick check shows the
+two readings actually diverge on real data (as above), not just in principle.
+
 ## Checklist
 
 - [ ] What is the *single* criterion actually driving candidate retrieval?
@@ -196,3 +263,12 @@ analogues) that pure neighbor expansion never found across hundreds of hits.
       query and present it as satisfying the original request.
 - [ ] Does the specific database named in the prompt actually support the operation needed
       (e.g. substructure search)? Check `dmc.catalog()`, don't assume.
+- [ ] Does the prompt ask to vary *multiple* substituent positions off a retained core?
+      Check each branch individually with `Chem.ReplaceCore` (Step 10) — ranking by overall
+      similarity alone will silently conserve whichever branch matters most to that score.
+- [ ] Any SMARTS fragment meant to mean a specific group (e.g. a methylene bridge) uses an
+      explicit hydrogen count (`[CH2]`), not a bare atom — and was spot-checked against a
+      few live hits for false positives, not just a reference molecule (Step 11).
+- [ ] Does a named substituent/fragment have more than one reasonable chemical reading
+      (substituted vs. unsubstituted, which tautomer, etc.)? If the readings would actually
+      produce different result sets, ask the user rather than silently picking one (Step 12).
