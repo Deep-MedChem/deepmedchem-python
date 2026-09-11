@@ -490,3 +490,51 @@ Done, rebuilt once more (see Issue 13). Combined tetrazole+strict-unsubstituted-
 substructure query on `vast-2026-h2` (200 hits, the confirmed ceiling), filtered locally to
 165 satisfying Mw<400 Da and logP<4, 5x5 grid of a random 25 of those 165 (seeded for
 reproducibility).
+
+## Issue 14 — `enamine-real-v5a`'s missing substructure-search support (Issue 3) is fixed;
+the exact-synthon workaround it motivated (Issue 5/9) turns out to have produced a false
+negative
+
+Re-checked live (2026-09-11): `dmc.catalog()` now reports `search_substructure: True` for
+`enamine-real-v5a` (previously `False`, Issue 3) — confirmed fixed by the operator. All 7
+catalog databases now support `dmc.substructure()`.
+
+- **This does not retire the exact-synthon technique (Step 9 of `guidelines.md`) in
+  general** — `dmc.substructure()` still enforces the query-complexity ceiling from Issue 4
+  regardless of database. Re-tested live against `enamine-real-v5a` with the exact tricyclic
+  query from `005` and a smaller 2-3-ring fragment from `007`: both consistently returned
+  `Interactive search capacity is currently full` across repeated retries. Simple 1-2 fused
+  ring queries (a plain benzene ring, a bicyclic pattern like `003`'s quinazoline) still work
+  fine. So "does this database support substructure search at all" (Step 7) and "is this
+  particular query small enough for the interactive endpoint" (Step 4) remain two separate
+  checks — fixing the former doesn't remove the need to check the latter per-query.
+- **Rebuilt `007` around this.** Its two fixed-fragment queries were still too large for
+  `dmc.substructure()` (confirmed via live retries), so it keeps using similarity search
+  (`method="shape"/"morgan"/"esp"`) as retrieval with a local RDKit structural check, per
+  Step 8's guidance — same overall technique as before, but replacing the exact-`synthon_id`
+  match with an explicit-hydrogen RDKit SMARTS check (`[cH]` on every ring position that must
+  stay unsubstituted, per Issues 12/13 — a plain `c` would silently let the "fixed" terminus
+  vary too).
+- **Consequential finding: Issue 8's "C-terminal variation is infeasible" conclusion was
+  wrong.** It was reached using exact-`synthon_id` matching, which only finds hits that share
+  Enamine REAL's specific reaction-level building-block boundary for this molecule — a
+  narrower question than "does the final structure contain this fragment." The corrected
+  RDKit-based check finds C-terminal-varying matches immediately (4 directly from the query,
+  21 after neighbor expansion) that the exact-synthon method's 400+-hit search never found,
+  because none of them share the fixed fragment as a standalone synthon — they arise from a
+  *different* reaction/disconnection that still produces the same final structural pattern.
+  **General lesson: exact-synthon matching (Step 9) is stronger evidence of a specific
+  building-block identity, but it is not equivalent to a structural-retention query — it can
+  produce false negatives for "does this structure exist" questions whenever the retained
+  fragment is assembled by more than one reaction/disconnection route.** Prefer a real
+  `dmc.substructure()` call, or failing that (Issue 4's ceiling) a local RDKit structural
+  check, over exact-synthon matching whenever the actual question is structural retention
+  rather than "was this specific building block used."
+
+## Status of `examples/prompts/007_IUPAC_multicomponent_modification.ipynb` (updated)
+
+Rebuilt per Issue 14. N-terminal variation: unchanged result (38 matches, top 10 by shape
+score), now via similarity search + RDKit structural check instead of exact-synthon
+matching. C-terminal variation: previously reported infeasible (Issue 8), now delivered — 21
+matches after neighbor expansion, top 10 by score. Both directions now ship the 10 examples
+the original prompt asked for.

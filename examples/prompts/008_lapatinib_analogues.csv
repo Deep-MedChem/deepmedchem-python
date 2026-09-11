@@ -231,16 +231,28 @@ c3b65cbdc9979001d88eadc6,Cc1cccc(-c2ccc(C(=O)Nc3ncnc4ccc(-c5ccc(OCc6cccc(Cl)c6)c
 d8428d7152417965963f25a8,CC(C)(Cc1cccc(F)c1)C(=O)Nc1ncnc2ccc(-c3ccc(OCc4cccc(Cl)c4)c(Cl)c3)cc12,eMolecules,sales@emolecules.com,910
 0af4a2b0b5df66f158895158,CC(C)c1cccc(-c2ccc(C(=O)Nc3ncnc4ccc(-c5ccc(OCc6ccc(F)cc6)c(Cl)c5)cc34)o2)c1,eMolecules,sales@emolecules.com,1560
 830e72e7c2fe7d7a19c81798,O=C(Nc1ccc(OCc2cccc(F)c2)c(Cl)c1)c1ccc(C#Cc2ccc3ncnc(NCc4ccc(Cl)cc4)c3c2)o1,eMolecules,sales@emolecules.com,2640
+df1e2a1511959e89a8929f01,COc1ccc2nc(NCCS(C)(=O)=O)nc(NCc3ccc(-c4cccc(F)c4)o3)c2c1,Enamine,info@enamine.net,245
 59040fd0564335c1d22e70b8,O=C(Nc1ccc(OCc2cccc(F)c2)c(Cl)c1)c1csc(Nc2cccc(Nc3ncnc4ccccc34)c2)n1,OTAVA Chemicals,sales@otavachemicals.com,
+63a37c1954ff1262959f3815,COc1ccc2c(NCCS(C)(=O)=O)nc(NCc3ccc(-c4cccc(F)c4)o3)nc2c1,Enamine,info@enamine.net,245
 cb7301fece55f50df6669735,O=C(Nc1cccc(Nc2ncnc3ccccc23)c1)c1csc(Nc2ccc(OCc3cccc(F)c3)c(Cl)c2)n1,OTAVA Chemicals,sales@otavachemicals.com,
+b5e9043f1ca44bf6665754e9,CS(=O)(=O)CCNc1nc(NCc2ccc(-c3cccc(F)c3)o2)nc2ccc(Cl)cc12,Enamine,info@enamine.net,245
 57b6f743f8f836625f07e5de,COc1ccc(Cn2cnc3ccc(NC(=O)c4csc(Nc5ccc(OCc6cccc(F)c6)c(Cl)c5)n4)cc3c2=O)cc1,OTAVA Chemicals,sales@otavachemicals.com,
+5c15b27e45033ca5d8abff3f,CS(=O)(=O)CCNc1nc(NCc2ccc(-c3ccc(F)cc3)o2)nc2ccc(Cl)cc12,Enamine,info@enamine.net,245
+8bdd6fafdb27c615c912f563,CS(=O)(=O)CCNc1nc(NCc2ccc(-c3cccc(F)c3)o2)nc2ccccc12,Enamine,info@enamine.net,245
+862d2d0d8ebed27841327c38,COc1ccc2nc(NCc3ccc(-c4cccc(F)c4)o3)nc(NCCS(C)(=O)=O)c2c1,Enamine,info@enamine.net,245
+a48207dbef8c7d35b269d324,CS(=O)(=O)CCNc1nc(NCc2ccc(-c3cccc(F)c3)o2)c2ccccc2n1,Enamine,info@enamine.net,245
 ec3a4569ed0e91110bff0aa9,CS(=O)(=O)CC1CN(Cc2ccc3ncnc(Cl)c3c2)CCN1C(=O)c1ccc(OCc2cccc(F)c2)c(Cl)c1,eMolecules,sales@emolecules.com,3097
 89d4be6b48b89e0e4659a2b2,Cc1cc(OCc2cccc(F)c2)ccc1NC(=O)c1csc(Nc2cccc(Nc3ncnc4ccccc34)c2)n1,OTAVA Chemicals,sales@otavachemicals.com,
+b1905945d7b47c3b90418ccb,COc1ccc2c(NCc3ccc(-c4cccc(F)c4)o3)nc(NCCS(C)(=O)=O)nc2c1,Enamine,info@enamine.net,245
 9eb9117ff6f0cedc5a21be4a,CS(=O)(=O)CC1CN(C(=O)c2ccc(OCc3cccc(F)c3)c(Cl)c2)CCN1Cc1ccc2ncnc(O)c2c1,eMolecules,sales@emolecules.com,2497
+91a55a913d02609b717d39a2,CS(=O)(=O)CCNc1nc(NCc2ccc(-c3cccc(F)c3)o2)c2cc(Cl)ccc2n1,Enamine,info@enamine.net,245
 50725701408028e91d3c2221,CS(=O)(=O)CC1CN(C(=O)c2ccc(OCc3cccc(F)c3)c(Cl)c2)CCN1Cc1ccc2ncnc(Cl)c2c1,eMolecules,sales@emolecules.com,3097
-01ca7053fd9d5e96a81a32aa,O=C(Nc1ccc(OCc2cccc(F)c2)c(F)c1)c1cccc(Nc2ncnc3ccccc23)c1,Enamine,info@enamine.net,163
-e108a4924df5cba4914fd121,O=C(Nc1ccc(OCc2cccc(F)c2)c(Cl)c1)c1cccc(Nc2ncnc3ccccc23)c1,Enamine,info@enamine.net,163
-e70db8cbddd229800a98c6a2,O=C(NCCNc1ncnc2ccc([N+](=O)[O-])cc12)Nc1ccc(OCc2cccc(F)c2)c(Cl)c1,Enamine,info@enamine.net,163
-19d2437cb709cb3bcd498919,O=C(NCCNc1ncnc2ccccc12)Nc1ccc(OCc2cccc(F)c2)c(Cl)c1,Enamine,info@enamine.net,163
-24bd041ddd1fa8c6da89c467,O=C(NCCCNc1ncnc2ccc([N+](=O)[O-])cc12)Nc1ccc(OCc2cccc(F)c2)c(Cl)c1,Enamine,info@enamine.net,163
-efa2b68c83b062f2db448e53,CNc1ncnc2cc(C(=O)Nc3ccc(OCc4cccc(F)c4)c(Cl)c3)ccc12,Enamine,info@enamine.net,163
+7e232888ef742ea40a30ade3,Nc1ncnc2cc(C(=O)Nc3ccc(OCc4cccc(F)c4)c(Cl)c3)ccc12,Enamine,info@enamine.net,163
+77f271d3d9ee10b3e7b2677b,O=C(Nc1ccc(OCc2cccc(F)c2)c(Cl)c1)C(=O)Nc1ccc2nc[nH]c(=O)c2c1,Enamine,info@enamine.net,163
+c220229c915155c401cd49b2,O=C(Nc1ccc(OCc2cccc(F)c2)c(Cl)c1)C(=O)Nc1ccc2ncncc2c1,Enamine,info@enamine.net,163
+8d070a1398d2a969ce782648,O=C(NCCNc1ncnc2ccccc12)C(=O)Nc1ccc(OCc2cccc(F)c2)c(Cl)c1,Enamine,info@enamine.net,163
+e83697089d7552ae39935b17,O=C(Cn1cnc2ccc(F)cc2c1=O)Nc1ccc(OCc2cccc(F)c2)c(Cl)c1,Enamine,info@enamine.net,163
+48af5d7c2a6861f3071c3955,CC(C(=O)Nc1ccc(OCc2cccc(F)c2)c(Cl)c1)n1cnc2ccccc2c1=O,Enamine,info@enamine.net,163
+90bc17591456c458d62c9d21,NS(=O)(=O)c1ccc(-c2ccc(CC(=O)c3cccc(Nc4ncnc5ccccc45)c3)o2)cc1,Enamine,info@enamine.net,163
+00e4196a375e6673ab06a640,O=C(NCCNc1ncnc2ccc([N+](=O)[O-])cc12)c1ccc(OCc2cccc(F)c2)c(Cl)c1,Enamine,info@enamine.net,163
+fc76e50530205fc0da9b2988,O=C(NCCNc1ncnc2ccccc12)c1ccc(OCc2cccc(F)c2)c(Cl)c1,Enamine,info@enamine.net,163

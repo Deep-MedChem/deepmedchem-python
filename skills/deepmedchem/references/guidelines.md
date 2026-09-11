@@ -86,14 +86,21 @@ to a notebook meant to be a graded reference for chatbot testing.
 ## Step 7 — Not every database supports the same operations
 
 Database capabilities vary — check `dmc.catalog()["libraries"]` (or `dmc databases --json`)
-for the specific database named in a prompt before assuming it supports what you need.
-Confirmed live: `enamine-real-v5a` has `search_substructure: False` — `dmc.substructure()`
-simply does not work there, even though it fully supports `search`/`search_cheese` and
-`Selection`. `freedom-space-5`, `cheminfinita-2026-02`, `synple-explore-2025-10`,
-`synple-synple-2025-10`, and `vast-2026-h2` do support substructure search. If a prompt names
-a specific database, verify that database's capability block matches what the query needs
-before writing any code around it — don't assume parity across databases just because they're
-all combinatorial/enumerated chemical spaces.
+for the specific database named in a prompt before assuming it supports what you need. This
+is a capability that can change: `enamine-real-v5a` previously reported
+`search_substructure: False` (a confirmed limitation as of 2026-09-10, see `note.md` Issue
+3), but as of 2026-09-11 all 7 catalog databases report `search_substructure: True`. Always
+check live rather than trusting a cached assumption (including this document) about what a
+given database supports.
+
+Separately — and unaffected by the above — `dmc.substructure()` enforces a query-complexity
+ceiling on the interactive endpoint regardless of which database supports the operation in
+principle (Step 8, `note.md` Issue 4/14): a query built from several fused rings can be
+rejected outright as too costly (`Interactive search capacity is currently full`) even on a
+database whose catalog capability says substructure search is supported. "Does this database
+support substructure search" and "is this particular query small enough for the interactive
+endpoint" are two separate checks — confirm both before relying on `dmc.substructure()` for a
+given prompt.
 
 ## Step 8 — Substructure search and a similarity score don't combine, and "retain X" can be
 impossible for reasons that have nothing to do with the API
@@ -124,15 +131,28 @@ every hit with that "variable" part unchanged. No query design fixes this — sa
 than assuming the query needs more loosening.
 
 ## Step 9 — Exact synthon matching: a substructure-search alternative, with a coverage caveat
+and a correctness caveat
 
-When a database doesn't support `dmc.substructure()` (Step 7) but a prompt still needs
-"retain this fragment, vary the rest," check whether that fragment is its own standalone
-synthon: `dmc.search(..., include_synthons=True)` works even on databases without
-substructure support (it's a similarity search, not the disabled endpoint) and returns each
-hit's exact per-building-block decomposition — `{"slot": int, "synthon_id": str, "smiles":
-str}`, with a `[U]` dummy atom marking the attachment point. Filtering hits by an *exact*
-`synthon_id` match is stronger than an RDKit substructure check: it guarantees the literal
-same building block, not just a similar-looking ring system.
+When `dmc.substructure()` isn't viable for a "retain this fragment, vary the rest" prompt —
+either the database doesn't support it, or (Step 7) the query is too complex for the
+interactive endpoint even on a database that does — check whether the retained fragment is
+its own standalone synthon: `dmc.search(..., include_synthons=True)` works regardless of
+substructure support (it's a similarity search, not the substructure endpoint) and returns
+each hit's exact per-building-block decomposition — `{"slot": int, "synthon_id": str,
+"smiles": str}`, with a `[U]` dummy atom marking the attachment point.
+
+**Correctness caveat, confirmed live:** exact-`synthon_id` matching is *not* equivalent to a
+structural-retention check, and can produce false negatives. It only finds hits that share
+one specific reaction's building-block boundary — if the same final structural pattern can
+also arise from a different reaction/disconnection in that database, exact-synthon matching
+will miss it entirely. Confirmed while rebuilding example `007`: exact-synthon matching found
+zero instances of a particular fixed-fragment pattern even after inspecting 400+ hits, but a
+plain RDKit structural check (explicit-hydrogen SMARTS, `[cH]` on every ring position that
+must stay unsubstituted — see Step 11/12) found matches immediately from the very same
+search. Prefer `dmc.substructure()` when query complexity allows it (Step 7), or a local
+RDKit structural check on similarity-search hits (Step 8) otherwise; reach for exact-synthon
+matching only when the question genuinely is "was this specific building block used," not as
+a general substitute for "does this structure exist."
 
 Two things to check before relying on this:
 
