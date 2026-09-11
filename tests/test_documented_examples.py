@@ -1,14 +1,19 @@
 import hashlib
 import json
+import os
 import runpy
+import subprocess
+import sys
 from pathlib import Path
 
 import httpx
+import pytest
 
 import deepmedchem
 import deepmedchem.facade
 
 EXAMPLES = Path(__file__).parents[1] / "examples" / "docs"
+README = Path(__file__).parents[1] / "README.md"
 
 
 def _hash(payload):
@@ -138,3 +143,78 @@ def test_every_published_sdk_example_executes(monkeypatch):
         "selection_builder.py",
         "substructure_search.py",
     ]
+
+
+def _fenced_python_block(markdown: str, heading: str) -> str:
+    """The first ``python`` block under ``heading``, searched no further than its section."""
+
+    lines = markdown.splitlines(keepends=True)
+    if f"{heading}\n" not in lines:
+        raise AssertionError(f"{heading} is no longer a heading in README.md")
+    start = lines.index(f"{heading}\n")
+    for index in range(start + 1, len(lines)):
+        # Stopping at the next section matters: without it, retagging this block as
+        # ```py would silently compare the example against a later section's snippet.
+        if lines[index].startswith("## "):
+            break
+        if lines[index] == "```python\n":
+            end = lines.index("```\n", index + 1)
+            return "".join(lines[index + 1 : end])
+    raise AssertionError(f"no python block under {heading}")
+
+
+def test_the_quickstart_example_is_the_readme_quickstart():
+    """The runnable example is the README snippet, so neither can drift alone."""
+
+    # The docs are UTF-8; read_text() would otherwise follow a contributor's locale.
+    documented = _fenced_python_block(README.read_text(encoding="utf-8"), "## Quickstart")
+    assert documented == (EXAMPLES / "python_quickstart.py").read_text(encoding="utf-8")
+
+
+def test_the_block_helper_stops_at_the_end_of_its_section():
+    """A retagged fence must fail loudly, not silently match a later section's block."""
+
+    markdown = (
+        "## Quickstart\n\n```py\nnot python-tagged\n```\n\n"
+        "## Something else\n\n```python\nwrong_section = True\n```\n"
+    )
+    with pytest.raises(AssertionError, match="no python block"):
+        _fenced_python_block(markdown, "## Quickstart")
+
+
+def test_the_block_helper_reports_a_renamed_heading():
+    with pytest.raises(AssertionError, match="no longer a heading"):
+        _fenced_python_block("## Quick start\n\n```python\nx = 1\n```\n", "## Quickstart")
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 10), reason="EncodingWarning arrived in 3.10"
+)
+def test_the_parity_check_does_not_depend_on_the_ambient_locale():
+    """`read_text()` without an encoding follows the contributor's locale.
+
+    README.md is UTF-8 and contains non-ASCII bytes, so on a cp932 or C locale an
+    implicit read raises UnicodeDecodeError. Running the check with
+    PYTHONWARNDEFAULTENCODING turns any implicit read into an error.
+    """
+
+    root = Path(__file__).parents[1]
+    probe = (
+        "import tests.test_documented_examples as m; "
+        "m.test_the_quickstart_example_is_the_readme_quickstart()"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-W", "error::EncodingWarning", "-c", probe],
+        capture_output=True,
+        text=True,
+        cwd=root,
+        env={
+            **os.environ,
+            "PYTHONWARNDEFAULTENCODING": "1",
+            # Both entries are needed and the ambient value is dropped on purpose:
+            # root to import tests, root/src for an uninstalled checkout, and an
+            # inherited path could let a stale install shadow the tree under test.
+            "PYTHONPATH": os.pathsep.join([str(root), str(root / "src")]),
+        },
+    )
+    assert completed.returncode == 0, completed.stderr

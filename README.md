@@ -33,6 +33,12 @@ on its own. The key goes to the OS keyring when one is available, otherwise to a
 file (mode 0600) next to the SDK config. Use `--no-browser` to force the print-only behaviour and
 `--token-stdin` to paste an existing key from a pipe.
 
+To remove a stored credential afterwards, `dmc logout` clears the selected profile. It
+leaves the shared entry that installs predating profiles wrote, and a later read promotes
+that entry back into the profile, so use `dmc logout --all`, which clears it along with
+every configured profile. Where no OS keyring is available, `--all` stops at the first
+profile it cannot clear and says so.
+
 ## Command line
 
 The `dmc` command (also installed as `deepmedchem`) covers the everyday operations without
@@ -205,7 +211,7 @@ result = dmc.search(
     limit=3,
 )
 
-print(repr(result))
+print(result)
 for hit in result.hits:
     price = f"${hit.price}" if hit.price is not None else "unavailable"
     print(f"{hit.rank}  score={hit.score:.4f}  price={price}  {hit.smiles}")
