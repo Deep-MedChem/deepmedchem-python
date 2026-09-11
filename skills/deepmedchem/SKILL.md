@@ -24,9 +24,13 @@ metadata:
 platform. It ships a `dmc` command (alias `deepmedchem`) and a small Python API. All
 chemistry runs on the server: the package contains no RDKit, models, or databases.
 
-Read [references/cli.md](references/cli.md) for every command and flag, and
+Read [references/cli.md](references/cli.md) for every command and flag,
 [references/python-api.md](references/python-api.md) for the Python surface (clients, result
-models, Selection/Run builders, export, ordering) when the recipes below are not enough.
+models, Selection/Run builders, export, ordering) when the recipes below are not enough, and
+[references/guidelines.md](references/guidelines.md) before translating a natural-language
+request into a Selection/Run — it covers what's actually achievable (maximize-only similarity
+objectives, optimize vs. filter vs. report, sync vs. durable tiers) and a checklist to run
+before treating any query as ground truth.
 
 ## Setup
 
