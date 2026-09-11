@@ -231,3 +231,137 @@ and expansion (Issue 5) to build a 1,315-candidate pool spanning two distinct re
 (piperazine-based and piperazine-free) guaranteed to retain the tricycle, transparently
 labels which reference molecule and method each candidate's similarity score came from, and
 picks the lowest-logP 20. logP dropped from 5.111 (starting molecule) to 1.954.
+
+## Status of `examples/prompts/006_vorasidenib_logp_umap.ipynb`
+
+Done. Vorasidenib's SMILES pulled from PubChem (not memory) and cross-checked against its
+known formula (C14H13ClF6N6); logP 4.312. Searched all 7 catalog databases by shape
+(fetched dynamically from `dmc.catalog()`, not hardcoded — all 7 support `method="shape"`),
+1,353 unique hits, 855 with lower logP than the starting molecule. Clustered 1-D on logP
+(5 tiers via K-means) and separately ran UMAP on the full 8-descriptor RDKit set (mol_wt,
+logp, tpsa, hbd, hba, rotatable_bonds, aromatic_rings, fraction_csp3), with the logp column
+weighted 3x after z-scoring so it dominates the embedding without reducing UMAP to a
+1-D sort (a single scalar can't drive a meaningful manifold projection on its own). Plotted
+with a single-hue blue ordinal ramp (light=low logP, dark=high), validated with the
+`dataviz` skill's palette checker. Needed `umap-learn` and `scikit-learn`, neither installed
+by default — confirmed with the user these should be treated as available to the chatbot,
+same status as RDKit/pandas.
+
+## Issue 7 — IUPAC name → structure: the "Gold Book API" is the wrong tool; OPSIN is the
+right one, and it needs no local installation at all
+
+The user found the IUPAC Gold Book API
+(https://iupac.github.io/WFChemCookbook/datasources/goldbook_api.html) and asked whether it
+could turn a pasted systematic name into a SMILES for search. Checked the page directly:
+**it doesn't** — it's a lookup service for chemistry *terminology definitions* (e.g. what
+"cis-trans isomers" means), unrelated to name-to-structure conversion.
+
+The actual right tool: **OPSIN** (Open Parser for Systematic IUPAC Nomenclature).
+
+- OPSIN is normally a Java library. `pip install py2opsin` wraps it, but still shells out to
+  a local `java` binary — confirmed this machine has none (`java -version` fails: "Unable to
+  locate a Java Runtime"), and installing one would be a system-level change, not a project
+  dependency, so it wasn't done.
+- **No installation is needed at all**, because EBI hosts OPSIN as a free public REST API:
+  `GET https://www.ebi.ac.uk/opsin/ws/{urlencoded_name}.{ext}`, `ext` one of `smi`, `inchi`,
+  `stdinchi`, `stdinchikey`, `cml`, `png`, `svg`, or `json` (returns SMILES + InChI +
+  InChIKey + CML together). A plain HTTP GET — `httpx` (already a `deepmedchem` dependency)
+  is enough, no new package required.
+- **Verified live, twice:**
+  - `https://www.ebi.ac.uk/opsin/ws/benzene.json` → correct SMILES/InChI/InChIKey.
+  - The full systematic name behind `005`'s original starting molecule
+    ("2-methyl-N-[(1S)-2-(methylphenylamino)-2-oxo-1-(phenylmethyl)ethyl]-1H-indole-3-acetamide")
+    round-tripped through OPSIN and matched, **exactly, stereocenter included**, the SMILES
+    that had been hand-built earlier in the same session by manually parsing that name — a
+    solid independent cross-check of both OPSIN and that earlier manual construction.
+- **Integration notes for whoever builds this into the chatbot:** this is a live external
+  network dependency (EBI's server), separate from the DeepMedChem API itself — needs its
+  own error handling and shouldn't be assumed always reachable. OPSIN reports unparseable
+  names via a `"status":"FAILURE"` field in the JSON body with a message, not necessarily a
+  non-2xx HTTP status — check that field, don't rely on HTTP status alone.
+- User is building `examples/prompts/007` around this themselves.
+
+### Addendum — OPSIN's actual input scope (tested, not assumed)
+
+Tested a range of name types against the live endpoint to pin down exactly what OPSIN
+accepts, since "IUPAC name" is easy to over-scope:
+
+| input | result |
+|---|---|
+| `2-(4-isobutylphenyl)propanoic acid` (fully systematic) | SUCCESS |
+| `1,3,7-trimethylpurine-2,6-dione` (fully systematic) | SUCCESS |
+| `toluene`, `cyclohexane`, `caffeine`, `acetylsalicylic acid`, `ibuprofen` (IUPAC-*retained* traditional names) | SUCCESS |
+| `sodium chloride` (simple inorganic/ionic name) | SUCCESS |
+| `aspirin` (common/trademark-derived name — **not** an IUPAC-retained name) | FAILURE |
+| `vorasidenib` (WHO INN / generic drug name) | FAILURE |
+
+The `aspirin` vs `acetylsalicylic acid` split is the important one: OPSIN's dictionary is
+scoped to names IUPAC nomenclature itself formally retains, not general drug-name synonyms —
+"aspirin" happens not to be one of those, "acetylsalicylic acid" is. **Practical routing
+rule for the chatbot:** use OPSIN for systematic names and IUPAC-retained traditional names;
+for trade/brand or INN/generic drug names, route to a name-search service instead (e.g.
+PubChem's `/compound/name/{name}/property/...`, which is what was used for vorasidenib
+earlier in this same investigation — it cross-references synonym databases OPSIN doesn't
+have). Worth having the chatbot try OPSIN first and fall back to a name-search service on
+`"status":"FAILURE"`, rather than picking one a priori.
+
+## Issue 8 — an exact-synthon disconnection can genuinely not exist, even after
+thorough searching (found while building 007)
+
+Query: `(2S)-N-methyl-2-[[2-(2-methyl-1H-indol-3-yl)acetyl]amino]-N,3-diphenylpropanamide`
+(via OPSIN — same molecule as `005`'s original starting compound, named from a different
+parent this time: an N-acyl-phenylalanine-N-methylanilide). Prompt: fix the central
+phenylalanine, vary the N-terminal (acyl group) and C-terminal (amide cap) independently, 10
+examples each, on `enamine-real-v5a`.
+
+- This exact molecule is a real Enamine REAL product (shape score 1.0 against itself).
+  Its synthon decomposition (`include_synthons=True`) fuses phenylalanine **and the
+  C-terminal amide** into one synthon, with the N-terminal acyl group as the separate,
+  variable synthon — so "vary N-terminal, keep phenylalanine+C-terminal fixed" works
+  directly via exact `synthon_id` filtering (41 matches from a single 200-hit shape search).
+- The complementary disconnection needed for "vary C-terminal, keep phenylalanine+N-terminal
+  fixed" was searched for directly and thoroughly: probed with several different concrete
+  C-terminal caps, searched broadly from the free-acid intermediate (itself a real product)
+  across two similarity metrics at the maximum limit — 400+ hits inspected in total. **Zero**
+  instances of that decomposition turned up. Every reaction found either fuses
+  phenylalanine+C-terminal (the pattern above) or leaves the C-terminus as a bare, uncapped
+  acid.
+- **Conclusion, reported as such rather than worked around:** Enamine REAL does not appear to
+  offer a reaction that couples a fixed N-acyl-phenylalanine acid with a variable amine to
+  form this specific class of C-terminal amide. This is a real gap in the available
+  combinatorial chemistry for this exact building block, not a query-design problem — same
+  category of finding as Issue 6, except here the broader search did *not* turn up a hidden
+  second reaction. A structural-retention fallback (RDKit substructure check on similarity
+  hits, not exact synthon identity) does find 29 plausible candidates, but per the user's
+  instruction this was reported as infeasible rather than substituted in silently.
+- **General lesson:** "keep searching more broadly until you find the reaction you need"
+  (Issue 6's fix) is the right first move, but it can legitimately come up empty. Don't treat
+  a broad, thorough search finding nothing as proof of a bug in the search — at some point
+  it's real evidence the combinatorial space doesn't contain that disconnection, and the
+  honest answer is to say so.
+
+## Status of `examples/prompts/007_.ipynb`
+
+Done. Structure obtained via OPSIN (ties directly to Issue 7); confirmed as an existing
+Enamine REAL product (shape score 1.0); general structural-analogue search included per the
+prompt's first ask. N-terminal variation (10 examples) delivered via exact-synthon matching.
+C-terminal variation reported as infeasible for this exact building block/database (see
+Issue 8), per the user's explicit choice not to substitute an approximate fallback.
+
+## Issue 9 — SMILES → IUPAC name: no viable free option found; capability gap, not built
+
+The reverse of Issue 7. Checked thoroughly, no shortcuts left untried:
+
+| Tool | Verdict |
+|---|---|
+| RDKit | No such function exists — checked the `Chem` module directly for anything with "iupac" or "name" in it, nothing found. |
+| OPSIN | Name→structure only, by design (its name literally means "parser of nomenclature") **and** confirmed empirically: feeding it a SMILES string as if it were a name returns `"status":"FAILURE"`. |
+| PubChem `IUPACName` property | Lookup-only for compounds already registered in PubChem's database, not a live generator for arbitrary structures. Confirmed via the `/compound/smiles/.../property/IUPACName/JSON` POST endpoint: works for aspirin (`CID: 2244` → `"2-acetyloxybenzoic acid"`), returns `CID: 0` with no properties for a novel/unregistered structure. |
+| STOUT (SMILES-TO-iUpac-Translator, the actual open-source ML tool built for this) | The right tool in principle, but heavy and fragile: pins `tensorflow==2.10.1` (an old version, likely to have Apple Silicon compatibility issues) **and** requires Java via `jpype1` (the same missing local dependency noted in Issue 7), plus a model download. No publicly hosted API exists to skip the install (checked both the PyPI page and the GitHub repo). |
+
+**Conclusion:** treat SMILES→IUPAC-name generation as **not currently available** to the
+chatbot. The realistic paths if it's ever needed are a commercial tool (ChemDraw's
+"Structure to Name," ACD/Labs Name) or attempting the STOUT install in an isolated
+environment (not the shared `deepmedchem` env, given the old TensorFlow pin risks breaking
+other things) — neither was attempted here. This is the asymmetric counterpart to Issue 7:
+name→structure is a solved, freely-available problem (OPSIN); structure→name is not.
