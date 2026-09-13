@@ -1,5 +1,8 @@
+import argparse
 import functools
 import io
+import re
+from pathlib import Path
 
 import httpx
 
@@ -77,3 +80,34 @@ def test_headless_login_prints_url_and_reports_file_store(monkeypatch, capsys) -
     assert "No display detected" in out
     assert "credentials.json" in out
     assert "secret-value" not in out
+
+
+def test_the_skill_cli_reference_documents_every_public_flag() -> None:
+    """`skills/.../cli.md` promises "every command and flag"; hold it to that.
+
+    Only flags argparse actually advertises count. `--api-url`, `--cc` and
+    `--include-synthons` carry help=SUPPRESS, so they are deliberately absent from
+    `--help` and belong out of the reference too.
+    """
+
+    reference = (
+        Path(__file__).parents[1] / "skills" / "deepmedchem" / "references" / "cli.md"
+    ).read_text(encoding="utf-8")
+    parser = cli._parser()
+    commands = next(a for a in parser._actions if getattr(a, "choices", None))
+
+    def documented(option: str) -> bool:
+        # A bare substring test would let `--token-stdin` vouch for `--to`.
+        return re.search(re.escape(option) + r"(?![\w-])", reference) is not None
+
+    undocumented = sorted(
+        {
+            option
+            for source in [parser, *commands.choices.values()]
+            for action in source._actions
+            if action.help is not argparse.SUPPRESS
+            for option in action.option_strings
+            if option.startswith("--") and option != "--help" and not documented(option)
+        }
+    )
+    assert undocumented == []

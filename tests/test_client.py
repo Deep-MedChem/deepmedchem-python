@@ -392,6 +392,7 @@ def test_lightweight_result_is_an_aligned_molecule_sequence() -> None:
     assert result.raw["new_server_field"] == {"kept": True}
     assert result.results[0]["smiles"] == "CCO"
     assert repr(result) == "SearchResult(2 molecules, method='shape', database='db')"
+    assert str(result) == repr(result)
 
 
 def test_exact_results_keep_aligned_none_scores() -> None:
@@ -467,7 +468,23 @@ def test_usage_calls_the_account_service_with_the_same_key() -> None:
     assert usage.tier == "premium"
     assert usage.remaining == async_usage.remaining == 95
     assert repr(usage) == "Usage(plan='premium', credits=95/100 remaining)"
+    assert str(usage) == repr(usage)
     assert [str(request.url) for request in captured] == [
         "https://account.example.test/rate-limit/status"
     ] * 2
     assert captured[0].headers["x-api-key"] == "scoped-token"
+
+
+def test_range_constraints_build_on_every_supported_python() -> None:
+    """`range=` uses isinstance, which must not rely on 3.10+ union syntax."""
+
+    sel = (
+        Selection.from_database("enamine-real-v5a")
+        .reference("query", smiles="CC(=O)Oc1ccccc1C(=O)O")
+        .maximize_similarity("rdkit.ecfp4_tanimoto", reference="query")
+        .where("rdkit.mol_wt", range=(250, 450), units="Da")
+        .where_predicted_property("openadmet-herg-pchembl", range=(4.0, 6.0), units="pChEMBL")
+    )
+    payload = sel.to_dict()["constraints"]
+    assert payload["properties"][0]["value"] == {"lower": 250, "upper": 450}
+    assert payload["predicted_properties"][0]["value"] == {"lower": 4.0, "upper": 6.0}

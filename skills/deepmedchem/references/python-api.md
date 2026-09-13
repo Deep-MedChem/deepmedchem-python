@@ -11,7 +11,7 @@ default 45.0) as keyword arguments.
 ```python
 import deepmedchem as dmc
 
-dmc.search(smiles, *, database, method="morgan", limit=20, shortlist_multiplier=10,
+dmc.search(smiles, *, database, method="morgan", limit=20,
            include_synthons=False) -> SearchResult
 dmc.substructure(query, *, database, format="smarts", limit=100, timeout_seconds=30,
                  include_synthons=False) -> SubstructureResult
@@ -22,8 +22,6 @@ dmc.usage() -> Usage
 
 - `method` must be `"morgan"`, `"shape"`, or `"esp"`; non-Morgan methods call the CHEESE
   3D endpoint.
-- `shortlist_multiplier` widens the server-side candidate pool before re-ranking; leave the
-  default unless recall is a problem.
 - `include_synthons=True` adds building-block information to each hit when the database
   supports it.
 
@@ -43,8 +41,8 @@ Methods on `Client` (all mirrored as coroutines on `AsyncClient`):
 | --- | --- |
 | `catalog()` | Public catalog document. |
 | `usage()` | `Usage` from the account service. |
-| `search(smiles, *, database, method="morgan", limit=20, shortlist_multiplier=10, include_synthons=False)` | Dispatches to `search_cheese` for `shape`/`esp`. |
-| `search_cheese(smiles, *, database, scorer, limit=20, shortlist_multiplier=10, include_synthons=False)` | `scorer` is `"shape"` or `"esp"`. |
+| `search(smiles, *, database, method="morgan", limit=20, include_synthons=False)` | Dispatches to `search_cheese` for `shape`/`esp`. |
+| `search_cheese(smiles, *, database, scorer, limit=20, include_synthons=False)` | `scorer` is `"shape"` or `"esp"`. |
 | `search_substructure(query, *, query_format="smarts", database, limit=100, timeout_seconds=30, include_synthons=False)` | Exact matches. |
 | `sample(*, database, count=100, seed=None, include_synthons=False)` | Random molecules. |
 | `selections.validate(sel)`, `selections.estimate(sel)`, `selections.create(sel)` | Selection documents, see below. |
@@ -110,7 +108,6 @@ sel = (
     .require_preset("lipinski-ro5/v1")
     .where("rdkit.mol_wt", gt=250, units="Da", fidelity="exact_product", missing="reject")
     .limit(100)
-    .shortlist_multiplier(10)
     .max_per_scaffold(5)
     .include("properties", "constraint_evidence", "objective_components", "execution_plan")
 )
@@ -133,9 +130,10 @@ supports. When `estimate.execution_tier` is not synchronous, submit the selectio
 on the assembled product and enforces the threshold exactly, so a returned molecule always
 satisfies the constraint.
 
-`acquire_predicted_property` adds one experimental acquisition stage that reranks and trims a
-similarity shortlist. It requires a ranked strategy and a similarity objective, and the database
-must advertise the endpoint.
+Predicted properties arrive in two stages. `acquire_predicted_property` is a ranking control:
+cheap factorized CP16 scores narrow the candidate pool before assembly, then the pinned OpenADMET
+teacher predicts every unique surviving product. It requires a ranked strategy and a similarity
+objective, and the database must advertise the endpoint.
 
 ```python
 sel = (
@@ -151,14 +149,33 @@ sel = (
     .limit(100)
 )
 result = client.selections.create(sel)
-result.acquisition            # endpoint_id, model_version, direction, units, qualification,
-                              # candidates_before, candidates_after
+result.acquisition            # endpoint_id, approximate_model_version, predicted_model_version,
+                              # direction, units, qualification, candidates_before, candidates_after
 result.hits[0].properties     # exact assembled-product RDKit values
-result.hits[0].acquisition    # predicted_value, applicable
+result.hits[0].acquisition    # endpoint_id, approximate_value, predicted_value, applicable
+result.hits[0].predicted_properties   # endpoint id -> pinned prediction
 ```
 
-CP16 values are `predicted`, `experimental-acquisition-only` ranking signals. They are not assay
-results and never establish that an ADMET threshold is met; only `where`/`require_preset` do that.
+`approximate_value` is the CP16 screening score and `predicted_value` the pinned
+assembled-product prediction, so the two stages stay legible in the response.
+
+`where_predicted_property` turns that pinned prediction into a hard constraint. It takes exactly
+one of `gt`, `gte`, `lt`, `lte`, or `range=(lo, hi)`, and `units` is required.
+
+```python
+sel = (
+    Selection.from_database("enamine-real-v5a")
+    .reference("query", smiles="CC(=O)Oc1ccccc1C(=O)O")
+    .maximize_similarity("rdkit.ecfp4_tanimoto", reference="query")
+    .where_predicted_property("openadmet-herg-pchembl", lte=5.0, units="pChEMBL")
+    .limit(20)
+)
+```
+
+Every value in either stage is `predicted` and `experimental-acquisition-only`. They are model
+output, not assay results, so a molecule that satisfies `where_predicted_property` is one the
+model predicts to be in range - never one whose property was measured. Only `where` and
+`require_preset` enforce a threshold on a directly calculated quantity.
 A database that lacks the loaded property or CP16 assets answers `capability_unavailable` before
 any credit is reserved, so read the catalog (`client.catalog()`) for each library's `properties`,
 `presets`, `predicted_property_endpoints`, and
