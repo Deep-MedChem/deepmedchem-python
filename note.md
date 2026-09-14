@@ -538,3 +538,48 @@ score), now via similarity search + RDKit structural check instead of exact-synt
 matching. C-terminal variation: previously reported infeasible (Issue 8), now delivered — 21
 matches after neighbor expansion, top 10 by score. Both directions now ship the 10 examples
 the original prompt asked for.
+
+## Issue 15 — Issue 4/14's "query too complex for the interactive endpoint" conclusion was
+itself wrong: it was a client-side timeout misconfiguration, not a server capacity ceiling
+
+Re-investigated (2026-09-14) after the user asked whether `005` could be fixed to use
+`dmc.substructure()` directly instead of its exact-synthon-matching workaround.
+
+- **Root cause:** `dmc.substructure(..., timeout_seconds=60)` only sets the budget the
+  *server* is told it may take. The SDK's own `timeout` kwarg (the underlying HTTP client
+  timeout) defaults to 45s, independent of `timeout_seconds`. Requesting a 60s server budget
+  while leaving the client timeout at its 45s default means the client gives up with a plain
+  `httpx.ReadTimeout` before the server can possibly respond — and that timeout was being
+  visually indistinguishable in casual retries from the genuine `Interactive search capacity
+  is currently full` error also seen on some attempts, so both got lumped together as "this
+  query is too complex for the endpoint."
+- **Confirmed live:** 8 retries of `005`'s exact tricyclic substructure query
+  (`C1=Nc2ccccc2Oc2ccccc21` on `enamine-real-v5a`) with only `timeout_seconds=60` set (client
+  `timeout` left at default) failed every time — 4x `Interactive search capacity is currently
+  full`, 4x `ReadTimeout`. Re-run with `timeout=90.0` passed explicitly alongside
+  `timeout_seconds=60`: **6/6 succeeded, 200/200 hits every time**, RDKit-verified to
+  genuinely contain the tricycle (0 mismatches out of 200). Also cross-checked the 200-hit
+  count is a real exhaustive population, not a sampling artifact, by re-querying with a
+  differently-phrased but chemically equivalent SMARTS for the same tricycle (same method as
+  Issue 12) — identical 200-molecule set both times.
+- **This retires Issue 4/14's conclusion for this specific query.** It does not prove no
+  query is ever too complex for the interactive endpoint in principle — only that this
+  particular 3-fused-ring tricyclic query, previously written off as categorically too
+  complex, actually works fine once the client timeout is set correctly. Before concluding
+  "too complex" again for any query, first rule out a client-side timeout shorter than the
+  requested `timeout_seconds` — same failure mode, easy to misattribute.
+- **Guidelines updated:** `guidelines.md` Step 7 now calls out setting `timeout=` above
+  `timeout_seconds=` explicitly before treating a rejection as a genuine complexity ceiling.
+
+## Status of `examples/prompts/005_logp_optimization.ipynb` (rebuilt again, 2026-09-14)
+
+Rebuilt to use `dmc.substructure()` directly (Issue 15), retiring the exact-synthon-matching
+workaround entirely. Direct tricycle substructure query on `enamine-real-v5a` returns the
+full 200-hit population exhaustively (no similarity-search discovery, no neighbor-expansion
+anchoring bias, no per-candidate "scored against which reference" bookkeeping needed).
+Ranked by logP only: lowest is 1.813 (previous workaround's best was 1.954 — direct
+substructure search finds more of the true low-logP population than similarity-search-based
+discovery did). The prompt's "retain shape cosine similarity" ask is reported as genuinely
+unsatisfiable via the API for a substructure-retrieved candidate set (Step 8 — no per-
+candidate similarity score exists for substructure hits), not approximated or silently
+dropped.

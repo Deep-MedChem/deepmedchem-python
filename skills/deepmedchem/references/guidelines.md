@@ -93,14 +93,21 @@ is a capability that can change: `enamine-real-v5a` previously reported
 check live rather than trusting a cached assumption (including this document) about what a
 given database supports.
 
-Separately — and unaffected by the above — `dmc.substructure()` enforces a query-complexity
-ceiling on the interactive endpoint regardless of which database supports the operation in
-principle (Step 8, `note.md` Issue 4/14): a query built from several fused rings can be
-rejected outright as too costly (`Interactive search capacity is currently full`) even on a
-database whose catalog capability says substructure search is supported. "Does this database
-support substructure search" and "is this particular query small enough for the interactive
-endpoint" are two separate checks — confirm both before relying on `dmc.substructure()` for a
-given prompt.
+Separately — and unaffected by the above — `dmc.substructure()` can appear to enforce a
+query-complexity ceiling on the interactive endpoint: a query built from several fused rings
+can fail with `Interactive search capacity is currently full` or a plain `ReadTimeout`. Before
+concluding a query is genuinely too complex, rule out a client-side timeout misconfiguration
+first (`note.md` Issue 15): `timeout_seconds=` only sets the budget you tell the *server* it
+may take; the SDK's own `timeout=` kwarg (default 45s) caps how long the *client* will wait,
+independently. Requesting `timeout_seconds=60` while leaving `timeout` at its 45s default
+means the client gives up with `ReadTimeout` before the server can respond — easy to
+misattribute as "too complex for the endpoint" (this happened for real, see Issue 4/14 vs.
+15: an exact tricyclic query written off as categorically too complex turned out to succeed
+200/200 every time once `timeout=90.0` was passed alongside `timeout_seconds=60`). Always set
+`timeout=` comfortably above `timeout_seconds=` before treating a rejection as a genuine
+capacity ceiling — and only after that, "does this database support substructure search" and
+"is this particular query small enough for the interactive endpoint" remain two separate
+checks to confirm before relying on `dmc.substructure()` for a given prompt.
 
 ## Step 8 — Substructure search and a similarity score don't combine, and "retain X" can be
 impossible for reasons that have nothing to do with the API
@@ -110,10 +117,12 @@ similarity score (e.g. shape or ESP cosine) to the same reference. These don't c
 a substructure-search candidate set cannot be scored for similarity to a reference —
 confirmed live, intersecting a 200-hit substructure search with a 200-hit similarity search
 on the same query returned zero overlap (same root cause as Step 4: no pairwise "score this
-molecule against a reference" endpoint). Complex multi-ring substructure queries can also be
-rejected outright as too costly for the interactive endpoint (`Interactive search capacity is
-currently full`) even when nowhere near a timeout, and there is no durable/batch alternative
-for substructure search — `Run` only supports `selection`/`selection_batch` kinds.
+molecule against a reference" endpoint). Complex multi-ring substructure queries can also
+appear to be rejected outright as too costly for the interactive endpoint (`Interactive
+search capacity is currently full`) — but check for a client-side timeout misconfiguration
+first (Step 7, `note.md` Issue 15) before concluding that; there is no durable/batch
+alternative for substructure search — `Run` only supports `selection`/`selection_batch`
+kinds.
 
 Working alternative when a real per-candidate similarity score is required: use that
 similarity search itself (`method="shape"`/`"esp"`/`"morgan"`) as the sole retrieval
