@@ -28,9 +28,12 @@ Read [references/cli.md](references/cli.md) for every command and flag,
 [references/python-api.md](references/python-api.md) for the Python surface (clients, result
 models, Selection/Run builders, export, ordering) when the recipes below are not enough, and
 [references/guidelines.md](references/guidelines.md) before translating a natural-language
-request into a Selection/Run — it covers what's actually achievable (maximize-only similarity
-objectives, optimize vs. filter vs. report, sync vs. durable tiers) and a checklist to run
-before treating any query as ground truth.
+request into a Selection/Run — Section A covers scope (what to reject) and which resource to
+reach for first (`deepmedchem` before RDKit/pandas before OPSIN/PubChem before general web
+search), Section B covers what's actually achievable (maximize-only similarity objectives,
+optimize vs. filter vs. report, sync vs. durable tiers) with a checklist to run before treating
+any query as ground truth, and Section C covers what to say when a request falls outside the
+platform's scope entirely (e.g. docking).
 
 ## Setup
 

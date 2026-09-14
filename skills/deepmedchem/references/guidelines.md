@@ -1,303 +1,264 @@
-# Translating a prompt into a doable request
+# Chatbot guidelines
 
-A natural-language request often names a goal that sounds simple but isn't directly
-expressible as one DeepMedChem API call. Before writing code — as an example, or as a
-chatbot answering a live request — check feasibility first. Guessing at the literal
-wording and discovering the mismatch only after execution wastes a durable run, or worse,
-ships a result that looks plausible but silently answers a different question than the
-one asked.
+Three independent rulesets. **Section A** governs whether to engage with a request at all, and
+which resource to reach for first. **Section B** governs turning a chemistry request into a
+correct DeepMedChem API call. **Section C** governs what to tell the user when they ask for
+something outside the platform's scope. Neither B nor C explains *how* a rule was discovered —
+that evidence lives in `note.md`, referenced here only by issue number for anyone who wants the
+receipts.
 
-## Step 1 — Find the one dominant retrieval criterion
+## Section A — Scope gate and resource priority
 
-Every query against a combinatorial/enumerated database needs exactly one thing driving
-*which candidates get generated or retrieved*: a single similarity objective, a substructure
-pattern, a sampling distribution, or a set of hard constraints. If a prompt names two
-retrieval criteria that pull in different directions (see Step 4), only one of them can
-actually drive retrieval — the other has to become a report-only or post-processing step.
+**A1. Reject questions unrelated to chemistry or to using the DeepMedChem/CHEESE platform.**
+"Unrelated" means genuinely off-topic (general trivia, writing help, unrelated coding help,
+anything with no chemistry or platform-usage angle) — it does **not** mean "reject anything that
+isn't a search query." Product/account/support questions about the platform itself (pricing,
+API keys, which databases exist, how ordering works, plan/credit limits) stay in scope even
+though they aren't chemistry per se, since answering them is part of using DeepMedChem.
+*(Flag if a stricter chemistry-only boundary — excluding platform/support questions too — was
+actually intended; this rule currently assumes the permissive reading.)*
 
-## Step 2 — Similarity objectives are maximize-only
+**A2. Resource priority ladder — prefer the earliest rung that can answer the request.** When
+more than one resource could plausibly answer the same question, don't reach for a later rung
+just because it's more familiar or more general — the point is to keep answers grounded in the
+platform's own authoritative data rather than approximated from general knowledge (same
+principle behind Section C's "don't invent endpoints," and the earlier project instruction to
+prefer short `deepmedchem` calls over custom workarounds).
 
-`Selection.maximize_similarity(metric_id, reference=...)` only accepts `direction="maximize"`.
-This was confirmed against the live API, not just the SDK: hand-constructing a payload with
-`"direction": "minimize"` gets rejected server-side with `Input should be 'maximize'`. There is
-no way to ask the API to retrieve the *least* similar molecules by a given metric. A prompt
-asking to "minimize" or find the "lowest" similarity cannot be satisfied as a literal
-objective — it has to be reframed (see Step 4).
+1. **The `deepmedchem` package/API first** — for anything it actually covers (chemical-space
+   search, substructure search, sampling, selections/runs, ordering, predicted properties). This
+   is the authoritative source; Section B covers how to use it correctly.
+2. **Other packages already available in the runtime** — RDKit and pandas are always available;
+   umap-learn and scikit-learn are also confirmed available (`note.md`, example `006`). Use these
+   for anything `deepmedchem` doesn't provide directly: local descriptor computation, structural
+   checks (`HasSubstructMatch`, `ReplaceCore`), clustering, visualization. Prefer a local RDKit
+   computation on SMILES the API already returned over an external lookup for the same value.
+3. **Known public chemistry APIs** — currently confirmed: **OPSIN**
+   (`https://www.ebi.ac.uk/opsin/ws/`) for systematic/IUPAC-retained name → structure, and
+   **PubChem PUG-REST** for name → structure/property lookups on INN/trade/generic names OPSIN
+   doesn't cover, and for structure → name lookups of compounds already registered in PubChem.
+   Routing rule between the two (`note.md` Issue 7 addendum): try OPSIN first; on
+   `"status":"FAILURE"` (not necessarily a non-2xx HTTP status — check the field), fall back to
+   PubChem. Both are live external network dependencies, separate from the DeepMedChem API
+   itself — handle failures explicitly, don't assume either is always reachable. Add a new row
+   here, with the same "confirmed live" discipline as everywhere else in this document, before
+   treating any other API as available.
+4. **General internet search — last resort only.** Use it only when nothing above covers the
+   need (e.g. general chemistry background, context on a named compound), and only to supply
+   context — never as a substitute for the platform's own data on anything within its scope, and
+   never presented with the same authority as a value that actually came from `deepmedchem`,
+   RDKit, or a confirmed API.
 
-Valid `metric_id`s for a similarity objective (confirmed live): `rdkit.ecfp4_tanimoto`,
-`cheese.shape`, `cheese.electrostatic`. Two objectives can be declared on the same
-`Selection` and both validate, but there is no `weight` field — you cannot make one
-objective dominant and the other purely informational at the API level.
+**A3. When a request has more than one reasonable interpretation, ask — don't guess.** If a
+prompt could reasonably mean two (or more) materially different things, ask a clarifying
+question before proceeding, rather than silently picking one reading — the more common, more
+permissive, or most literal one — and presenting the result as if it were the only possible
+answer. This is the general form of B14's chemistry-specific case ("benzyl group" substituted vs.
+unsubstituted); the same test applies to any ambiguous reference, not just SMARTS fragments:
+- A compound name or identifier that matches more than one registered structure, tautomer, or
+  stereoisomer.
+- An unqualified database/release reference when more than one plausible match exists.
+- A ranking or filtering term left unqualified — "cheapest," "best," "most similar," "top" —
+  when the metric or tie-break isn't specified and different choices would return different
+  molecules.
+- Any other wording that genuinely supports more than one reading the prompt itself doesn't
+  disambiguate.
 
-## Step 3 — Optimize vs. filter vs. report are different mechanisms
+Ask when: (a) the term/reference genuinely supports more than one common reading, (b) the prompt
+doesn't specify which, and (c) the readings would actually diverge in the result — not just
+differ in principle. Don't hedge by guessing and returning an uncertain or partial answer instead
+of asking, and don't silently default when those three conditions hold.
+   never presented with the same authority as a value that actually came from `deepmedchem`,
+   RDKit, or a confirmed API.
 
-- **Optimize** (drives which candidates get returned/ranked): `maximize_similarity`,
+## Section B — Turning a prompt into a doable request
+
+A natural-language request often names a goal that isn't directly expressible as one API call.
+Check feasibility before writing code. Guessing at the literal wording and discovering the
+mismatch after execution wastes a durable run, or worse, silently answers a different question
+than the one asked.
+
+### Workflow — apply in order to every prompt
+
+**B1. Find the one dominant retrieval criterion.** Every query against a combinatorial/
+enumerated database needs exactly one thing driving *which candidates get generated or
+retrieved*: a similarity objective, a substructure pattern, a sampling distribution, or a set
+of hard constraints. If a prompt names two retrieval criteria pulling in different directions,
+only one can actually drive retrieval — the other becomes a report-only or post-processing step
+(B9, B12).
+
+**B2. Similarity objectives are maximize-only.** `Selection.maximize_similarity(metric_id,
+reference=...)` only accepts `direction="maximize"`; the server rejects `"minimize"` with
+`Input should be 'maximize'`. There is no way to retrieve the *least* similar molecules by a
+metric — reframe or say the request isn't achievable as stated. Valid `metric_id`s:
+`rdkit.ecfp4_tanimoto`, `cheese.shape`, `cheese.electrostatic`. Two objectives can be declared
+on one `Selection`, but there is no `weight` field to make one dominant.
+
+**B3. Optimize vs. filter vs. report are different mechanisms.**
+- *Optimize* (drives which candidates get returned/ranked): `maximize_similarity`,
   `acquire_predicted_property`.
-- **Filter** (hard, exact, pass/fail on the assembled product): `.where(property_id, ...)`,
-  `.require_preset(...)`, `.where_predicted_property(...)`. These only accept catalog
-  `property_id`s (RDKit descriptors like `rdkit.mol_wt`) or predicted-property endpoint ids —
-  never a similarity-to-reference metric. There is no way to threshold on Tanimoto or ESP
-  cosine via `.where()`.
-- **Report only** (returned for inspection, does not by itself affect selection):
-  `.include("properties", "objective_components", ...)`. A metric only appears here if it
-  was already declared as an objective — asking to "include" Tanimoto without declaring it
-  as an objective will not compute it.
+- *Filter* (hard, exact, pass/fail): `.where(property_id, ...)`, `.require_preset(...)`,
+  `.where_predicted_property(...)`. These accept only catalog `property_id`s (RDKit descriptors)
+  or predicted-property endpoint ids — never a similarity-to-reference metric.
+- *Report only* (returned for inspection, doesn't affect selection): `.include("properties",
+  "objective_components", ...)`. A metric appears here only if it was already declared as an
+  objective.
 
-There is no "compute the similarity of these two specific molecules" endpoint. The only way
-to get a metric's value for a specific candidate is for that metric to be an objective (or
-the search method) that generated or ranked that candidate.
+There is no endpoint to compute the similarity of two specific molecules on demand — a metric's
+value for a candidate only exists if that metric was the objective or method that
+generated/ranked it.
 
-## Step 4 — Anti-pattern: don't intersect two independent "most similar" retrievals
+**B4. Never intersect two independent "most similar" retrievals.** Running two top-K searches
+(one per metric) and intersecting the hit sets to find something dissimilar by one of them
+cannot work: a molecule that's genuinely dissimilar by metric A will never appear in a
+top-K-most-similar-by-A list. Intersecting two "most similar" lists only ever surfaces molecules
+similar by *both* — the opposite of what was asked (`note.md` Issue 2/4). Reframe: pick the one
+metric that should drive retrieval (B1), retrieve that list, and get the second metric's value
+for those same candidates by declaring it as a second objective, or accept it can't be obtained
+for arbitrary already-retrieved molecules and say so.
 
-A tempting-looking workaround for "find X that is dissimilar by metric A but similar by
-metric B" is to run two separate top-K searches (one per metric) and intersect the hit
-sets. **This cannot work and is not just contradictory, it's structurally wrong**: a
-molecule that is genuinely dissimilar by metric A will never appear in a top-K-most-similar-
-by-A list, by definition. Intersecting two "most similar" lists can only ever surface
-molecules that are similar by *both* metrics — the opposite of what was asked.
+**B5. Check the execution tier before finalizing.** Call
+`client.selections.estimate(validation.normalized_selection)` and read `execution_tier`. One
+similarity objective is often `"synchronous"`; two objectives (or other combinations) force
+`"durable"`, which must go through `Run.selection(...)` / `client.runs.create(...)`. This is a
+release-level capability — check it live, per database and release, don't guess.
 
-(We made exactly this mistake building an ESP/Tanimoto scaffold-hopping example: intersecting
-top-200 ESP hits with top-200 Tanimoto hits and picking the lowest-Tanimoto ones from that
-intersection returned molecules with Tanimoto 0.42–0.7 — a biased, moderately-high-similarity
-set, not genuinely dissimilar molecules.)
+**B6. Validate live before treating anything as ground truth.**
+`client.selections.validate(selection)` is cheap and safe and immediately surfaces an invalid
+`metric_id`, a rejected `direction`, or a malformed constraint. Always validate before
+estimating, and always estimate before creating.
 
-The correct reframing: pick the one metric that should drive retrieval (Step 1), retrieve
-that list, and get the second metric's value for those *same* candidates either by declaring
-it as a second objective in the same query (Step 2/3 caveats apply) or by accepting that it
-cannot be obtained for arbitrary already-retrieved molecules with this API and saying so.
+### Checks and pitfalls
 
-## Step 5 — Check the execution tier before finalizing an example
+**B7. Database capabilities vary — check, don't assume.** Query `dmc.catalog()["libraries"]`
+(or `dmc databases --json`) for the specific database named in a prompt before assuming it
+supports what's needed. Capability flags change over time (`note.md` Issue 3/14) — never trust a
+cached assumption, including one written down here.
 
-Call `client.selections.estimate(validation.normalized_selection)` and read
-`execution_tier`. One similarity objective against a database's current release is often
-`"synchronous"`; two objectives (or certain other combinations) force `"durable"`, which
-must go through `Run.selection(...)` / `client.runs.create(...)`. This is a hard release-
-level capability, not something to guess — check it live, per database and per release,
-before writing the "reference" call in an example.
+**B8. Before calling a `dmc.substructure()` rejection a real capacity ceiling, rule out a
+client-timeout misconfiguration.** `timeout_seconds=` sets the budget given to the *server*;
+the SDK's own `timeout=` kwarg (default 45s) caps the *client's* wait independently of that. If
+`timeout_seconds` is set higher than the client `timeout`, the client aborts with `ReadTimeout`
+before the server can respond, and that is easy to misread as `Interactive search capacity is
+currently full`. Always set `timeout=` comfortably above `timeout_seconds=` first (`note.md`
+Issue 15 — a query previously written off as categorically too complex succeeded 200/200 once
+this was fixed). Only after that should a repeated rejection be treated as a genuine
+complexity ceiling. There is no durable/batch alternative for substructure search — `Run` only
+supports `selection`/`selection_batch` kinds.
 
-## Step 6 — Validate live before treating anything as ground truth
+**B9. Substructure retrieval and a similarity score don't combine.** A substructure-search
+candidate set cannot be scored for similarity to a reference — there is no pairwise "score this
+molecule against a reference" endpoint (`note.md` Issue 4). When a prompt asks to retain a
+fragment *and* report/rank by similarity to the same reference, use the similarity search itself
+(`method="shape"`/`"esp"`/`"morgan"`) as the sole retrieval criterion, then check fragment
+retention locally with RDKit (`HasSubstructMatch`) — don't try to enforce retention server-side
+and reconcile two separate result sets afterward.
 
-`client.selections.validate(selection)` is cheap and safe (no candidates generated, no
-durable execution) and will immediately surface an invalid `metric_id`, a rejected
-`direction`, or a malformed constraint with a precise server error message. Always validate
-before estimating, and always estimate before creating — especially before committing code
-to a notebook meant to be a graded reference for chatbot testing.
+**B10. "Retain X, vary the rest" can be structurally impossible, independent of query design.**
+If loosening a query keeps returning the "variable" part unchanged, X and the rest may be one
+indivisible synthon in that database's reaction scheme, not two separately combinable building
+blocks (`note.md` Issue 4/6). Check the actual synthon decomposition
+(`dmc.search(..., include_synthons=True)`) before assuming the query needs more loosening — no
+query fixes an indivisible synthon; say so instead. This is database-specific: the same fragment
+pair can be separable in one database and fused in another.
 
-## Step 7 — Not every database supports the same operations
+**B11. Exact-synthon matching is a substructure-search alternative, not a substitute for a
+structural check.** When `dmc.substructure()` isn't viable (database doesn't support it, or the
+query is too complex even after B8), check whether the retained fragment is its own synthon and
+filter by exact `synthon_id` — this works off `include_synthons=True` on an ordinary similarity
+search. Two caveats: it can produce **false negatives**, since it only finds hits sharing one
+specific reaction's building-block boundary, missing the same structural pattern arising from a
+different disconnection (`note.md` Issue 14); and coverage is capped by whatever a similarity
+search's top-K surfaces, requiring **neighbor expansion** (re-querying using found matches as new
+references) to broaden it. When expanding, seed from multiple *deliberately varied* cappings of
+the retained fragment up front, not only from already-found hits — expanding solely from found
+hits can stay trapped in a single reaction/neighborhood and look like a real constraint when it
+isn't (`note.md` Issue 6). Prefer a real `dmc.substructure()` call, or a local RDKit structural
+check, whenever the actual question is "does this structure exist" rather than "was this
+specific building block used."
 
-Database capabilities vary — check `dmc.catalog()["libraries"]` (or `dmc databases --json`)
-for the specific database named in a prompt before assuming it supports what you need. This
-is a capability that can change: `enamine-real-v5a` previously reported
-`search_substructure: False` (a confirmed limitation as of 2026-09-10, see `note.md` Issue
-3), but as of 2026-09-11 all 7 catalog databases report `search_substructure: True`. Always
-check live rather than trusting a cached assumption (including this document) about what a
-given database supports.
+**B12. "Modify all decorations off a core" needs a per-branch check.** Retaining a core
+substructure guarantees the ring system stays; it does not guarantee every attached branch
+varies — ranking by overall similarity (shape, ESP, Tanimoto) silently conserves whichever
+branch contributes more to that score, even across hundreds of results (`note.md` Issue 11).
+Use `Chem.ReplaceCore(mol, core_smarts, labelByIndex=True)` + `Chem.GetMolFrags(...,
+asMols=True)` to split each candidate and the original query into R-group fragments at the
+retained core, and keep only candidates where none of the fragments match the query's
+corresponding fragment.
 
-Separately — and unaffected by the above — `dmc.substructure()` can appear to enforce a
-query-complexity ceiling on the interactive endpoint: a query built from several fused rings
-can fail with `Interactive search capacity is currently full` or a plain `ReadTimeout`. Before
-concluding a query is genuinely too complex, rule out a client-side timeout misconfiguration
-first (`note.md` Issue 15): `timeout_seconds=` only sets the budget you tell the *server* it
-may take; the SDK's own `timeout=` kwarg (default 45s) caps how long the *client* will wait,
-independently. Requesting `timeout_seconds=60` while leaving `timeout` at its 45s default
-means the client gives up with `ReadTimeout` before the server can respond — easy to
-misattribute as "too complex for the endpoint" (this happened for real, see Issue 4/14 vs.
-15: an exact tricyclic query written off as categorically too complex turned out to succeed
-200/200 every time once `timeout=90.0` was passed alongside `timeout_seconds=60`). Always set
-`timeout=` comfortably above `timeout_seconds=` before treating a rejection as a genuine
-capacity ceiling — and only after that, "does this database support substructure search" and
-"is this particular query small enough for the interactive endpoint" remain two separate
-checks to confirm before relying on `dmc.substructure()` for a given prompt.
+**B13. An unbracketed SMARTS atom matches more than intended.** A plain atom (`C`, `N`, ...)
+doesn't constrain hydrogen count or substitution beyond what's drawn — it matches "at least
+this," not "exactly this." Use an explicit hydrogen count (e.g. `[CH2]`) for a specific group
+like a methylene bridge. Validating a SMARTS fragment against one known true-positive reference
+molecule is necessary but not sufficient — also spot-check actual live search hits, since a
+reference molecule's own instance of the group is often the well-formed case the pattern is too
+permissive around (`note.md` Issue 12/13). A molecule validated for one reading of a group isn't
+necessarily valid for a stricter reading of the same nominal group — re-check the reference when
+tightening a definition.
 
-## Step 8 — Substructure search and a similarity score don't combine, and "retain X" can be
-impossible for reasons that have nothing to do with the API
+**B14. When a fragment name has more than one reasonable chemical reading, ask — don't silently
+pick one.** The chemistry-specific case of A3's general rule. Chemical shorthand ("benzyl group,"
+"quinazoline core," "phenyl ring") often has more than one defensible reading, and different
+readings can produce materially different result sets (`note.md` Issue 13: 193 vs. 165 of 200
+hits under two readings of "benzyl"). Ask whenever: the term names a substructure chemists
+routinely draw both substituted and unsubstituted; the prompt doesn't say whether substitution
+is allowed; and the two readings would actually diverge on real data, not just in principle.
 
-A prompt can ask to retain a fragment via substructure search *and* report/rank by a
-similarity score (e.g. shape or ESP cosine) to the same reference. These don't combine:
-a substructure-search candidate set cannot be scored for similarity to a reference —
-confirmed live, intersecting a 200-hit substructure search with a 200-hit similarity search
-on the same query returned zero overlap (same root cause as Step 4: no pairwise "score this
-molecule against a reference" endpoint). Complex multi-ring substructure queries can also
-appear to be rejected outright as too costly for the interactive endpoint (`Interactive
-search capacity is currently full`) — but check for a client-side timeout misconfiguration
-first (Step 7, `note.md` Issue 15) before concluding that; there is no durable/batch
-alternative for substructure search — `Run` only supports `selection`/`selection_batch`
-kinds.
+### Checklist
 
-Working alternative when a real per-candidate similarity score is required: use that
-similarity search itself (`method="shape"`/`"esp"`/`"morgan"`) as the sole retrieval
-criterion, then check locally with RDKit (`HasSubstructMatch`) what its hits structurally
-retain, rather than trying to enforce the retained fragment server-side and reconcile two
-separate result sets afterward.
+- [ ] Is this request in scope at all, and did it start at the top of the resource priority
+      ladder rather than skipping to a later rung? (A1, A2)
+- [ ] Does this request have more than one reasonable interpretation that would actually change
+      the result? If so, ask rather than guess. (A3)
+- [ ] What is the *single* criterion actually driving candidate retrieval? (B1)
+- [ ] Any other named criteria — optimizable, filterable, or report-only, and does the API
+      support that combination? (B3)
+- [ ] Does the prompt ask to "minimize"/"least"/"most different" on a similarity metric? That's
+      infeasible as a direct objective — reframe or say so. (B2)
+- [ ] Would satisfying this require intersecting two independent "most similar" retrievals? If
+      so, stop and reframe. (B4)
+- [ ] Sync or durable? Confirmed via `estimate()`, not assumed. (B5)
+- [ ] Does the target database actually support the operation needed? Checked via
+      `dmc.catalog()`, not assumed. (B7)
+- [ ] Before treating a `dmc.substructure()` rejection as a real capacity ceiling: is
+      `timeout=` set above `timeout_seconds=`? (B8)
+- [ ] Does the prompt need both a substructure-retained candidate set *and* a similarity score
+      to the same reference? These don't combine — use the similarity search as sole retrieval
+      and check retention locally. (B9)
+- [ ] If "retain X, vary the rest" keeps returning the rest unchanged, check whether X and the
+      rest are one indivisible synthon — no query fixes that. (B10)
+- [ ] If substructure search isn't viable, does exact-`synthon_id` matching apply — and are
+      results labeled with which candidates carry a score vs. the original query vs. an
+      expansion anchor? (B11)
+- [ ] Does the prompt ask to vary *multiple* substituent positions off a retained core? Check
+      each branch individually with `Chem.ReplaceCore`. (B12)
+- [ ] Any SMARTS fragment meant to mean a specific group uses an explicit hydrogen count, and
+      was spot-checked against live hits, not just a reference molecule? (B13)
+- [ ] Does a named fragment have more than one reasonable chemical reading that would produce
+      different result sets? If so, ask rather than silently picking one. (B14)
+- [ ] Any post-processing uses only fields the API actually returned, or values computed
+      locally with RDKit on SMILES the API already returned — never an invented or approximated
+      value.
+- [ ] If the prompt, taken literally, isn't achievable, say so plainly and propose the closest
+      achievable reformulation — don't silently substitute a different query and present it as
+      satisfying the original request.
 
-Separately: if a "retain fragment X, vary the rest" query keeps returning the same
-supposedly-variable part unchanged no matter how the query is loosened, the cause may be the
-combinatorial library itself, not the query — X and the "rest" can be one indivisible synthon
-in that database's reaction scheme, not two separately combinable building blocks. Confirmed
-in one case by checking the actual synthons: a substructure query requiring only the fragment
-meant to be retained (with no constraint at all on the part meant to vary) still returned
-every hit with that "variable" part unchanged. No query design fixes this — say so, rather
-than assuming the query needs more loosening.
+## Section C — Capability boundaries and scope
 
-## Step 9 — Exact synthon matching: a substructure-search alternative, with a coverage caveat
-and a correctness caveat
+When a user asks for something the platform doesn't do, state the limitation plainly and offer
+the closest real alternative — don't imply the capability exists, and don't just say no without
+the workaround. This list is seeded with confirmed facts; add a row only once the "reality"
+column has been checked against the live API or product docs, the same discipline as Section B.
 
-When `dmc.substructure()` isn't viable for a "retain this fragment, vary the rest" prompt —
-either the database doesn't support it, or (Step 7) the query is too complex for the
-interactive endpoint even on a database that does — check whether the retained fragment is
-its own standalone synthon: `dmc.search(..., include_synthons=True)` works regardless of
-substructure support (it's a similarity search, not the substructure endpoint) and returns
-each hit's exact per-building-block decomposition — `{"slot": int, "synthon_id": str,
-"smiles": str}`, with a `[U]` dummy atom marking the attachment point.
+| User asks for | Reality | What to tell them |
+| --- | --- | --- |
+| Docking / binding-pose prediction | No docking endpoint exists anywhere in the public API — the only operations are `search`, `search_cheese`, `search_substructure`, `sample`, `catalog`, `selections`, and `runs` (`Run` supports only `selection`/`selection_batch` kinds). | CHEESE doesn't run docking. Export the hit list as SMILES (`.to_sdf()`, `.to_csv()`, or `.to_pandas()`) for use in their own docking pipeline. |
+| A guaranteed / measured ADMET property (e.g. "molecules with safe hERG") | `acquire_predicted_property` only reranks and trims a similarity shortlist by a predicted value — an `experimental-acquisition-only` prediction, not a measurement. Only `.where(...)` / `.require_preset(...)` enforce a literal threshold, and only on exact assembled-product RDKit values. | Never describe a predicted-property result as measured, safe, or as meeting a threshold. If a literal pass/fail threshold is what's wanted, use `.where`/`.require_preset` on an RDKit property instead, and say plainly when the request is really asking for a prediction-based reranking. |
+| Placing an order directly through the chatbot/API | `dmc order` / `prepare_order` never transmits anything — it only writes a local `email.txt` and a price-free `molecules.csv` per vendor and opens a mail draft. | Orders and quotes go through the vendor by email; the tooling prepares that email, it doesn't send it or place the order. |
+| A batch-search, bulk-pricing, or other endpoint not in the documented set | The public v2 surface is exactly `search`, `search_cheese`, `search_substructure`, `sample`, `catalog`, `selections`, `runs` — nothing else. | Don't invent or imply an endpoint that isn't in that list. If the request needs something outside it, say the capability doesn't currently exist rather than approximating a call that looks plausible. |
+| A database/chemical space not searchable through this SDK | Some databases in the catalog are currently available only through the CHEESE web UI, not yet through the Python package/API (check `dmc.catalog()["libraries"]` and the availability notes for the specific database, since this changes over time). | Confirm via the current catalog before answering either way — "not available via this SDK" is not the same claim as "not available on CHEESE at all." |
 
-**Correctness caveat, confirmed live:** exact-`synthon_id` matching is *not* equivalent to a
-structural-retention check, and can produce false negatives. It only finds hits that share
-one specific reaction's building-block boundary — if the same final structural pattern can
-also arise from a different reaction/disconnection in that database, exact-synthon matching
-will miss it entirely. Confirmed while rebuilding example `007`: exact-synthon matching found
-zero instances of a particular fixed-fragment pattern even after inspecting 400+ hits, but a
-plain RDKit structural check (explicit-hydrogen SMARTS, `[cH]` on every ring position that
-must stay unsubstituted — see Step 11/12) found matches immediately from the very same
-search. Prefer `dmc.substructure()` when query complexity allows it (Step 7), or a local
-RDKit structural check on similarity-search hits (Step 8) otherwise; reach for exact-synthon
-matching only when the question genuinely is "was this specific building block used," not as
-a general substitute for "does this structure exist."
-
-Two things to check before relying on this:
-
-- **Is the fragment actually separable in this database?** Different databases decompose the
-  same scaffold differently. Confirmed live: for one tricyclic+piperazine scaffold,
-  `freedom-space-5` fuses both into one indivisible synthon (no query can vary the piperazine
-  there — see Step 8), while `enamine-real-v5a` keeps them as two separate synthons for the
-  same molecule. Check the actual decomposition per database before assuming either way.
-- **Coverage is capped by whatever a similarity search's top-K surfaces** — there is no
-  "list every product built from synthon X" endpoint, and none of the request payloads sent
-  by `search`/`search_cheese`/`search_substructure`/`sample` accept a synthon-level search
-  parameter (`dmc.catalog()` also lists no synthon-level `database_id`). A single top-200
-  similarity search may only turn up a handful of exact-synthon matches. **Neighbor
-  expansion** helps: re-run the same search using a few already-found exact-synthon matches
-  as new reference SMILES — since similarity ranking is anchor-relative, each anchor's own
-  neighborhood surfaces a different slice of same-synthon molecules (in one case, 4 extra
-  searches took 12 matches to 278). But this means only hits found directly from the
-  *original* query carry a similarity score that's actually "vs. the original query" — hits
-  found via an expansion anchor have a real score, just relative to that anchor. Report which
-  reference each score is relative to; don't present them as uniformly comparable.
-
-**Pitfall: neighbor expansion can be badly biased, and cross-checking with a second metric
-doesn't catch it.** Expanding only from already-found hits can never escape the reaction/
-neighborhood those hits came from — if everything found so far shares one `reaction_id`,
-every expansion anchor does too, so the search stays trapped there. This can look like a real
-structural constraint: checking a second, independent similarity metric (e.g. morgan
-alongside shape) from the *same* query will often agree, since both are anchored to the same
-molecule — agreement between metrics only rules out metric-specific bias, not query-anchoring
-bias. The actual test is to seed the search with a deliberately *different* reference molecule
-(e.g. the retained fragment capped some other way, not derived from any hit found so far)
-before concluding a variable part isn't actually varying. In one case this surfaced a second
-reaction using the identical retained synthon, with a class of products (piperazine-free
-analogues) that pure neighbor expansion never found across hundreds of hits.
-
-## Step 10 — "Modify all decorations off a core" needs a per-branch check, not just
-core retention plus a similarity ranking
-
-Retaining a core substructure (Step 8/9) guarantees the ring system stays; it does **not**
-guarantee every attached branch actually varies. Ranking candidates by overall similarity
-(shape, ESP, Tanimoto — any of them) will silently conserve whichever branch contributes
-more to that similarity score, even across hundreds of results, because changing that branch
-drops a candidate out of the high-similarity pool faster than changing a less-influential
-branch does. A prompt asking to "modify all decorations" or vary multiple substituent
-positions independently needs an explicit per-branch difference check, not just "core
-retained + high similarity."
-
-The check: `Chem.ReplaceCore(mol, core_smarts, labelByIndex=True)` followed by
-`Chem.GetMolFrags(..., asMols=True)` splits a molecule into its R-group fragments at the
-retained core. Do this for the original query and for each candidate, and keep only
-candidates where **none** of the fragments match the query's corresponding fragment — i.e.
-every branch position genuinely differs. (Found live: a lapatinib-analogue search that
-retained its quinazoline core and ranked by shape+ESP kept one branch identical across every
-one of the top 25 results, until this check was added.)
-
-## Step 11 — an unbracketed SMARTS atom matches more than the intended functional group
-
-A plain SMARTS atom (`C`, `N`, ...) doesn't constrain hydrogen count or substitution beyond
-what's explicitly drawn — it matches "at least this," not "exactly this." Writing
-`Cc1ccccc1` to mean "a benzyl group" actually matches *any* non-aromatic carbon attached to
-a phenyl ring: an amide carbonyl carbon, a vinyl carbon, anything. Confirmed live — that
-pattern matched `O=C(NCC(F)F)c1cccc(-c2nnn[nH]2)c1`, a molecule with no benzyl group at all,
-because the amide's carbonyl carbon satisfied it. Use an explicit hydrogen count (`[CH2]`)
-whenever the intent is a specific group like a methylene bridge, not "any atom here."
-
-Validating a fragment SMARTS against one known true-positive reference molecule is
-necessary but not sufficient — a reference molecule's own instance of the group is often
-exactly the well-formed case the pattern is too permissive around, so it passes the
-reference check and still produces false positives elsewhere. Also spot-check a few actual
-live search hits for whether they contain the intended group, not just whether they match
-the pattern.
-
-Note also that a molecule validated as a true positive for one reading of a group isn't
-necessarily valid for a *stricter* reading of the same nominal group — losartan validated
-"contains a benzyl-like CH2-aryl linkage" but turned out not to have a plain, unsubstituted
-benzyl group at all (its CH2 connects to a biphenyl system, para-substituted by a second
-ring), so it correctly fails a stricter "no ring substitution allowed" version of the same
-pattern. Re-check the reference molecule itself when tightening a definition, don't assume
-it still applies.
-
-## Step 12 — When a substituent/fragment name has more than one reasonable chemical
-reading, ask — don't silently pick one
-
-Chemical shorthand in a prompt ("benzyl group," "quinazoline core," "phenyl ring") often has
-more than one defensible reading, and different readings can produce materially different
-result sets — not a rounding difference, a different set of molecules. Confirmed live:
-"benzyl group" read loosely (a CH2 bridging to any phenyl-bearing carbon, substituents on
-the ring allowed) vs. strictly (CH2 bridging to a completely unsubstituted phenyl) changed
-which molecules passed a property filter by a large margin (193 vs. 165 out of the same 200
-structural matches) — genuinely different chemistry, not noise.
-
-**When translating an ambiguous substituent/fragment description into a query, the correct
-behavior is to ask a clarifying question before committing to an interpretation**, rather
-than silently choosing the more permissive (or any other) reading and presenting the result
-as if it were the only possible one. This applies whether the query ends up expressed as
-SMARTS, an exact-synthon match, or anything else — the ambiguity is in the chemistry the
-prompt names, not in how it gets encoded. Reasonable signals that a term needs
-disambiguating rather than a best-guess default: the term names a common substructure that
-chemists routinely draw both substituted and unsubstituted (benzyl, phenyl, tolyl...); the
-prompt doesn't explicitly say whether substitution is allowed; and a quick check shows the
-two readings actually diverge on real data (as above), not just in principle.
-
-## Checklist
-
-- [ ] What is the *single* criterion actually driving candidate retrieval?
-- [ ] Any other named criteria — are they optimizable (objective), filterable (`.where`/
-      preset/predicted-property), or report-only, and does the API support that combination?
-- [ ] Does anything ask for "minimize", "least", "lowest", or "most different" on a
-      similarity metric? That's infeasible as a direct objective — reframe or say so.
-- [ ] Would satisfying this require intersecting two independent "most similar" retrievals?
-      If so, stop — reframe using Step 4's guidance instead.
-- [ ] Sync or durable? Confirmed via `estimate()`, not assumed.
-- [ ] Any post-processing (sorting, secondary selection) uses only fields the API actually
-      returned, or values computed locally with RDKit on SMILES the API already returned
-      (confirmed available alongside pandas in the chatbot's runtime) — never a value
-      invented or approximated without a real computation behind it.
-- [ ] Does the prompt need both a substructure-retained candidate set *and* a similarity
-      score to the same reference? These don't combine (Step 8) — use the similarity search
-      as the sole retrieval criterion and check retention locally with RDKit instead.
-- [ ] If "retain X, vary the rest" keeps returning the "rest" unchanged no matter how the
-      query is loosened, check whether X and the rest are one indivisible synthon in that
-      database — no query fixes that, say so instead (Step 8).
-- [ ] If substructure search isn't available on the target database, check whether the
-      retained fragment is its own synthon and use exact `synthon_id` matching plus neighbor
-      expansion instead (Step 9) — but label which candidates have a real score vs. the
-      original query vs. an expansion anchor.
-- [ ] If the prompt, taken literally, is not achievable with this API, say so plainly and
-      propose the closest achievable reformulation — don't silently substitute a different
-      query and present it as satisfying the original request.
-- [ ] Does the specific database named in the prompt actually support the operation needed
-      (e.g. substructure search)? Check `dmc.catalog()`, don't assume.
-- [ ] Does the prompt ask to vary *multiple* substituent positions off a retained core?
-      Check each branch individually with `Chem.ReplaceCore` (Step 10) — ranking by overall
-      similarity alone will silently conserve whichever branch matters most to that score.
-- [ ] Any SMARTS fragment meant to mean a specific group (e.g. a methylene bridge) uses an
-      explicit hydrogen count (`[CH2]`), not a bare atom — and was spot-checked against a
-      few live hits for false positives, not just a reference molecule (Step 11).
-- [ ] Does a named substituent/fragment have more than one reasonable chemical reading
-      (substituted vs. unsubstituted, which tautomer, etc.)? If the readings would actually
-      produce different result sets, ask the user rather than silently picking one (Step 12).
+*(Open item: this table only covers what's been verified against the SDK/API and existing docs.
+Retrosynthesis/synthesis-planning claims, real-time stock/inventory confirmation, and custom
+pricing negotiation haven't been checked yet — add rows once confirmed, don't answer those from
+assumption in the meantime.)*
