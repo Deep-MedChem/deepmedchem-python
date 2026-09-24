@@ -72,3 +72,35 @@ def test_order_csv_abbreviation_and_fallback(tmp_path):
     assert read_order_csv(path)[0].database_id == "enamine-real-v5a"
     path.write_text("smiles\nCCO\n")
     assert read_order_csv(path, database="freedom")[0].database_id == "freedom-space-5"
+
+
+@pytest.mark.parametrize(
+    "alias,expected",
+    [
+        ("molport", "MOLPORT"),
+        ("mcule-in-stock", "MCULE-IN-STOCK"),
+        ("MCULE-FULL", "MCULE-FULL"),
+        ("chemspace-screening", "CHEMSPACE-SCREENING"),
+        ("zinc15", "ZINC15"),
+        ("enamine-real", "ENAMINE-REAL"),
+        ("chemspace-5b-ro5", "CHEMSPACE-5B-RO5"),
+        ("explore-enumerated", "EXPLORE-ENUMERATED"),
+        ("synple-4b", "SYNPLE-4B"),
+        ("xtalpi", "XTALPI"),
+        ("chemriya", "CHEMRIYA"),
+        ("molecule-one", "MOLECULE-ONE"),
+        ("enamine-aa", "ENAMINE-AA"),
+    ],
+)
+def test_classic_database_aliases_resolve_to_cheese_ids(alias, expected):
+    from deepmedchem.databases import is_classic_database, resolve_database
+
+    assert resolve_database(alias) == expected
+    assert is_classic_database(expected)
+
+
+def test_platform_databases_are_not_classic():
+    from deepmedchem.databases import is_classic_database
+
+    assert not is_classic_database("enamine-real-v5a")
+    assert not is_classic_database("Private-Space")
