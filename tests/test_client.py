@@ -80,8 +80,11 @@ def test_client_attribution_is_configurable() -> None:
 def test_safe_request_retries_transient_service_response() -> None:
     attempts = 0
 
-    def handler(_request: httpx.Request):
+    def handler(request: httpx.Request):
         nonlocal attempts
+        if request.url.path != "/api/v2/catalog":
+            # catalog() also asks classic CHEESE for its databases; not under test here.
+            return httpx.Response(200, json={})
         attempts += 1
         if attempts == 1:
             return httpx.Response(503, json={"error": {"code": "overloaded"}})
@@ -471,3 +474,187 @@ def test_usage_calls_the_account_service_with_the_same_key() -> None:
         "https://account.example.test/rate-limit/status"
     ] * 2
     assert captured[0].headers["x-api-key"] == "scoped-token"
+
+
+# --- Enumerated / in-stock databases served by classic CHEESE -----------------
+
+CLASSIC_MOLSEARCH = {
+    "canonicalized_query": "CC(=O)Oc1ccccc1C(=O)O",
+    "remarks": "",
+    "neighbors": [
+        {"smiles": "CC(=O)Oc1ccccc1C(=O)O", "id": "MOLPORT-001-000-001", "database": "MOLPORT",
+         "db_id": "1", "similarity": 1.0, "Morgan Tanimoto": 1.0},
+        {"smiles": "CC(=O)Oc1ccccc1C(=O)OC", "id": "MOLPORT-002-000-002", "database": "MOLPORT",
+         "db_id": "2", "similarity": 0.62, "Morgan Tanimoto": 0.62},
+    ],
+    "search_info": {"search_type": "morgan", "db_names": "MOLPORT", "search_id": "abc", "count": 2},
+}
+
+
+def _classic_client(handler, **overrides):
+    options = dict(
+        api_key="ck_test",
+        api_url="https://api.example.test",
+        account_url="https://account.example.test",
+        transport=httpx.MockTransport(handler),
+    )
+    options.update(overrides)
+    return options
+
+
+def test_classic_database_search_goes_to_cheese_molsearch() -> None:
+    seen = []
+
+    def handler(request: httpx.Request):
+        seen.append(request)
+        return httpx.Response(200, json=CLASSIC_MOLSEARCH)
+
+    with Client(**_classic_client(handler)) as client:
+        result = client.search("CC(=O)Oc1ccccc1C(=O)O", database="molport", limit=2)
+
+    assert len(seen) == 1
+    request = seen[0]
+    assert request.method == "GET"
+    assert request.url.host == "account.example.test"
+    assert request.url.path == "/molsearch"
+    params = dict(request.url.params.multi_items())
+    assert params["search_input"] == "CC(=O)Oc1ccccc1C(=O)O"
+    assert params["search_type"] == "morgan"
+    assert params["db_names"] == "MOLPORT"
+    assert params["n_neighbors"] == "2"
+    assert params["descriptors"] == "false"
+    assert params["properties"] == "false"
+    assert request.headers["x-api-key"] == "ck_test"
+
+    assert isinstance(result, SearchResult)
+    assert list(result) == ["CC(=O)Oc1ccccc1C(=O)O", "CC(=O)Oc1ccccc1C(=O)OC"]
+    assert result.scores == [1.0, 0.62]
+    assert result.ids == ["MOLPORT-001-000-001", "MOLPORT-002-000-002"]
+    assert result.ranks == [1, 2]
+    assert result.database_id == "MOLPORT"
+    assert result.method == "morgan"
+    assert result.meta.returned == 2
+    assert result.hits[0].extra["db_id"] == "1"
+    assert result.prices == [None, None]
+
+
+@pytest.mark.parametrize(
+    "method,expected",
+    [("shape", "espsim_shape"), ("esp", "espsim_electrostatic")],
+)
+def test_classic_database_shape_and_esp_map_to_cheese_search_types(method, expected) -> None:
+    seen = []
+
+    def handler(request: httpx.Request):
+        seen.append(request)
+        return httpx.Response(200, json=CLASSIC_MOLSEARCH)
+
+    with Client(**_classic_client(handler)) as client:
+        result = client.search("CCO", database="MCULE-IN-STOCK", method=method)
+    params = dict(seen[0].url.params.multi_items())
+    assert seen[0].url.path == "/molsearch"
+    assert params["search_type"] == expected
+    assert params["db_names"] == "MCULE-IN-STOCK"
+    assert result.method == method
+
+
+def test_classic_database_limit_is_capped_at_cheese_maximum() -> None:
+    def handler(request: httpx.Request):  # pragma: no cover - must not be reached
+        raise AssertionError("no request expected")
+
+    with Client(**_classic_client(handler)) as client:
+        with pytest.raises(ValueError, match="100"):
+            client.search("CCO", database="molport", limit=101)
+
+
+def test_classic_database_rejects_substructure_and_sampling() -> None:
+    def handler(request: httpx.Request):  # pragma: no cover - must not be reached
+        raise AssertionError("no request expected")
+
+    with Client(**_classic_client(handler)) as client:
+        with pytest.raises(DeepMedChemError) as substructure:
+            client.search_substructure("C(=O)N", database="molport")
+        with pytest.raises(DeepMedChemError) as sample:
+            client.sample(database="molport")
+    assert substructure.value.code == "unsupported_operation"
+    assert "MOLPORT" in str(substructure.value)
+    assert sample.value.code == "unsupported_operation"
+
+
+def test_platform_databases_still_use_platform_search() -> None:
+    seen = []
+
+    def handler(request: httpx.Request):
+        seen.append(request)
+        return httpx.Response(200, json={"results": []})
+
+    with Client(**_classic_client(handler)) as client:
+        client.search("CCO", database="enamine")
+    assert seen[0].url.host == "api.example.test"
+    assert seen[0].url.path == "/api/v2/search"
+
+
+def test_async_classic_database_search_goes_to_cheese_molsearch() -> None:
+    seen = []
+
+    def handler(request: httpx.Request):
+        seen.append(request)
+        return httpx.Response(200, json=CLASSIC_MOLSEARCH)
+
+    async def run():
+        async with AsyncClient(**_classic_client(handler)) as client:
+            result = await client.search("CCO", database="molport", method="shape", limit=5)
+            with pytest.raises(DeepMedChemError):
+                await client.sample(database="molport")
+            return result
+
+    result = asyncio.run(run())
+    assert seen[0].url.path == "/molsearch"
+    params = dict(seen[0].url.params.multi_items())
+    assert params["search_type"] == "espsim_shape"
+    assert params["n_neighbors"] == "5"
+    assert result.database_id == "MOLPORT"
+    assert len(result) == 2
+
+
+def test_catalog_merges_classic_databases_from_cheese() -> None:
+    def handler(request: httpx.Request):
+        if request.url.path == "/api/v2/catalog":
+            return httpx.Response(200, json={"libraries": [{"database_id": "enamine-real-v5a"}]})
+        assert request.url.host == "account.example.test"
+        assert request.url.path == "/available_databases_full"
+        return httpx.Response(200, json={
+            "MOLPORT": {"Vendor": "Molport", "Website": "https://molport.com/",
+                        "Email": "sales@molport.com", "Number of molecules": "5900000"},
+            "ZINC15": {"Vendor": "N/A"},
+            "MY-PRIVATE-DB": "custom_db",
+            "ENAMINE-REAL-V5A-SYNTHON": {"Vendor": "Enamine", "Number of molecules": "1"},
+        })
+
+    with Client(**_classic_client(handler)) as client:
+        catalog = client.catalog()
+
+    ids = [library["database_id"] for library in catalog["libraries"]]
+    assert ids == ["enamine-real-v5a", "MOLPORT", "ZINC15"]
+    molport = catalog["libraries"][1]
+    assert molport["served_by"] == "cheese"
+    assert molport["product_count"] == 5900000
+    assert molport["vendor"] == "Molport"
+    assert molport["capabilities"] == {
+        "search": True, "search_cheese": ["shape", "esp"], "search_substructure": False,
+        "sample": False, "selections": False,
+    }
+    assert molport["pricing"] == {"available": False}
+    assert catalog["libraries"][2]["product_count"] is None
+
+
+def test_catalog_survives_cheese_outage() -> None:
+    def handler(request: httpx.Request):
+        if request.url.path == "/api/v2/catalog":
+            return httpx.Response(200, json={"libraries": []})
+        return httpx.Response(503, json={"detail": "down"})
+
+    with Client(**_classic_client(handler, max_retries=0)) as client:
+        with pytest.warns(RuntimeWarning, match="CHEESE Search catalogue unavailable"):
+            catalog = client.catalog()
+    assert catalog == {"libraries": []}
