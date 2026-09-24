@@ -119,6 +119,32 @@ with Client() as client:
     matches = client.search_substructure("C(=O)N", database="enamine", limit=20)
 ```
 
+## Enumerated and in-stock catalogues
+
+Classic CHEESE Search serves the enumerated make-on-demand libraries and the in-stock
+catalogues (Enamine REAL, the Chemspace 5B sets, XtalPi, Synple, Chemriya, Molecule.one,
+eXplore, Mcule, Molport, Chemspace screening, ZINC15). The SDK reaches them with the same API
+key: `search` routes those databases to CHEESE Search's synchronous `/molsearch`, and
+`catalog()` / `dmc databases` list them next to the platform spaces.
+
+```python
+from deepmedchem import Client
+
+with Client() as client:
+    hits = client.search("CC(=O)Oc1ccccc1C(=O)O", database="molport", method="shape", limit=50)
+    hits.to_csv("molport_hits.csv")
+```
+
+```bash
+dmc search "CC(=O)Oc1ccccc1C(=O)O" -d mcule-in-stock -n 20
+```
+
+Limits on these catalogues: `limit` is 1–100 per call (CHEESE Search answers larger requests only
+through its job API), results carry `similarity` scores but no price estimates, and
+`search_substructure`, `sample`, selections and runs raise `DeepMedChemError(code="unsupported_operation")`.
+Use the [CHEESE UI](https://cheese.deepmedchem.com/) for those workflows. If CHEESE Search is
+unreachable, `catalog()` returns the platform spaces alone and emits a `RuntimeWarning`.
+
 ## DeepMedChem All Chemical Spaces
 
 Snapshot: September 11, 2026. Use the abbreviation in `database="enamine"` or `dmc search ... -d enamine`.
@@ -133,13 +159,26 @@ Full database IDs remain supported. Abbreviations resolve to the releases listed
 | `cheminfinita` | Make-On-Demand | 794.2B | 5–8 weeks | 55–85% | - | sales@otavachemicals.com | [🔗](https://www.otavachemicals.com/) |
 | `spacem1` | Make-On-Demand | 1.5B | 2–6 weeks | >85% | - | hello@molecule.one | [🔗](https://molecule.one/) |
 | `vast` | Make-On-Demand | 6.8B | 2–4 weeks | 85%+ | yes | VAST@XtalPi.com | [🔗](https://aifchem.com/) |
-| `mcule-in-stock` | In-Stock | 7.2M | Immediate | 100% | yes | order@mcule.com | [🔗](https://mcule.com/) |
-| `mcule-full` | In-Stock | 140.4M | Immediate | 100% | yes | order@mcule.com | [🔗](https://mcule.com/) |
-| `molport` | In-Stock | 5.9M | Immediate | 100% | yes | sales@molport.com | [🔗](https://molport.com/) |
-| `chemspace-screening` | In-Stock | 7.5M | Immediate | 100% | yes | sales@chem-space.com | [🔗](https://chem-space.com/) |
-| `zinc15` | Other | 697.1M | No availability info | N/A | unknown | N/A | [🔗](https://zinc15.docking.org/) |
+| `enamine-real` | Make-On-Demand (enumerated)[^cheese-search] | 9.56B | 3–4 weeks | >80% | - | libraries@enamine.net | [🔗](https://enamine.net/compound-collections/real-compounds) |
+| `chemspace-5b-ro5` | Make-On-Demand (enumerated)[^cheese-search] | 5.0B | 5–6 weeks | >80% | - | sales@chem-space.com | [🔗](https://chem-space.com/) |
+| `chemspace-5b-beyond-ro5` | Make-On-Demand (enumerated)[^cheese-search] | 5.0B | 5–6 weeks | >80% | - | sales@chem-space.com | [🔗](https://chem-space.com/) |
+| `chemspace-5b-freedom` | Make-On-Demand (enumerated)[^cheese-search] | 5.0B | 5–6 weeks | >80% | - | sales@chem-space.com | [🔗](https://chem-space.com/freedom-space) |
+| `xtalpi` | Make-On-Demand (enumerated)[^cheese-search] | 4.7B | 2–4 weeks | 85%+ | - | VAST@XtalPi.com | [🔗](https://aifchem.com/) |
+| `synple-4b` | Make-On-Demand (enumerated)[^cheese-search] | 3.9B | 3–4 weeks | >85% | - | sales@emolecules.com | [🔗](https://www.emolecules.com/products/explore) |
+| `chemriya` | Make-On-Demand (enumerated)[^cheese-search] | 1.4B | Ask vendor | N/A | - | info@chemriya.com | [🔗](https://www.otavachemicals.com/) |
+| `molecule-one` | Make-On-Demand (enumerated)[^cheese-search] | 68.0M | 2–6 weeks | >85% | - | hello@molecule.one | [🔗](https://molecule.one/) |
+| `explore-enumerated` | Make-On-Demand (enumerated)[^cheese-search] | 54.8M | 3–4 weeks | >85% | - | sales@emolecules.com | [🔗](https://www.emolecules.com/products/explore) |
+| `explore-diverse` | Make-On-Demand (enumerated)[^cheese-search] | 11.4M | 3–4 weeks | >85% | - | sales@emolecules.com | [🔗](https://www.emolecules.com/products/explore) |
+| `enamine-aa` | Make-On-Demand (enumerated)[^cheese-search] | 373.8K | 3–4 weeks | >80% | - | info@enamine.net | [🔗](https://enamine.net/) |
+| `mcule-in-stock` | In-Stock[^cheese-search] | 7.2M | Immediate | 100% | yes | order@mcule.com | [🔗](https://mcule.com/) |
+| `mcule-full`[^cheese-search] | In-Stock | 140.4M | Immediate | 100% | yes | order@mcule.com | [🔗](https://mcule.com/) |
+| `molport`[^cheese-search] | In-Stock | 5.9M | Immediate | 100% | yes | sales@molport.com | [🔗](https://molport.com/) |
+| `chemspace-screening`[^cheese-search] | In-Stock | 7.5M | Immediate | 100% | yes | sales@chem-space.com | [🔗](https://chem-space.com/) |
+| `zinc15`[^cheese-search] | Other | 697.1M | No availability info | N/A | unknown | N/A | [🔗](https://zinc15.docking.org/) |
 
-[^python-availability]: Currently only **Make-On-Demand** spaces are available through this Python package. The rest are coming soon and are currently available only in the [CHEESE UI](https://cheese.deepmedchem.com/), but all spaces are searchable through the API.
+[^python-availability]: All rows are searchable from this package. Make-On-Demand spaces use the platform API with its full feature set. Rows marked [^cheese-search] are served by CHEESE Search; see *Enumerated and in-stock catalogues* below for what the SDK supports there.
+
+[^cheese-search]: Served by CHEESE Search (`api.cheese.deepmedchem.com`) rather than the platform API: similarity search only (`morgan`, `shape`, `esp`), at most 100 hits per call, no per-compound price estimates, no substructure search, sampling, selections or runs. Sizes from the live catalogue on September 24, 2026.
 
 [^price-estimates]: Prices are planning estimates per compound, before any discounts are applied, and generally assume a low number of molecules ordered and price per 1 mg. For instance VAST H2 2026 uses 1 mg per compound in a 50-compound order. Other databases similarly assume small orders; the exact basis varies by vendor. Request a final quote for your actual quantity and order size. Counts and price support for Make-On-Demand spaces come from the live API catalog. In-Stock rows use immediate availability and 100% success as stock-catalog conventions; confirm fulfillment with the vendor. MCULE-FULL includes the full purchasable catalog.
 
