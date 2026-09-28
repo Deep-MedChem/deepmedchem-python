@@ -123,6 +123,68 @@ def test_selection_builder_is_copy_on_write_and_round_trips() -> None:
     assert Selection.model_validate(loaded_yaml).to_dict() == payload
 
 
+def test_selection_combines_similarity_thresholds_with_ranking() -> None:
+    base = (
+        Selection.from_database("enamine-real-v5a")
+        .ranked()
+        .reference("query", smiles="CC(=O)Oc1ccccc1C(=O)O")
+    )
+    selection = (
+        base.require_similarity("rdkit.ecfp4_tanimoto", reference="query", gte=0.4, lt=0.85)
+        .require_similarity("cheese.shape", reference="query", gt=0.7)
+        .maximize_similarity("cheese.shape", reference="query")
+    )
+    payload = selection.to_dict()
+    assert payload["constraints"]["relationships"] == [
+        {
+            "type": "similarity_threshold",
+            "reference_id": "query",
+            "metric_id": metric,
+            "operator": operator,
+            "value": value,
+        }
+        for metric, operator, value in [
+            ("rdkit.ecfp4_tanimoto", "gte", 0.4),
+            ("rdkit.ecfp4_tanimoto", "lt", 0.85),
+            ("cheese.shape", "gt", 0.7),
+        ]
+    ]
+    assert payload["objectives"] == [
+        {
+            "type": "similarity",
+            "reference_id": "query",
+            "metric_id": "cheese.shape",
+            "direction": "maximize",
+        }
+    ]
+    # Ranking and thresholds live in separate lists, so call order does not matter.
+    reordered = (
+        base.maximize_similarity("cheese.shape", reference="query")
+        .require_similarity("rdkit.ecfp4_tanimoto", reference="query", gte=0.4, lt=0.85)
+        .require_similarity("cheese.shape", reference="query", gt=0.7)
+    )
+    assert reordered.to_dict() == payload
+    assert Selection.model_validate(json.loads(selection.to_json())).to_dict() == payload
+    assert "relationships" not in base.to_dict()["constraints"]
+
+
+@pytest.mark.parametrize(
+    ("bounds", "message"),
+    [
+        ({}, "at least one"),
+        ({"gt": 0.1, "gte": 0.2}, "at most one lower"),
+        ({"lt": 0.8, "lte": 0.9}, "at most one lower"),
+        ({"gte": float("nan")}, "finite"),
+        ({"lte": float("inf")}, "finite"),
+        ({"gte": "0.5"}, "finite"),
+    ],
+)
+def test_require_similarity_rejects_invalid_bounds(bounds, message) -> None:
+    selection = Selection.from_database("enamine-real-v5a").ranked()
+    with pytest.raises(ValueError, match=message):
+        selection.require_similarity("rdkit.ecfp4_tanimoto", reference="query", **bounds)
+
+
 def test_selection_accepts_normalized_unpinned_database_release() -> None:
     payload = Selection.from_database("enamine-real-v5a").sample(seed=42).to_dict()
     payload["database"]["release_id"] = None

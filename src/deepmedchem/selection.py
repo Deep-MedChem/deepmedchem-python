@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from copy import deepcopy
 from typing import Any, Literal
 
@@ -183,6 +184,61 @@ class Selection:
                     "method_id": method,
                     "operator": "different",
                 }
+            )
+
+        return self._changed(update)
+
+    def require_similarity(
+        self,
+        metric: str,
+        *,
+        reference: str,
+        gt: float | None = None,
+        gte: float | None = None,
+        lt: float | None = None,
+        lte: float | None = None,
+    ) -> Selection:
+        """Keep only candidates whose exact similarity to ``reference`` passes the bounds.
+
+        ``maximize_similarity`` still chooses the ranking; thresholds only filter,
+        and all thresholds (from one or several calls) must pass. One call takes at
+        most one lower bound (``gt``/``gte``) and one upper bound (``lt``/``lte``):
+
+            .require_similarity("rdkit.ecfp4_tanimoto", reference="query", gte=0.4, lt=0.85)
+
+        The server validates metric IDs and each metric's score range (ECFP4
+        Tanimoto 0 to 1; CHEESE shape and electrostatic cosine -1 to 1). Thresholds
+        are applied to the candidate pool evaluated for this query before the final
+        limit, so they do not guarantee the best matches in the whole chemical space.
+        """
+
+        supplied = {
+            operator: value
+            for operator, value in {"gt": gt, "gte": gte, "lt": lt, "lte": lte}.items()
+            if value is not None
+        }
+        if not supplied:
+            raise ValueError("provide at least one of gt, gte, lt, or lte")
+        if {"gt", "gte"} <= supplied.keys() or {"lt", "lte"} <= supplied.keys():
+            raise ValueError("provide at most one lower (gt/gte) and one upper (lt/lte) bound")
+        for value in supplied.values():
+            try:
+                finite = math.isfinite(value)
+            except TypeError:
+                finite = False
+            if not finite:
+                raise ValueError("similarity thresholds must be finite numbers")
+
+        def update(payload):
+            payload["constraints"].setdefault("relationships", []).extend(
+                {
+                    "type": "similarity_threshold",
+                    "reference_id": reference,
+                    "metric_id": metric,
+                    "operator": operator,
+                    "value": float(value),
+                }
+                for operator, value in supplied.items()
             )
 
         return self._changed(update)
