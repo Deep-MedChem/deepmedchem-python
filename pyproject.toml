@@ -39,6 +39,9 @@ dependencies = [
 
 [project.optional-dependencies]
 auth = []
+rdkit = [
+  "rdkit>=2023.9",
+]
 sdf = [
   "rdkit>=2023.9",
 ]
