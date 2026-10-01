@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
+import uuid
 import warnings
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
@@ -495,6 +497,74 @@ class Client:
                     "include_synthons": include_synthons,
                 },
             )
+        )
+
+    def search_many(
+        self,
+        queries,
+        *,
+        database: str,
+        method: str = "morgan",
+        limit: int = 20,
+        state_file: str | os.PathLike[str] | None = None,
+        timeout: float | None = None,
+        poll_interval: float = 1.0,
+        on_progress=None,
+    ):
+        """Search each query molecule separately in one durable run and wait for the results.
+
+        ``queries`` is a list of SMILES, a ``{query_id: smiles}`` mapping, ``(id, smiles)``
+        pairs, or the output of ``deepmedchem.batch.read_queries(path)``. Every record is
+        its own query (duplicates are kept); ``limit`` is the number of hits *per query*.
+        Each successful query costs one credit; failed queries are refunded.
+
+        Every call starts a new run. Pass ``state_file`` to save the run ID and
+        idempotency key, then reconnect after an interruption with
+        :meth:`resume_search_many` instead of searching (and paying) again.
+        Only the DeepMedChem chemical spaces support batch runs; classic CHEESE
+        Search catalogues raise an error. Never prompts, so it is safe in scripts.
+        """
+
+        from .batch import (
+            batch_database,
+            build_run,
+            make_state,
+            normalize_queries,
+            save_state,
+            wait_and_collect,
+        )
+
+        database_id = batch_database(database)
+        query_list = normalize_queries(queries)
+        run = build_run(query_list, database=database_id, method=method, limit=limit)
+        key = f"sdk-batch-{uuid.uuid4().hex}"
+        created = self.runs.create(run, idempotency_key=key)
+        state = make_state(created.id, key, database_id, method, limit, query_list)
+        if state_file is not None:
+            save_state(state, state_file)
+        return wait_and_collect(
+            self, state, timeout=timeout, poll_interval=poll_interval, on_progress=on_progress
+        )
+
+    def resume_search_many(
+        self,
+        state,
+        *,
+        timeout: float | None = None,
+        poll_interval: float = 1.0,
+        on_progress=None,
+    ):
+        """Reconnect to a batch run saved with ``state_file`` and return its results.
+
+        ``state`` is the state file path (or its loaded dictionary). No new run is
+        started and nothing is charged again.
+        """
+
+        from .batch import load_state, wait_and_collect
+
+        loaded = state if isinstance(state, dict) else load_state(state)
+        return wait_and_collect(
+            self, loaded, timeout=timeout, poll_interval=poll_interval, on_progress=on_progress
         )
 
     def search_cheese(

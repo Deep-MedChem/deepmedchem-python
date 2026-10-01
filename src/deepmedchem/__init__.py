@@ -3,6 +3,7 @@
 __version__ = "0.3.0b5"
 
 from . import aio
+from .batch import BatchQuery, BatchQueryResult, BatchResult, read_queries
 from .client import (
     AsyncClient,
     AsyncDMCClient,
@@ -20,6 +21,9 @@ from .selection import Run, Selection
 __all__ = [
     "AsyncClient",
     "AsyncDMCClient",
+    "BatchQuery",
+    "BatchQueryResult",
+    "BatchResult",
     "Client",
     "Config",
     "CredentialError",
@@ -41,6 +45,7 @@ __all__ = [
     "aio",
     "catalog",
     "prepare_order",
+    "read_queries",
     "sample",
     "search",
     "substructure",
