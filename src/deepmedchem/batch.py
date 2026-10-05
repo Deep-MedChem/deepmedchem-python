@@ -8,6 +8,12 @@ different compound IDs are separate queries.
 Resuming is explicit. ``search_many`` always starts a new run (a fresh
 idempotency key) and can save a small state file; ``resume_search_many`` reads
 that file and reconnects to the same run instead of starting and paying again.
+
+The state is saved *before* the run is created, so even if the create response
+is lost (network error, Ctrl-C) a resume re-sends the same request with the same
+idempotency key and the server returns the existing run instead of charging again.
+Errors raised after that point carry ``error.state`` (and ``error.run_id``), which
+``resume_search_many`` accepts directly.
 """
 
 from __future__ import annotations
@@ -16,6 +22,7 @@ import csv
 import json
 import os
 import time
+import uuid
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -28,6 +35,14 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from .client import Client
 
 MAX_BATCH_QUERIES = 1000
+# Backend limits for one selection_batch run (dmc-platform-backend): hits per item, and
+# items x hits per item ("result cells").
+MAX_HITS_PER_QUERY = 200
+MAX_RESULT_CELLS = 100_000
+# Polling: start at poll_interval and slow down to this many seconds between checks.
+MAX_POLL_INTERVAL = 10.0
+# Retryable errors (network, 429, 503, 504) while waiting are tolerated for this long.
+MAX_OUTAGE_SECONDS = 300.0
 STATE_SCHEMA_VERSION = "deepmedchem-batch-state/1"
 METHOD_METRICS = {
     "morgan": "rdkit.ecfp4_tanimoto",
@@ -70,13 +85,27 @@ def normalize_queries(
         for value in queries:
             if isinstance(value, BatchQuery):
                 pairs.append((value.query_id, value.smiles))
-            elif isinstance(value, tuple) and len(value) == 2:
+            elif isinstance(value, (tuple, list)) and len(value) == 2:
+                # (id, smiles) pairs; lists too, e.g. DataFrame.values.tolist()
                 pairs.append((None if value[0] is None else str(value[0]), value[1]))
             else:
                 pairs.append((None, value))
+    wrong = [
+        f"#{index + 1} ({type(smiles).__name__})"
+        for index, (_, smiles) in enumerate(pairs)
+        if not isinstance(smiles, str)
+    ]
+    if wrong:
+        raise ValueError(
+            "each query must be a SMILES string or an (id, smiles) pair; "
+            f"not a string at query record(s): {', '.join(wrong[:20])}"
+        )
     problems = [f"#{index + 1}" for index, (_, smiles) in enumerate(pairs) if not _clean(smiles)]
     if problems:
-        raise ValueError(f"empty SMILES at position(s): {', '.join(problems[:20])}")
+        raise ValueError(
+            f"empty SMILES at query record(s) {', '.join(problems[:20])} "
+            "(counting query records, not file lines)"
+        )
     result = [
         BatchQuery(query_id=query_id or f"q{index + 1}", smiles=_clean(smiles), input_index=index)
         for index, (query_id, smiles) in enumerate(pairs)
@@ -124,14 +153,22 @@ def _check_count(count: int) -> None:
         )
 
 
+_SMI_HEADERS = {"smiles", "smi", "canonical_smiles"}
+
+
 def _read_smi(path: Path) -> list[tuple[str | None, str]]:
     pairs = []
+    first = True
     with open(path, encoding="utf-8-sig") as handle:
         for line in handle:
             text = line.strip()
             if not text or text.startswith("#"):
                 continue
             parts = text.split(maxsplit=1)
+            if first:
+                first = False
+                if parts[0].lower() in _SMI_HEADERS:
+                    continue  # header line such as "SMILES Name"
             pairs.append((parts[1].strip() if len(parts) > 1 else None, parts[0]))
     return pairs
 
@@ -167,14 +204,13 @@ def _read_table(path: Path, delimiter: str, smiles_column, id_column):
 
 def _read_sdf(path: Path, id_column: str | None):
     try:
-        from rdkit import Chem, RDLogger
+        from rdkit import Chem, rdBase
     except ImportError as error:
         raise ImportError(
             "Reading SDF queries requires RDKit. Install it with "
             "`pip install 'deepmedchem[rdkit]'`, or use a .smi or .csv file."
         ) from error
-    RDLogger.DisableLog("rdApp.*")
-    try:
+    with rdBase.BlockLogs():  # restores the caller's RDKit log settings afterwards
         pairs, unreadable = [], []
         for number, molecule in enumerate(Chem.SDMolSupplier(str(path)), start=1):
             if molecule is None:
@@ -184,8 +220,6 @@ def _read_sdf(path: Path, id_column: str | None):
             if not name and molecule.HasProp("_Name"):
                 name = molecule.GetProp("_Name")
             pairs.append((name.strip() or None, Chem.MolToSmiles(molecule)))
-    finally:
-        RDLogger.EnableLog("rdApp.*")
     if unreadable:
         raise ValueError(f"unreadable SDF record(s) in {path.name}: {', '.join(unreadable[:20])}")
     return pairs
@@ -233,7 +267,15 @@ class BatchResult:
 
     @property
     def failed(self) -> list[BatchQueryResult]:
-        return [item for item in self.queries if item.status in {"failed", "cancelled"}]
+        """Every query without a result: failed, cancelled, or never run (pending/missing)."""
+
+        return [item for item in self.queries if not item.succeeded]
+
+    @property
+    def complete(self) -> bool:
+        """True if the run finished and every query succeeded (with or without hits)."""
+
+        return self.status == "completed" and not self.failed
 
     @property
     def empty(self) -> list[BatchQueryResult]:
@@ -359,6 +401,7 @@ def build_run(queries: Sequence[BatchQuery], *, database: str, method: str, limi
         raise ValueError(f"method must be one of {', '.join(METHOD_METRICS)}")
     if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
         raise ValueError("limit (hits per query) must be a positive integer")
+    check_limits(len(queries), limit)
     template = (
         Selection.from_database(database)
         .ranked()
@@ -369,6 +412,23 @@ def build_run(queries: Sequence[BatchQuery], *, database: str, method: str, limi
         template=template,
         items={query.item_id: {"query": query.smiles} for query in queries},
     )
+
+
+def check_limits(count: int, limit: int) -> None:
+    """Reject a batch the server would refuse (HTTP 413) with a message that says why."""
+
+    if limit > MAX_HITS_PER_QUERY:
+        raise ValueError(
+            f"limit is {limit} hits per query; batch runs allow at most {MAX_HITS_PER_QUERY}."
+        )
+    if count * limit > MAX_RESULT_CELLS:
+        fits = max(1, MAX_RESULT_CELLS // limit)
+        raise ValueError(
+            f"{count} queries x {limit} hits = {count * limit:,} results; one batch run "
+            f"allows at most {MAX_RESULT_CELLS:,}. Use a smaller limit (at most "
+            f"{MAX_RESULT_CELLS // count} for {count} queries) or split the input into "
+            f"runs of at most {fits} queries."
+        )
 
 
 def make_state(run_id, key, database, method, limit, queries) -> dict[str, Any]:
@@ -394,9 +454,108 @@ def save_state(state: dict[str, Any], path: str | os.PathLike[str]) -> Path:
 
 def load_state(path: str | os.PathLike[str]) -> dict[str, Any]:
     state = json.loads(Path(path).read_text(encoding="utf-8"))
-    if state.get("schema_version") != STATE_SCHEMA_VERSION or not state.get("run_id"):
+    if state.get("schema_version") != STATE_SCHEMA_VERSION or not state.get("idempotency_key"):
         raise ValueError(f"{path} is not a deepmedchem batch state file")
     return state
+
+
+def _with_state(error, state: dict[str, Any], state_file=None, note: str | None = None):
+    """Return a DeepMedChemError like ``error`` that says how to reconnect."""
+
+    from .client import DeepMedChemError
+
+    if state_file is not None:
+        hint = f"Reconnect with resume_search_many({str(state_file)!r})."
+    else:
+        hint = "Reconnect with resume_search_many(error.state)."
+    run = f"run {state['run_id']}" if state.get("run_id") else "the run request"
+    message = note or str(error)
+    wrapped = DeepMedChemError(
+        f"{message} ({run}; nothing is charged twice on reconnect.) {hint}",
+        code=getattr(error, "code", "client_error"),
+        status_code=getattr(error, "status_code", None),
+        request_id=getattr(error, "request_id", None),
+        retryable=getattr(error, "retryable", False),
+    )
+    wrapped.state = state
+    wrapped.run_id = state.get("run_id")
+    wrapped.state_file = None if state_file is None else str(state_file)
+    return wrapped
+
+
+def _create(client: Client, state: dict[str, Any], state_file=None) -> dict[str, Any]:
+    """Create (or, with the same idempotency key, re-attach to) the run in ``state``."""
+
+    from .client import DeepMedChemError
+
+    queries = normalize_queries([tuple(pair) for pair in state["queries"]])
+    run = build_run(
+        queries, database=state["database"], method=state["method"], limit=state["limit"]
+    )
+    try:
+        created = client.runs.create(run, idempotency_key=state["idempotency_key"])
+    except DeepMedChemError as error:
+        note = None
+        if error.code == "tenant_run_quota_exceeded":
+            note = (
+                "You already have the maximum number of active runs; wait until one "
+                "finishes, then start or resume this one. Nothing was charged"
+            )
+        raise _with_state(error, state, state_file, note) from error
+    state["run_id"] = created.id
+    if state_file is not None:
+        save_state(state, state_file)
+    return state
+
+
+def start_batch(
+    client: Client,
+    queries: Sequence[BatchQuery],
+    *,
+    database: str,
+    method: str,
+    limit: int,
+    state_file: str | os.PathLike[str] | None = None,
+    key_prefix: str = "sdk-batch",
+) -> dict[str, Any]:
+    """Save the state (with a new idempotency key), then create the run; return the state."""
+
+    build_run(queries, database=database, method=method, limit=limit)  # validate first
+    key = f"{key_prefix}-{uuid.uuid4().hex}"
+    state = make_state(None, key, database, method, limit, queries)
+    if state_file is not None:
+        save_state(state, state_file)
+    return _create(client, state, state_file)
+
+
+def ensure_started(client: Client, state: dict[str, Any], state_file=None) -> dict[str, Any]:
+    """Finish a create interrupted before the run ID came back (same key, no new charge)."""
+
+    if state.get("run_id"):
+        return state
+    return _create(client, state, state_file)
+
+
+def _retrying(call: Callable[[], Any]):
+    """Run ``call``, retrying retryable errors with capped backoff for MAX_OUTAGE_SECONDS."""
+
+    from .client import DeepMedChemError
+
+    first_failure = None
+    delay = 1.0
+    while True:
+        try:
+            return call()
+        except DeepMedChemError as error:
+            if not error.retryable:
+                raise
+            now = time.monotonic()
+            if first_failure is None:
+                first_failure = now
+            if now - first_failure >= MAX_OUTAGE_SECONDS:
+                raise
+            time.sleep(delay)
+            delay = min(30.0, delay * 2)
 
 
 def wait_and_collect(
@@ -406,17 +565,33 @@ def wait_and_collect(
     timeout: float | None = None,
     poll_interval: float = 1.0,
     on_progress: Callable[[RunProgress], None] | None = None,
+    state_file: str | os.PathLike[str] | None = None,
 ) -> BatchResult:
-    """Wait for the run in ``state`` to finish and return its results in input order."""
+    """Wait for the run in ``state`` to finish and return its results in input order.
 
+    Polling starts every ``poll_interval`` seconds and slows down to MAX_POLL_INTERVAL.
+    Network errors and 429/503/504 answers are retried for up to MAX_OUTAGE_SECONDS.
+    Any error raised here carries ``error.state`` for :meth:`Client.resume_search_many`.
+    """
+
+    from .client import DeepMedChemError
+
+    try:
+        return _wait_and_collect(client, state, timeout, poll_interval, on_progress)
+    except DeepMedChemError as error:
+        raise _with_state(error, state, state_file) from error
+
+
+def _wait_and_collect(client, state, timeout, poll_interval, on_progress) -> BatchResult:
     from .client import DeepMedChemError
 
     run_id = state["run_id"]
     queries = normalize_queries([tuple(pair) for pair in state["queries"]])
     started = time.monotonic()
     last = None
+    interval = poll_interval
     while True:
-        run = client.runs.retrieve(run_id)
+        run = _retrying(lambda: client.runs.retrieve(run_id))
         snapshot = run.progress.model_dump()
         if on_progress is not None and snapshot != last:
             on_progress(run.progress)
@@ -425,18 +600,20 @@ def wait_and_collect(
             break
         if timeout is not None and time.monotonic() - started >= timeout:
             raise DeepMedChemError(
-                f"Timed out waiting for run {run_id}; it continues on the server. "
-                "Reconnect with resume_search_many() and the saved state.",
+                f"Timed out waiting for run {run_id}; it continues on the server",
                 code="client_timeout",
             )
-        time.sleep(poll_interval)
+        time.sleep(interval)
+        interval = min(max(poll_interval, MAX_POLL_INTERVAL), interval * 1.5)
     if run.progress.total != len(queries):
         raise DeepMedChemError(
             f"run {run_id} has {run.progress.total} items but the state lists "
             f"{len(queries)} queries",
             code="state_mismatch",
         )
-    items = {item.id: item for item in client.runs.iter_results(run_id, order="input")}
+    items = _retrying(
+        lambda: {item.id: item for item in client.runs.iter_results(run_id, order="input")}
+    )
     results = []
     for query in queries:
         item = items.get(query.item_id)

@@ -10,6 +10,7 @@ from deepmedchem import Client, DeepMedChemError
 from deepmedchem.batch import (
     MAX_BATCH_QUERIES,
     build_run,
+    check_limits,
     load_state,
     normalize_queries,
     read_queries,
@@ -19,16 +20,34 @@ from deepmedchem.batch import (
 class FakeRuns:
     """A minimal API v2 Runs server: BAD fails, EMPTY succeeds without hits."""
 
-    def __init__(self, polls_before_done=1):
+    def __init__(self, polls_before_done=1, *, final_status=None):
         self.requests = []
         self.runs = {}
         self.polls_before_done = polls_before_done
+        self.final_status = final_status  # e.g. "cancelled": items stay pending
+        self.lose_create_responses = 0  # create the run, then drop the response
+        self.retrieve_errors = 0  # connection errors on the next run polls
+        self.create_error = None  # (status, code) returned instead of creating
 
     def _resource(self, run_id):
         run = self.runs[run_id]
         done = run["polls"] > self.polls_before_done
         total = len(run["items"])
         failed = sum(item["references"][0]["structure"]["value"] == "BAD" for item in run["items"])
+        if done and self.final_status == "cancelled":
+            return {
+                "id": run_id,
+                "kind": "selection_batch",
+                "status": "cancelled",
+                "progress": {
+                    "total": total,
+                    "pending": total,
+                    "running": 0,
+                    "succeeded": 0,
+                    "failed": 0,
+                    "cancelled": 0,
+                },
+            }
         return {
             "id": run_id,
             "kind": "selection_batch",
@@ -82,20 +101,33 @@ class FakeRuns:
                 200, json={"admissible": True, "work": {"items": len(body["items"])}}
             )
         if path == "/api/v2/runs" and request.method == "POST":
-            run_id = f"run_{len(self.runs) + 1}"
-            self.runs[run_id] = {
-                "items": body["items"],
-                "polls": 0,
-                "key": request.headers["idempotency-key"],
-            }
-            return httpx.Response(202, json=self._resource(run_id))
+            if self.create_error is not None:
+                status, code = self.create_error
+                return httpx.Response(
+                    status, json={"error": {"code": code, "message": "quota", "retryable": False}}
+                )
+            key = request.headers["idempotency-key"]
+            run_id = next((rid for rid, run in self.runs.items() if run["key"] == key), None)
+            status = 200  # same key: the server returns the same run
+            if run_id is None:
+                run_id, status = f"run_{len(self.runs) + 1}", 202
+                self.runs[run_id] = {"items": body["items"], "polls": 0, "key": key}
+            if self.lose_create_responses:
+                self.lose_create_responses -= 1
+                raise httpx.ConnectError("response lost", request=request)
+            return httpx.Response(status, json=self._resource(run_id))
         run_id = path.split("/")[4]
         if path.endswith("/results"):
             assert request.url.params["order"] == "input"
             items = self.runs[run_id]["items"]
+            if self.final_status == "cancelled":
+                return httpx.Response(200, json={"data": []})
             return httpx.Response(
                 200, json={"data": [self._item(i, item) for i, item in enumerate(items)]}
             )
+        if self.retrieve_errors:
+            self.retrieve_errors -= 1
+            raise httpx.ConnectError("network blip", request=request)
         self.runs[run_id]["polls"] += 1
         return httpx.Response(200, json=self._resource(run_id))
 
@@ -103,6 +135,15 @@ class FakeRuns:
         return [
             entry for entry in self.requests if entry[0] == "POST" and entry[1] == "/api/v2/runs"
         ]
+
+
+@pytest.fixture
+def no_sleep(monkeypatch):
+    """Record sleeps (batch polling and client retries share time.sleep) instead of waiting."""
+
+    slept = []
+    monkeypatch.setattr("deepmedchem.batch.time.sleep", slept.append)
+    return slept
 
 
 def _client(fake):
@@ -127,7 +168,7 @@ def test_queries_keep_ids_order_and_duplicates() -> None:
 @pytest.mark.parametrize(
     ("queries", "message"),
     [
-        (["CCO", "", "  "], r"empty SMILES at position\(s\): #2, #3"),
+        (["CCO", "", "  "], r"empty SMILES at query record\(s\) #2, #3"),
         ([], "no query molecules"),
         (["C"] * (MAX_BATCH_QUERIES + 1), "at most 1000"),
     ],
@@ -172,7 +213,7 @@ def test_read_csv_with_explicit_and_missing_columns(tmp_path) -> None:
 def test_read_csv_with_an_empty_smiles_cell_is_reported(tmp_path) -> None:
     source = tmp_path / "series.csv"
     source.write_text("id,smiles\nA,CCO\nB,\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="empty SMILES at position"):
+    with pytest.raises(ValueError, match="empty SMILES at query record"):
         read_queries(source)
 
 
@@ -414,3 +455,133 @@ def test_cli_rejects_invalid_batch_arguments(monkeypatch, capsys, argv, message)
     _install(monkeypatch, FakeRuns())
     assert cli.main(argv) == 1
     assert message in capsys.readouterr().err
+
+
+# --- review fixes: crash safety, limits, polling, exit codes --------------------
+
+
+def test_state_is_saved_before_the_run_is_created(tmp_path, no_sleep) -> None:
+    fake = FakeRuns()
+    fake.lose_create_responses = 3  # more than the client's own retries
+    state_file = tmp_path / "s.json"
+    with _client(fake) as client:
+        with pytest.raises(DeepMedChemError, match="resume_search_many") as caught:
+            client.search_many(["CCO", "CCN"], database="enamine", state_file=state_file)
+        saved = load_state(state_file)
+        assert saved["run_id"] is None and saved["idempotency_key"]
+        assert caught.value.state["idempotency_key"] == saved["idempotency_key"]
+        result = client.resume_search_many(state_file, poll_interval=0)
+    assert len(fake.runs) == 1  # the resume re-attached to the run, it did not start another
+    assert {entry[2]["idempotency-key"] for entry in fake.created()} == {saved["idempotency_key"]}
+    assert result.run_id == "run_1" and load_state(state_file)["run_id"] == "run_1"
+
+
+def test_without_a_state_file_the_error_carries_the_state(no_sleep, monkeypatch) -> None:
+    monkeypatch.setattr("deepmedchem.batch.MAX_OUTAGE_SECONDS", 0)
+    fake = FakeRuns()
+    fake.retrieve_errors = 10
+    with _client(fake) as client:
+        with pytest.raises(DeepMedChemError) as caught:
+            client.search_many(["CCO"], database="enamine", poll_interval=0)
+        error = caught.value
+        assert error.run_id == "run_1" and error.state["run_id"] == "run_1"
+        assert error.code == "transport_error"
+        fake.retrieve_errors = 0
+        result = client.resume_search_many(error.state, poll_interval=0)
+    assert result.run_id == "run_1" and len(fake.runs) == 1
+
+
+def test_short_network_outages_while_polling_are_retried(no_sleep) -> None:
+    fake = FakeRuns()
+    fake.retrieve_errors = 5  # each poll gives up after 3 attempts; batch keeps going
+    with _client(fake) as client:
+        result = client.search_many(["CCO"], database="enamine", poll_interval=0)
+    assert result.complete and fake.retrieve_errors == 0
+
+
+def test_polling_slows_down_to_ten_seconds(no_sleep) -> None:
+    with _client(FakeRuns(polls_before_done=12)) as client:
+        client.search_many(["CCO"], database="enamine", poll_interval=1.0)
+    assert no_sleep[0] == 1.0 and no_sleep == sorted(no_sleep)
+    assert max(no_sleep) == 10.0
+
+
+def test_active_run_quota_gets_a_clear_message(tmp_path, no_sleep) -> None:
+    fake = FakeRuns()
+    fake.create_error = (429, "tenant_run_quota_exceeded")
+    with _client(fake) as client, pytest.raises(DeepMedChemError) as caught:
+        client.search_many(["CCO"], database="enamine", state_file=tmp_path / "s.json")
+    assert "maximum number of active runs" in str(caught.value)
+    assert caught.value.code == "tenant_run_quota_exceeded"
+
+
+def test_a_cancelled_run_is_not_reported_as_success(monkeypatch, capsys, tmp_path) -> None:
+    monkeypatch.chdir(tmp_path)  # the CLI writes its default state file to the current folder
+    fake = FakeRuns(final_status="cancelled")
+    _install(monkeypatch, fake)
+    source = tmp_path / "series.smi"
+    source.write_text("CCO\nCCN\n", encoding="utf-8")
+    with _client(fake) as client:
+        result = client.search_many(["CCO", "CCN"], database="enamine", poll_interval=0)
+    assert len(result.failed) == 2 and not result.complete
+    assert [item.status for item in result.queries] == ["missing", "missing"]
+    assert cli.main(["search", "-i", str(source), "-d", "enamine"]) == 3
+    assert "0 succeeded (0 without hits), 2 failed" in capsys.readouterr().out
+
+
+def test_cli_json_output_is_only_json(monkeypatch, capsys, tmp_path) -> None:
+    _install(monkeypatch, FakeRuns())
+    source = tmp_path / "series.smi"
+    source.write_text("CCO\nCCN\n", encoding="utf-8")
+    argv = ["search", "-i", str(source), "-d", "enamine", "--json", "-o", str(tmp_path / "r.csv")]
+    assert cli.main(argv) == 0
+    captured = capsys.readouterr()
+    document = json.loads(captured.out)
+    assert document["run_id"] == "run_1" and len(document["queries"]) == 2
+    assert "Read 2 query molecules" in captured.err and "Saved" in captured.err
+
+
+@pytest.mark.parametrize(
+    ("count", "limit", "message"),
+    [
+        (1, 201, "at most 200"),
+        (1000, 150, r"1000 queries x 150 hits = 150,000 results"),
+    ],
+)
+def test_backend_limits_are_checked_before_any_request(count, limit, message) -> None:
+    fake = FakeRuns()
+    with pytest.raises(ValueError, match=message):
+        check_limits(count, limit)
+    queries = [f"C{'C' * (i % 30)}O" for i in range(count)]
+    with _client(fake) as client, pytest.raises(ValueError, match=message):
+        client.search_many(queries, database="enamine", limit=limit)
+    assert fake.requests == []
+
+
+def test_smi_header_line_is_not_a_query(tmp_path) -> None:
+    source = tmp_path / "series.smi"
+    source.write_text("SMILES Name\nCCO ethanol\n", encoding="utf-8")
+    assert [(q.query_id, q.smiles) for q in read_queries(source)] == [("ethanol", "CCO")]
+
+
+def test_list_rows_are_id_smiles_pairs_and_non_strings_are_explained() -> None:
+    queries = normalize_queries([["a", "CCO"], ["b", "CCN"]])
+    assert [(q.query_id, q.smiles) for q in queries] == [("a", "CCO"), ("b", "CCN")]
+    with pytest.raises(ValueError, match=r"not a string at query record\(s\): #2 \(float\)"):
+        normalize_queries(["CCO", float("nan")])
+
+
+def test_reading_sdf_leaves_rdkit_logging_as_it_was(tmp_path) -> None:
+    rdkit = pytest.importorskip("rdkit")
+    from rdkit import Chem, RDLogger
+
+    path = tmp_path / "q.sdf"
+    with Chem.SDWriter(str(path)) as writer:
+        writer.write(Chem.MolFromSmiles("CCO"))
+    RDLogger.DisableLog("rdApp.info")
+    try:
+        read_queries(path)
+        status = dict(line.split(":") for line in rdkit.rdBase.LogStatus().splitlines())
+        assert status["rdApp.info"] == "disabled"
+    finally:
+        RDLogger.EnableLog("rdApp.info")

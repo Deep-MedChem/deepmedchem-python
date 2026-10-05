@@ -7,6 +7,7 @@ import json
 import sys
 import uuid
 from collections.abc import Iterable, Sequence
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -614,70 +615,36 @@ def _batch_progress():
 
 
 def _search_many(args) -> int:
-    from .batch import (
-        batch_database,
-        build_run,
-        load_state,
-        make_state,
-        read_queries,
-        save_state,
-        wait_and_collect,
-    )
+    def say(message: str = "") -> None:
+        # With --json, stdout carries only the JSON document; status lines go to stderr.
+        print(message, file=sys.stderr if args.json else sys.stdout, flush=True)
 
     if args.output and Path(args.output).suffix.lower() not in {".csv", ".json"}:
         raise ValueError("batch results can be saved as .csv or .json")
     with _open_client(args) as client:
-        if args.resume:
-            state_path = Path(args.resume)
-            state = load_state(state_path)
-            print(
-                f"Reconnecting to run {state['run_id']} ({len(state['queries'])} queries).",
-                flush=True,
-            )
-        else:
-            if not args.database:
-                raise ValueError("the following argument is required: -d/--database")
-            database_id = batch_database(args.database)
-            queries = read_queries(
-                args.input, smiles_column=args.smiles_column, id_column=args.id_column
-            )
-            duplicates = len(queries) - len({query.smiles for query in queries})
-            note = f" ({duplicates} repeat an earlier SMILES and are kept)" if duplicates else ""
-            print(f"Read {len(queries)} query molecules from {args.input}{note}.", flush=True)
-            run = build_run(queries, database=database_id, method=args.method, limit=args.limit)
-            estimate = client.runs.estimate(run)
-            items = (estimate.get("work") or {}).get("items", len(queries))
-            print(
-                f"Estimate: {items} queries x {args.limit} hits on {database_id}; "
-                f"up to {items} credits (1 per successful query, failures refunded).",
-                flush=True,
-            )
-            if items > BATCH_CONFIRM and not args.yes:
-                if not sys.stdin.isatty():
-                    raise ValueError(f"add --yes to run {items} queries without a prompt")
-                if input("Start the run? [y/N] ").strip().lower() not in {"y", "yes"}:
-                    print("Cancelled; nothing was submitted.")
-                    return 1
-            key = f"cli-batch-{uuid.uuid4().hex}"
-            created = client.runs.create(run, idempotency_key=key)
-            state = make_state(created.id, key, database_id, args.method, args.limit, queries)
-            if args.state:
-                state_path = Path(args.state)
-            elif args.output:
-                state_path = Path(f"{args.output}.run.json")
-            else:
-                state_path = Path(f"deepmedchem-batch-{created.id}.json")
-            save_state(state, state_path)
-            print(f"Started run {created.id}; state saved to {state_path}.", flush=True)
         try:
-            result = wait_and_collect(client, state, on_progress=_batch_progress())
+            result = _run_batch(args, client, say)
+        except _BatchStopped as stopped:
+            return stopped.code
         except KeyboardInterrupt:
+            state_path = getattr(args, "_state_path", None)
+            if state_path is None:
+                print("\nInterrupted; nothing was submitted.", file=sys.stderr)
+                return 130
             print(
                 f"\nInterrupted. The run continues on the server; reconnect with:\n"
                 f"  dmc search --resume {state_path}",
                 file=sys.stderr,
             )
             return 130
+        except DeepMedChemError:
+            state_path = getattr(args, "_state_path", None)
+            if state_path is not None:
+                print(
+                    f"Reconnect without paying again: dmc search --resume {state_path}",
+                    file=sys.stderr,
+                )
+            raise
         if sys.stderr.isatty():
             print(file=sys.stderr)
     if args.json:
@@ -687,8 +654,87 @@ def _search_many(args) -> int:
     if args.output:
         rows = result.to_file(args.output)
         unit = "rows" if args.output.lower().endswith(".csv") else "queries"
-        print(f"Saved {rows} {unit} to {args.output}.")
-    return 0 if not result.failed else 3
+        say(f"Saved {rows} {unit} to {args.output}.")
+    # 0 only if the run completed and every query succeeded; failed, cancelled or
+    # never-run queries give exit code 3.
+    return 0 if result.complete else 3
+
+
+class _BatchStopped(Exception):
+    def __init__(self, code: int) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+def _run_batch(args, client, say):
+    """Start (or reconnect to) the batch run described by ``args`` and wait for it."""
+
+    from .batch import (
+        batch_database,
+        build_run,
+        ensure_started,
+        load_state,
+        read_queries,
+        start_batch,
+        wait_and_collect,
+    )
+
+    if args.resume:
+        state_path = Path(args.resume)
+        args._state_path = state_path
+        state = load_state(state_path)
+        if state.get("run_id"):
+            say(f"Reconnecting to run {state['run_id']} ({len(state['queries'])} queries).")
+        else:
+            say(
+                f"The run was not confirmed as created; re-sending it with the saved "
+                f"key ({len(state['queries'])} queries, no double charge)."
+            )
+        ensure_started(client, state, state_path)
+    else:
+        if not args.database:
+            raise ValueError("the following argument is required: -d/--database")
+        database_id = batch_database(args.database)
+        queries = read_queries(
+            args.input, smiles_column=args.smiles_column, id_column=args.id_column
+        )
+        duplicates = len(queries) - len({query.smiles for query in queries})
+        note = f" ({duplicates} repeat an earlier SMILES and are kept)" if duplicates else ""
+        say(f"Read {len(queries)} query molecules from {args.input}{note}.")
+        run = build_run(queries, database=database_id, method=args.method, limit=args.limit)
+        estimate = client.runs.estimate(run)
+        items = (estimate.get("work") or {}).get("items", len(queries))
+        say(
+            f"Estimate: {items} queries x {args.limit} hits on {database_id}; "
+            f"up to {items} credits (1 per successful query, failures refunded)."
+        )
+        if items > BATCH_CONFIRM and not args.yes:
+            if not sys.stdin.isatty():
+                raise ValueError(f"add --yes to run {items} queries without a prompt")
+            if input("Start the run? [y/N] ").strip().lower() not in {"y", "yes"}:
+                say("Cancelled; nothing was submitted.")
+                raise _BatchStopped(1)
+        if args.state:
+            state_path = Path(args.state)
+        elif args.output:
+            state_path = Path(f"{args.output}.run.json")
+        else:
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            state_path = Path(f"deepmedchem-batch-{stamp}-{uuid.uuid4().hex[:6]}.json")
+        # The state (with the idempotency key) is written before the run is created,
+        # so an interrupted create can be resumed without starting a second run.
+        args._state_path = state_path
+        state = start_batch(
+            client,
+            queries,
+            database=database_id,
+            method=args.method,
+            limit=args.limit,
+            state_file=state_path,
+            key_prefix="cli-batch",
+        )
+        say(f"Started run {state['run_id']}; state saved to {state_path}.")
+    return wait_and_collect(client, state, on_progress=_batch_progress(), state_file=state_path)
 
 
 def _print_batch_summary(result) -> None:
