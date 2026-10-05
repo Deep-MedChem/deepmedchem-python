@@ -24,7 +24,7 @@ from .config import (
     save_api_key,
 )
 from .databases import DATABASE_DETAILS, DATABASE_DISPLAY_ORDER
-from .export import FORMATS, infer_format, write_result
+from .export import FORMATS, check_export_dependencies, infer_format, write_result
 from .models import SearchResult, Usage
 from .ordering import open_order_drafts, prepare_order, procurement_contacts
 
@@ -526,6 +526,13 @@ def _databases(args) -> int:
     return 0
 
 
+def _check_output(args) -> None:
+    """Fail before the request if the chosen output file cannot be written."""
+
+    if getattr(args, "output", None):
+        check_export_dependencies(args.format or infer_format(args.output))
+
+
 def _emit_result(args, result: SearchResult, client: Client | None = None) -> int:
     library = None
     if not args.json and client is not None:
@@ -553,6 +560,7 @@ def _emit_result(args, result: SearchResult, client: Client | None = None) -> in
 
 
 def _search(args) -> int:
+    _check_output(args)
     with _open_client(args) as client:
         result = client.search(
             args.smiles,
@@ -565,6 +573,7 @@ def _search(args) -> int:
 
 
 def _substructure(args) -> int:
+    _check_output(args)
     with _open_client(args) as client:
         result = client.search_substructure(
             args.query,
@@ -578,6 +587,7 @@ def _substructure(args) -> int:
 
 
 def _sample(args) -> int:
+    _check_output(args)
     with _open_client(args) as client:
         result = client.sample(
             database=args.database,

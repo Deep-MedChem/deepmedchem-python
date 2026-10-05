@@ -98,21 +98,20 @@ _CSS = """
 
 def _require_rdkit():
     try:
-        from rdkit import Chem, RDLogger
+        from rdkit import Chem, rdBase
         from rdkit.Chem.Draw import rdMolDraw2D
     except ImportError as error:
         raise ImportError(
             "HTML export draws structures with RDKit. Install it with "
             "`pip install 'deepmedchem[rdkit]'`, or export CSV, SMILES, or JSON instead."
         ) from error
-    return Chem, RDLogger, rdMolDraw2D
+    return Chem, rdBase, rdMolDraw2D
 
 
 def _compact_svg(svg: str) -> str:
     """Move RDKit's repeated inline styles into attributes and drop default values."""
 
     try:
-        ElementTree.register_namespace("", _SVG_NAMESPACE)
         text = re.sub(r"^\s*<\?xml[^>]*\?>", "", svg)
         root = ElementTree.fromstring(text)
         for element in root.iter():
@@ -127,6 +126,13 @@ def _compact_svg(svg: str) -> str:
                 name, value = name.strip(), value.strip()
                 if _DEFAULT_STYLE.get(name) != value:
                     element.set(name, value)
+        # Write the SVG namespace as a plain xmlns attribute instead of calling
+        # ElementTree.register_namespace, which would change a process-wide registry.
+        prefix = f"{{{_SVG_NAMESPACE}}}"
+        for element in root.iter():
+            if isinstance(element.tag, str) and element.tag.startswith(prefix):
+                element.tag = element.tag[len(prefix) :]
+        root.set("xmlns", _SVG_NAMESPACE)
         return ElementTree.tostring(root, encoding="unicode")
     except (ElementTree.ParseError, ValueError):
         return svg
@@ -175,7 +181,7 @@ def render_html_fragment(
     """Return the scoped HTML card grid (for notebooks) and the number of molecules drawn."""
 
     limit = _validate_limit(limit)
-    chem, rd_logger, rd_draw = _require_rdkit()
+    chem, rd_base, rd_draw = _require_rdkit()
     hits = result.hits
     shown = hits[:limit]
     if len(shown) > LARGE_RENDER_WARNING:
@@ -187,8 +193,7 @@ def render_html_fragment(
     score_column = _score_column(result)
     metric = result.metric or result.method
 
-    rd_logger.DisableLog("rdApp.*")
-    try:
+    with rd_base.BlockLogs():
         cards = []
         for hit in shown:
             image = _structure_image(hit.smiles, chem, rd_draw)
@@ -223,8 +228,6 @@ def render_html_fragment(
                 f'<p class="smiles" title="{_text(hit.smiles)}">{_text(hit.smiles)}</p>'
                 f"</div></article>"
             )
-    finally:
-        rd_logger.EnableLog("rdApp.*")
 
     details = [
         value
@@ -283,7 +286,11 @@ def write_html(
 
 
 def default_html_path(result: SearchResult, *, directory: str | os.PathLike[str] = ".") -> Path:
-    """Return ``./deepmedchem-<database>-<method>-<UTC timestamp>.html``."""
+    """Return ``./deepmedchem-<database>-<method>-<UTC timestamp>.html``.
+
+    If that file already exists (two exports within the same second), a counter is
+    appended (``...-2.html``, ``...-3.html``) so an earlier export is never overwritten.
+    """
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     parts = [
@@ -292,7 +299,12 @@ def default_html_path(result: SearchResult, *, directory: str | os.PathLike[str]
         if value
     ]
     stem = "-".join(["deepmedchem", *[part for part in parts if part], timestamp])
-    return Path(directory) / f"{stem}.html"
+    candidate = Path(directory) / f"{stem}.html"
+    counter = 2
+    while candidate.exists():
+        candidate = Path(directory) / f"{stem}-{counter}.html"
+        counter += 1
+    return candidate
 
 
 def in_notebook() -> bool:

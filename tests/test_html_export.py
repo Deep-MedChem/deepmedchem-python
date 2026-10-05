@@ -256,3 +256,44 @@ def test_cli_without_rdkit_prints_the_install_hint(monkeypatch, capsys, tmp_path
     argv = ["search", "CCO", "-d", "enamine-real-v5a", "-o", str(tmp_path / "hits.html")]
     assert cli.main(argv) == 1
     assert "pip install 'deepmedchem[rdkit]'" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("suffix", ["html", "sdf"])
+@pytest.mark.parametrize("command", [["search", "CCO"], ["substructure", "c1ccccc1"], ["sample"]])
+def test_cli_checks_rdkit_before_sending_the_request(
+    monkeypatch, capsys, tmp_path, command, suffix
+) -> None:
+    seen = _install_client(monkeypatch)
+    _block_rdkit(monkeypatch)
+    argv = [*command, "-d", "enamine-real-v5a", "-o", str(tmp_path / f"hits.{suffix}")]
+    assert cli.main(argv) == 1
+    assert "deepmedchem[rdkit]" in capsys.readouterr().err
+    assert seen == []  # nothing was sent, so no credit was spent
+
+
+def test_rendering_leaves_rdkit_logging_as_it_was() -> None:
+    rdkit = pytest.importorskip("rdkit")
+    from rdkit import RDLogger
+
+    RDLogger.DisableLog("rdApp.info")
+    try:
+        html_export.render_html_fragment(RESULT, limit=1)
+        status = {line.split(":")[0]: line for line in rdkit.rdBase.LogStatus().splitlines()}
+        assert status["rdApp.info"].endswith("disabled")
+    finally:
+        RDLogger.EnableLog("rdApp.info")
+
+
+def test_compacting_svg_does_not_register_a_global_namespace() -> None:
+    pytest.importorskip("rdkit")
+    before = dict(ElementTree._namespace_map)
+    html_export.render_html_fragment(RESULT, limit=1)
+    assert ElementTree._namespace_map == before
+
+
+def test_default_html_path_never_reuses_an_existing_file(tmp_path, monkeypatch) -> None:
+    first = html_export.default_html_path(RESULT, directory=tmp_path)
+    first.write_text("earlier export")
+    second = html_export.default_html_path(RESULT, directory=tmp_path)
+    assert second != first
+    assert second.name.startswith(first.stem)

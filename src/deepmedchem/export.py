@@ -112,16 +112,37 @@ def write_json(result: SearchResult, path: str | os.PathLike[str]) -> int:
     return len(result)
 
 
-def write_sdf(result: SearchResult, path: str | os.PathLike[str]) -> int:
+def _require_sdf_rdkit():
     try:
         from rdkit import Chem
         from rdkit.Chem import AllChem
     except ImportError as error:
         raise ImportError(
             "Writing SDF files requires RDKit. Install it with "
-            "`python -m pip install rdkit` (or `pip install 'deepmedchem[sdf]'`), "
+            "`python -m pip install rdkit` (or `pip install 'deepmedchem[rdkit]'`), "
             "or export CSV, SMILES, or JSON instead."
         ) from error
+    return Chem, AllChem
+
+
+def check_export_dependencies(format: str) -> None:
+    """Raise ImportError now if writing ``format`` will need a missing optional package.
+
+    The CLI calls this before it sends a search, so a missing RDKit does not cost a
+    credit and leave the user without a file.
+    """
+
+    selected = format.lower()
+    if selected == "sdf":
+        _require_sdf_rdkit()
+    elif selected == "html":
+        from .html_export import _require_rdkit
+
+        _require_rdkit()
+
+
+def write_sdf(result: SearchResult, path: str | os.PathLike[str]) -> int:
+    Chem, AllChem = _require_sdf_rdkit()
 
     written = 0
     with Chem.SDWriter(str(path)) as writer:

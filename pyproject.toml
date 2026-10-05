@@ -42,8 +42,9 @@ auth = []
 rdkit = [
   "rdkit>=2023.9",
 ]
+# Kept for existing installs; same as [rdkit].
 sdf = [
-  "rdkit>=2023.9",
+  "deepmedchem[rdkit]",
 ]
 test = [
   "build>=1.2,<2",
@@ -68,6 +69,7 @@ packages = ["src/deepmedchem"]
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
+pythonpath = ["."]
 
 [tool.ruff]
 line-length = 100
