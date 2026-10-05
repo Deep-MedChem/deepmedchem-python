@@ -177,12 +177,25 @@ def test_selection_combines_similarity_thresholds_with_ranking() -> None:
         ({"gte": float("nan")}, "finite"),
         ({"lte": float("inf")}, "finite"),
         ({"gte": "0.5"}, "finite"),
+        ({"gte": True}, "not True/False"),
+        ({"lt": False}, "not True/False"),
+        ({"gte": 0.4, "lte": 0.3}, "no score can pass"),
+        ({"gt": 0.4, "lte": 0.4}, "no score can pass"),
+        ({"gte": 0.4, "lt": 0.4}, "no score can pass"),
     ],
 )
 def test_require_similarity_rejects_invalid_bounds(bounds, message) -> None:
     selection = Selection.from_database("enamine-real-v5a").ranked()
     with pytest.raises(ValueError, match=message):
         selection.require_similarity("rdkit.ecfp4_tanimoto", reference="query", **bounds)
+
+
+def test_require_similarity_accepts_a_single_point_interval() -> None:
+    selection = Selection.from_database("enamine-real-v5a").ranked()
+    payload = selection.require_similarity(
+        "cheese.shape", reference="query", gte=0.5, lte=0.5
+    ).to_dict()
+    assert [r["operator"] for r in payload["constraints"]["relationships"]] == ["gte", "lte"]
 
 
 def test_selection_accepts_normalized_unpinned_database_release() -> None:

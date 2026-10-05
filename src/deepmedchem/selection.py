@@ -222,12 +222,24 @@ class Selection:
         if {"gt", "gte"} <= supplied.keys() or {"lt", "lte"} <= supplied.keys():
             raise ValueError("provide at most one lower (gt/gte) and one upper (lt/lte) bound")
         for value in supplied.values():
+            if isinstance(value, bool):  # True/False would otherwise be sent as 1.0/0.0
+                raise ValueError("similarity thresholds must be numbers, not True/False")
             try:
                 finite = math.isfinite(value)
             except TypeError:
                 finite = False
             if not finite:
                 raise ValueError("similarity thresholds must be finite numbers")
+        lower = next(((op, supplied[op]) for op in ("gt", "gte") if op in supplied), None)
+        upper = next(((op, supplied[op]) for op in ("lt", "lte") if op in supplied), None)
+        if lower and upper and (
+            lower[1] > upper[1]
+            or (lower[1] == upper[1] and (lower[0] == "gt" or upper[0] == "lt"))
+        ):
+            raise ValueError(
+                f"no score can pass {lower[0]}={lower[1]} and {upper[0]}={upper[1]}; "
+                "the lower bound must be below the upper bound"
+            )
 
         def update(payload):
             payload["constraints"].setdefault("relationships", []).extend(
