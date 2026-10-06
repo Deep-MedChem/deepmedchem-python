@@ -193,6 +193,16 @@ DATABASE_DETAILS: dict[str, dict[str, str]] = {
         "success": ">80%",
         "url": "https://chem-space.com/freedom-space",
     },
+    # eXplore 5.4B: the full enumerated eXplore catalogue (cheese 2026-09-30).
+    "EXPLORE-5P4B": {
+        "served_by": "cheese",
+        "abbreviation": "explore-5p4b",
+        "biosolveit": "—",
+        "type": "Make-On-Demand (enumerated)",
+        "availability": "3–4 weeks",
+        "success": ">85%",
+        "url": "https://www.emolecules.com/products/explore",
+    },
     "EXPLORE-DIVERSE": {
         "served_by": "cheese",
         "abbreviation": "explore-diverse",
@@ -265,6 +275,7 @@ DATABASE_DISPLAY_ORDER = (
     "CHEMSPACE-5B-FREEDOM",
     "EXPLORE-ENUMERATED",
     "EXPLORE-DIVERSE",
+    "EXPLORE-5P4B",
     "SYNPLE-4B",
     "XTALPI",
     "MOLECULE-ONE",

@@ -85,6 +85,7 @@ def test_order_csv_abbreviation_and_fallback(tmp_path):
         ("enamine-real", "ENAMINE-REAL"),
         ("chemspace-5b-ro5", "CHEMSPACE-5B-RO5"),
         ("explore-enumerated", "EXPLORE-ENUMERATED"),
+        ("explore-5p4b", "EXPLORE-5P4B"),
         ("synple-4b", "SYNPLE-4B"),
         ("xtalpi", "XTALPI"),
         ("chemriya", "CHEMRIYA"),
