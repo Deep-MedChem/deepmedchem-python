@@ -85,11 +85,17 @@ def test_order_csv_abbreviation_and_fallback(tmp_path):
         ("enamine-real", "ENAMINE-REAL"),
         ("chemspace-5b-ro5", "CHEMSPACE-5B-RO5"),
         ("explore-enumerated", "EXPLORE-ENUMERATED"),
+        ("explore-5p4b", "EXPLORE-5P4B"),
         ("synple-4b", "SYNPLE-4B"),
         ("xtalpi", "XTALPI"),
         ("chemriya", "CHEMRIYA"),
         ("molecule-one", "MOLECULE-ONE"),
         ("enamine-aa", "ENAMINE-AA"),
+        # Mcule amino-acid sets (cheese issue #437), served by classic CHEESE since 2026-10-02.
+        ("mcule-aa", "MCULE-AA"),
+        ("mcule-aa-in-stock", "MCULE-AA-IN-STOCK"),
+        ("mcule-unnatural-aa", "MCULE-UNNATURAL-AA"),
+        ("mcule-unnatural-aa-in-stock", "MCULE-UNNATURAL-AA-IN-STOCK"),
     ],
 )
 def test_classic_database_aliases_resolve_to_cheese_ids(alias, expected):
