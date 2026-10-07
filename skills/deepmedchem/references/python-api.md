@@ -200,6 +200,65 @@ with Client() as client:
 `succeeded`, `failed`, `cancelled`), `last_event_sequence`, `terminal`. `client.runs.cancel(id)`
 stops a run.
 
+## Optimizations (Navigator ask/tell)
+
+```python
+import deepmedchem as dmc
+
+dmc.optimize(score, *, direction, database="enamine", budget=1000, batch_size=100, name=None,
+             strategy=None, filters=None, properties=None, seed=None, scorer=None,
+             metadata=None, progress=True, client=None) -> OptimizationResult
+dmc.normalize_scores(batch, scores) -> list[dict]     # the submission rows tell()/optimize() send
+```
+
+- `score(list[str]) -> sequence` of the same length; each value is a number (valid), `None`/NaN
+  (failed), or `{"score": x, "status"?, "error"?, **metrics}`. NumPy scalars work; bool and
+  strings are rejected. A mapping `{id: value}` is also accepted by `tell`/`normalize_scores`;
+  missing ids become `failed` with `error="not returned by scorer"`.
+- `direction`: `"minimize"` or `"maximize"`, required. `filters`: `None` or `"druglike"`.
+  `properties`: `{"MolWt": (None, 500)}` or `{"MolWt": {"min": 200, "max": 500}}`.
+  `database` accepts aliases (`enamine`, `freedom`, `cheminfinita`).
+- `name` is the idempotency/resume key; without it the SDK sends a random `Idempotency-Key` and
+  prints the id. Progress goes to stderr. Unsubmitted scores are journaled under
+  `platformdirs.user_cache_dir("deepmedchem")/optimizations/<id>/<batch>.json`
+  (`DEEPMEDCHEM_CACHE_DIR` overrides).
+- On create, a `completed` optimization returns its results; `cancelled`/`failed` raises
+  `DeepMedChemError(code="optimization_not_active")`.
+
+`client.optimizations` (`AsyncClient.optimizations` has the same methods as coroutines):
+
+| Method | Request |
+| --- | --- |
+| `create(*, database, direction, budget, batch_size, name=None, strategy=None, filters=None, properties=None, seed=None, scorer=None, metadata=None, objective_name=None, units=None, idempotency_key=None) -> Optimization` | `POST /api/v2/optimizations` |
+| `get(id_or_name) -> Optimization` | `opt_…` → `GET …/{id}`, else `GET …?name=` |
+| `list(*, status=None, name=None, limit=None) -> list[OptimizationResource]` | `GET /api/v2/optimizations` (follows cursors) |
+| `retrieve(id) -> OptimizationResource` | `GET …/{id}` |
+| `next_batch(id, *, wait=0) -> (OptimizationResource, Batch \| None)` | one `GET …/{id}/batch?wait=` (0–25 s) |
+| `submit(id, batch_id, rows, *, scorer=None) -> SubmitReceipt` | `POST …/{id}/batches/{batch_id}:submit` (rows already normalized) |
+| `results_page(id, *, order="best", limit=100, cursor=None) -> (list[Observation], next_cursor)` | `GET …/{id}/results` |
+| `cancel(id)`, `resume(id) -> OptimizationResource` | `POST …/{id}:cancel`, `POST …/{id}:resume` |
+
+`Optimization` / `AsyncOptimization` handles: `id`, `name`, `status`, `resource`, `refresh()`,
+`ask(*, timeout=None) -> Batch | None` (long-polls, honours `Retry-After`, `None` when finished,
+raises `optimization_paused` or `client_timeout`), `tell(batch_or_id, scores, *, scorer=None) ->
+SubmitReceipt`, `results(*, order="best", limit=None) -> OptimizationResult`, `cancel()`,
+`resume()`.
+
+Models: `Batch` (`id`, `round`, `molecules`, `.smiles`, `.ids`, `len`, iteration,
+`to_records()`, `to_csv(path)`), `Molecule` (`id`, `smiles`), `Observation` (`id`, `smiles`,
+`score`, `status`, `round`, `metrics`, `error`), `OptimizationResult` (a sequence of
+observations; `top(n=10)` valid only, best first; `best`; `optimization`; `to_records()`,
+`to_csv()`, `to_pandas()`), `OptimizationResource` (`status`, `status_reason`, `round`,
+`pending_batch_id`, `progress`, `best`, `specification`, `terminal`, `direction`),
+`SubmitReceipt` (`accepted`, `duplicate`, `batch_id`, `counts`, `optimization`).
+
+Statuses: `initializing`, `proposing`, `awaiting_scores` (a batch is pending), `ingesting`,
+`paused`, and terminal `completed` (`budget_exhausted`, `space_exhausted`, ...), `failed`,
+`cancelled`. Error codes include `idempotency_conflict`, `capability_unavailable`,
+`optimization_not_enabled`, `tenant_optimization_quota_exceeded`, `credit_limit_exceeded`,
+`invalid_scores`, `submission_conflict`, `batch_not_pending`, `optimization_not_active`,
+`scorer_changed`, `optimization_not_paused`.
+
 ## Ordering helpers
 
 ```python
@@ -218,8 +277,8 @@ argument. Only database id, a `-DMCH` reference id, and SMILES reach the vendor 
 
 ## Errors and configuration
 
-- `DeepMedChemError(message, code, status_code, request_id, retryable)` is raised for API and
-  credential failures; `DMCError` is an alias. `CredentialError` covers keyring problems.
+- `DeepMedChemError(message, code, status_code, request_id, retryable, field, details)` is
+  raised for API and credential failures; `DMCError` is an alias. `CredentialError` covers keyring problems.
 - Credentials resolve from the `api_key` argument, `DEEPMEDCHEM_API_KEY`, a custom
   `CredentialProvider`, the profile's OS-keyring entry, then `credentials.json`.
 - Config lives in `config.toml` under the platform user config directory

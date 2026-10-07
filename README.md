@@ -10,7 +10,7 @@
 The official, chemistry-thin Python client for the DeepMedChem hosted chemical-space platform.
 It contains no RDKit, models, databases, or proprietary search implementation.
 
-> **Beta:** `deepmedchem` 0.3 is available for early use. APIs may still change before the
+> **Beta:** `deepmedchem` 0.4 is available for early use. APIs may still change before the
 > stable release.
 
 ## Installation
@@ -47,6 +47,8 @@ dmc search "CC(=O)Oc1ccccc1C(=O)O" -d enamine -o aspirin.csv
 dmc substructure "[N;R0][N;R0]C(=O)" -d enamine -n 10 --timeout-seconds 45 -o hydrazides.sdf
 dmc sample -d freedom -n 100 --seed 7 -o sample.smi
 dmc order aspirin.csv --get-quote
+dmc optimize run my-run -d enamine --minimize --score-cmd './dock.sh {input} {output}'
+dmc optimize status                  # your optimizations; also ask, tell, results, cancel
 ```
 
 `databases` lists every searchable space with its size, whether per-compound price estimates
@@ -263,6 +265,35 @@ Prices are estimates in whole US dollars for delivery to the United States. They
 the original search response, so both `hit.price` and the aligned `result.prices` list are
 available without another API request. Databases without price estimates return `None`; run
 `dmc databases` for the current list and the vendor address to request a binding quote.
+
+## Optimize with your own scorer
+
+Navigator proposes molecules from a chemical space, your function scores them locally (docking,
+an ML model, an RDKit property), and the scores steer the next proposals until the budget is
+spent. Only SMILES and numbers cross the network.
+
+```python
+import deepmedchem as dmc
+from rdkit import Chem
+from rdkit.Chem import QED
+
+def score(smiles):  # one value per SMILES, None for a molecule you cannot score
+    return [QED.qed(m) if (m := Chem.MolFromSmiles(s)) else None for s in smiles]
+
+result = dmc.optimize(score, direction="maximize", database="enamine",
+                      budget=500, batch_size=50, name="qed-demo")
+print(result.top(10))
+result.to_csv("qed_demo.csv")
+```
+
+`direction` is required and scores are never negated. `name=` makes the call resumable: re-run it
+after Ctrl-C or a crash and it continues, re-sending scores that were computed but not uploaded.
+A scorer may return dicts such as `{"score": -9.1, "cnn_score": 0.82}`; the extra keys are stored
+as metrics. For manual control use `client.optimizations.create(...)` with `opt.ask()` and
+`opt.tell(batch, scores)`; for shell scorers and HPC queues use
+`dmc optimize run NAME --score-cmd 'CMD {input} {output}'` or `dmc optimize ask`/`tell`.
+Worked examples (RDKit, your own ML model, GNINA docking) are in
+[`examples/optimization`](examples/optimization/README.md).
 
 ## SMILES and SMARTS substructure search
 
