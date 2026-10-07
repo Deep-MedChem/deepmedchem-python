@@ -1,6 +1,6 @@
 """Official Python client for the DeepMedChem platform API."""
 
-__version__ = "0.3.0b5"
+__version__ = "0.4.0b1"
 
 from . import aio
 from .client import (
