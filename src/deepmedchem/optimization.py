@@ -685,6 +685,13 @@ class Optimizations:
         resource, batch, _ = self._poll(optimization_id, wait)
         return resource, batch
 
+    def batch(self, optimization_id: str, batch_id: str) -> Batch:
+        """Any batch the optimization has issued, pending or already submitted."""
+
+        return Batch.model_validate(
+            self._client._request("GET", _path(optimization_id, f"/batches/{batch_id}"))
+        )
+
     def submit(
         self,
         optimization_id: str,
@@ -816,18 +823,10 @@ class Optimization:
         if isinstance(batch, Batch):
             batch_id, rows = batch.id, normalize_scores(batch, scores)
         elif isinstance(batch, str):
+            # Normalize against the issued batch even when it is no longer pending, so a
+            # retried submission rebuilds exactly the rows of the first attempt.
             batch_id = batch
-            resource, pending = self._api.next_batch(self.id, wait=0)
-            self.resource = resource
-            if pending is not None and pending.id == batch_id:
-                rows = normalize_scores(pending, scores)
-            elif isinstance(scores, Mapping):
-                rows = _rows_from_mapping(scores)
-            else:
-                raise ValueError(
-                    f"Batch {batch_id} is not the pending batch, so its molecule order is unknown; "
-                    "pass the Batch object or scores as a mapping of molecule id to score."
-                )
+            rows = normalize_scores(self._api.batch(self.id, batch_id), scores)
         else:
             raise TypeError(f"batch must be a Batch or a batch id, got {type(batch).__name__}")
         receipt = self._api.submit(self.id, batch_id, rows, scorer=scorer)
@@ -974,6 +973,13 @@ class AsyncOptimizations:
         resource, batch, _ = await self._poll(optimization_id, wait)
         return resource, batch
 
+    async def batch(self, optimization_id: str, batch_id: str) -> Batch:
+        """Any batch the optimization has issued, pending or already submitted."""
+
+        return Batch.model_validate(
+            await self._client._request("GET", _path(optimization_id, f"/batches/{batch_id}"))
+        )
+
     async def submit(
         self,
         optimization_id: str,
@@ -1095,18 +1101,10 @@ class AsyncOptimization:
         if isinstance(batch, Batch):
             batch_id, rows = batch.id, normalize_scores(batch, scores)
         elif isinstance(batch, str):
+            # Normalize against the issued batch even when it is no longer pending, so a
+            # retried submission rebuilds exactly the rows of the first attempt.
             batch_id = batch
-            resource, pending = await self._api.next_batch(self.id, wait=0)
-            self.resource = resource
-            if pending is not None and pending.id == batch_id:
-                rows = normalize_scores(pending, scores)
-            elif isinstance(scores, Mapping):
-                rows = _rows_from_mapping(scores)
-            else:
-                raise ValueError(
-                    f"Batch {batch_id} is not the pending batch, so its molecule order is unknown; "
-                    "pass the Batch object or scores as a mapping of molecule id to score."
-                )
+            rows = normalize_scores(await self._api.batch(self.id, batch_id), scores)
         else:
             raise TypeError(f"batch must be a Batch or a batch id, got {type(batch).__name__}")
         receipt = await self._api.submit(self.id, batch_id, rows, scorer=scorer)

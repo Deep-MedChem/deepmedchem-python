@@ -411,8 +411,13 @@ def test_tell_with_mapping_and_batch_id(server) -> None:
         )
         batch = opt.ask()
         receipt = opt.tell(batch.id, {batch.ids[1]: -7.0})
-        with pytest.raises(ValueError, match="not the pending batch"):
+        # Retrying the same partial mapping after the batch left "pending" (a lost
+        # response) rebuilds the same rows from the issued batch: a duplicate, not a conflict.
+        retried = opt.tell(batch.id, {batch.ids[1]: -7.0})
+        assert retried.duplicate
+        with pytest.raises(DeepMedChemError) as conflict:
             opt.tell(batch.id, [1.0, 2.0])
+        assert conflict.value.code == "submission_conflict"
         duplicate = opt.tell(batch.id, {batch.ids[0]: None, batch.ids[1]: -7.0})
     rows = server.submissions[0]["scores"]
     assert rows[0] == {
@@ -851,7 +856,8 @@ def test_async_tell_by_batch_id_with_mapping() -> None:
             )
             batch = await opt.ask()
             first = await opt.tell(batch.id, {batch.ids[0]: 1.0})
-            with pytest.raises(ValueError):
+            assert (await opt.tell(batch.id, {batch.ids[0]: 1.0})).duplicate
+            with pytest.raises(DeepMedChemError):
                 await opt.tell(batch.id, [1.0, 2.0])
             return first
 

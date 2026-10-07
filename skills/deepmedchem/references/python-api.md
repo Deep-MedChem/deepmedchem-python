@@ -234,6 +234,7 @@ dmc.normalize_scores(batch, scores) -> list[dict]     # the submission rows tell
 | `list(*, status=None, name=None, limit=None) -> list[OptimizationResource]` | `GET /api/v2/optimizations` (follows cursors) |
 | `retrieve(id) -> OptimizationResource` | `GET …/{id}` |
 | `next_batch(id, *, wait=0) -> (OptimizationResource, Batch \| None)` | one `GET …/{id}/batch?wait=` (0–25 s) |
+| `batch(id, batch_id) -> Batch` | `GET …/{id}/batches/{batch_id}`: any issued batch, also after submission |
 | `submit(id, batch_id, rows, *, scorer=None) -> SubmitReceipt` | `POST …/{id}/batches/{batch_id}:submit` (rows already normalized) |
 | `results_page(id, *, order="best", limit=100, cursor=None) -> (list[Observation], next_cursor)` | `GET …/{id}/results` |
 | `cancel(id)`, `resume(id) -> OptimizationResource` | `POST …/{id}:cancel`, `POST …/{id}:resume` |

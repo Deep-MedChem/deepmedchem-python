@@ -78,6 +78,7 @@ class FakeOptimizationServer:
         molecules = self._molecules(state, round_index)
         state["proposed"] += len(molecules)
         state["batch"] = {"id": batch_id, "round": round_index, "molecules": molecules}
+        state.setdefault("issued", {})[batch_id] = state["batch"]
         state["polls"] = 0
         resource["progress"]["proposed"] = state["proposed"]
         resource["status"] = "proposing"
@@ -346,6 +347,12 @@ class FakeOptimizationServer:
             return httpx.Response(200, json=state["resource"])
         if rest == "/batch" and request.method == "GET":
             return self.batch(state, request)
+        issued = re.fullmatch(r"/batches/([^/:]+)", rest)
+        if issued and request.method == "GET":
+            batch = state.get("issued", {}).get(issued.group(1))
+            if batch is None:
+                return _error(404, "batch_not_found", "no such batch")
+            return httpx.Response(200, json=batch)
         submit = re.fullmatch(r"/batches/([^/:]+):submit", rest)
         if submit and request.method == "POST":
             return self.submit(state, submit.group(1), request)

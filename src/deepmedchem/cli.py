@@ -33,7 +33,7 @@ from .config import (
 from .databases import DATABASE_DETAILS, DATABASE_DISPLAY_ORDER
 from .export import FORMATS, infer_format, write_result
 from .models import Batch, OptimizationResource, OptimizationResult, SearchResult, Usage
-from .optimization import _drive, _filename, _rows_from_mapping, normalize_scores
+from .optimization import _drive, _filename, normalize_scores
 from .ordering import open_order_drafts, prepare_order, procurement_contacts
 
 SEARCH_METHODS = ("morgan", "shape", "esp")
@@ -1015,10 +1015,10 @@ def _optimize_tell(args) -> int:
                 f"(status: {_status_line(resource)}). Pass --batch BATCH_ID to re-send the "
                 "scores of an earlier batch."
             )
-        if pending is not None and pending.id == batch_id:
-            rows = normalize_scores(pending, scores)
-        else:
-            rows = _rows_from_mapping(scores)
+        if pending is None or pending.id != batch_id:
+            # An earlier batch: normalize against it so a re-send rebuilds the same rows.
+            pending = client.optimizations.batch(optimization.id, batch_id)
+        rows = normalize_scores(pending, scores)
         receipt = client.optimizations.submit(optimization.id, batch_id, rows, scorer=scorer)
     if args.json:
         print(json.dumps(receipt.raw, indent=2))

@@ -187,6 +187,7 @@ dmc optimize status [NAME] | results NAME --top 50 -o best.csv | cancel NAME | r
   `selections`, `runs`, and `optimizations`, all reached through this package. The
   optimization endpoints are exactly: `POST /api/v2/optimizations`, `GET /api/v2/optimizations`,
   `GET /api/v2/optimizations/{id}`, `GET /api/v2/optimizations/{id}/batch?wait=0..25`,
+  `GET /api/v2/optimizations/{id}/batches/{batch_id}`,
   `POST /api/v2/optimizations/{id}/batches/{batch_id}:submit`,
   `GET /api/v2/optimizations/{id}/results`, `POST /api/v2/optimizations/{id}:cancel` and
   `POST /api/v2/optimizations/{id}:resume`.
