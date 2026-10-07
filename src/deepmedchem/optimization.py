@@ -1359,11 +1359,14 @@ def _drive(
                     best = current.best.score
             valid = sum(1 for row in rows if row.get("status") == "valid")
             note = " (already accepted)" if receipt.duplicate else ""
+            # The receipt is issued before the engine ingests the batch, so the server's
+            # count does not include it yet.
+            scored = current.progress.scored + (0 if receipt.duplicate else len(rows))
             _say(
                 progress,
                 f"{label} round {batch.round}: {valid} valid, {len(rows) - valid} failed{note} | "
                 f"best so far {_format_score(best)} | "
-                f"{current.progress.scored}/{current.progress.budget} scored",
+                f"{scored}/{current.progress.budget} scored",
             )
     except KeyboardInterrupt:
         detail = ""

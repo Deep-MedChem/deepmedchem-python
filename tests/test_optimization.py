@@ -858,3 +858,15 @@ def test_async_tell_by_batch_id_with_mapping() -> None:
     receipt = asyncio.run(scenario())
     assert receipt.counts == {"valid": 1, "failed": 1}
     assert math.isclose(server.submissions[0]["scores"][0]["score"], 1.0)
+
+
+def test_resource_accepts_server_nulls_before_the_engine_starts():
+    from deepmedchem.models import Observation, OptimizationResource, SubmitReceipt
+
+    resource = OptimizationResource.model_validate(
+        {"id": "opt_1", "status": "initializing", "engine": None, "progress": None,
+         "links": None, "specification": None, "best": None}
+    )
+    assert resource.engine == {} and resource.links == {} and resource.direction is None
+    assert Observation.model_validate({"id": "a", "metrics": None}).metrics == {}
+    assert SubmitReceipt.model_validate({"accepted": True, "counts": None}).counts == {}

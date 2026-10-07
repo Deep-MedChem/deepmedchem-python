@@ -6,7 +6,7 @@ import os
 from collections.abc import Iterator, Mapping, Sequence
 from typing import Any, overload
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class APIModel(BaseModel):
@@ -421,6 +421,11 @@ class Observation(APIModel):
     metrics: dict[str, Any] = Field(default_factory=dict)
     error: str | None = None
 
+    @field_validator("metrics", mode="before")
+    @classmethod
+    def _null_metrics(cls, value: Any) -> Any:
+        return {} if value is None else value
+
     @property
     def valid(self) -> bool:
         return self.status == "valid" and self.score is not None
@@ -462,6 +467,13 @@ class OptimizationResource(APIModel):
     updated_at: str | None = None
     links: dict[str, str] = Field(default_factory=dict)
 
+    @field_validator("specification", "progress", "engine", "links", mode="before")
+    @classmethod
+    def _null_as_empty(cls, value: Any) -> Any:
+        # The server sends null for parts that do not exist yet (no engine before the
+        # first proposal); an empty value keeps attribute access uniform for callers.
+        return {} if value is None else value
+
     @property
     def terminal(self) -> bool:
         return self.status in OPTIMIZATION_TERMINAL_STATUSES
@@ -481,6 +493,11 @@ class SubmitReceipt(APIModel):
     batch_id: str | None = None
     counts: dict[str, int] = Field(default_factory=dict)
     optimization: OptimizationResource | None = None
+
+    @field_validator("counts", mode="before")
+    @classmethod
+    def _null_counts(cls, value: Any) -> Any:
+        return {} if value is None else value
 
 
 class OptimizationResult(APIModel, Sequence[Observation]):
