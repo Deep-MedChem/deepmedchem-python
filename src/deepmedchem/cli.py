@@ -724,9 +724,6 @@ def _emit_result(args, result: SearchResult, client: Client | None = None) -> in
 
 
 def _search(args) -> int:
-    # Before anything is requested or charged, and before the batch dispatch, so
-    # a missing RDKit fails here rather than after the search has been paid for.
-    _check_output(args)
     given = [
         name
         for name, value in (
@@ -741,9 +738,14 @@ def _search(args) -> int:
             "give exactly one of: a SMILES query, --input FILE, or --resume STATE_FILE"
         )
     if args.resume or args.input:
+        # Batch accepts only .csv/.json, so it needs no RDKit check and keeps its
+        # own, clearer message for anything else.
         return _search_many(args)
     if not args.database:
         raise ValueError("the following argument is required: -d/--database")
+    # Before the request is made or charged: a missing RDKit must fail here, not
+    # after the search has been paid for.
+    _check_output(args)
     with _open_client(args) as client:
         result = client.search(
             args.smiles,
