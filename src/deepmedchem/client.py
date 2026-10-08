@@ -188,12 +188,16 @@ class DeepMedChemError(RuntimeError):
         status_code: int | None = None,
         request_id: str | None = None,
         retryable: bool = False,
+        field: str | None = None,
+        details: Any = None,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.status_code = status_code
         self.request_id = request_id
         self.retryable = retryable
+        self.field = field
+        self.details = details
 
 
 def _credentials(
@@ -226,6 +230,8 @@ def _raise_api_error(response: httpx.Response) -> None:
         status_code=response.status_code,
         request_id=error.get("request_id") or response.headers.get("x-request-id"),
         retryable=bool(error.get("retryable", response.status_code in {429, 503, 504})),
+        field=error.get("field"),
+        details=error.get("details"),
     )
 
 
@@ -399,6 +405,10 @@ class Client:
         )
         self.selections = _SyncSelections(self)
         self.runs = _SyncRuns(self)
+        # Imported here because the optimization module builds on this one.
+        from .optimization import Optimizations
+
+        self.optimizations = Optimizations(self)
         self._max_retries = max_retries
         self._retry_backoff = retry_backoff
 
@@ -412,6 +422,13 @@ class Client:
         self._client.close()
 
     def _request(self, method: str, path: str, **kwargs) -> dict[str, Any]:
+        return self._request_with_response(method, path, **kwargs)[0]
+
+    def _request_with_response(
+        self, method: str, path: str, **kwargs
+    ) -> tuple[Any, httpx.Response]:
+        """Send one request with retries; return the decoded JSON and the final response."""
+
         for attempt in range(self._max_retries + 1):
             response = None
             try:
@@ -421,7 +438,7 @@ class Client:
                     continue
                 if response.is_error:
                     _raise_api_error(response)
-                return response.json()
+                return response.json(), response
             except DeepMedChemError:
                 raise
             except httpx.HTTPError as error:
@@ -743,6 +760,9 @@ class AsyncClient:
         )
         self.selections = _AsyncSelections(self)
         self.runs = _AsyncRuns(self)
+        from .optimization import AsyncOptimizations
+
+        self.optimizations = AsyncOptimizations(self)
         self._max_retries = max_retries
         self._retry_backoff = retry_backoff
 
@@ -756,6 +776,13 @@ class AsyncClient:
         await self._client.aclose()
 
     async def _request(self, method: str, path: str, **kwargs) -> dict[str, Any]:
+        return (await self._request_with_response(method, path, **kwargs))[0]
+
+    async def _request_with_response(
+        self, method: str, path: str, **kwargs
+    ) -> tuple[Any, httpx.Response]:
+        """Send one request with retries; return the decoded JSON and the final response."""
+
         for attempt in range(self._max_retries + 1):
             response = None
             try:
@@ -765,7 +792,7 @@ class AsyncClient:
                     continue
                 if response.is_error:
                     _raise_api_error(response)
-                return response.json()
+                return response.json(), response
             except DeepMedChemError:
                 raise
             except httpx.HTTPError as error:
