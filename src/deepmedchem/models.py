@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator, Mapping, Sequence
+from pathlib import Path
 from typing import Any, overload
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -197,6 +198,37 @@ class SearchResult(APIModel, Sequence[str]):
         from .export import write_result
 
         return write_result(self, path, format=format)
+
+    def to_html(
+        self,
+        path: str | os.PathLike[str] | None = None,
+        *,
+        limit: int = 100,
+        show: bool | None = None,
+    ) -> Path:
+        """Save the hits as a standalone HTML table with 2D structures (requires RDKit).
+
+        Without ``path`` the file is saved in the current directory as
+        ``deepmedchem-<database>-<method>-<UTC timestamp>.html``. Only the first
+        ``limit`` molecules are drawn; the page says when more were returned. In a
+        Jupyter notebook the table is also shown in the cell unless ``show=False``.
+        Returns the path of the saved file.
+        """
+
+        from .html_export import (
+            default_html_path,
+            html_document,
+            in_notebook,
+            render_html_fragment,
+            show_in_notebook,
+        )
+
+        fragment, _ = render_html_fragment(self, limit=limit)
+        target = Path(path) if path is not None else default_html_path(self)
+        target.write_text(html_document(self, fragment), encoding="utf-8")
+        if show if show is not None else in_notebook():
+            show_in_notebook(fragment)
+        return target
 
     def to_pandas(self):
         try:

@@ -31,7 +31,7 @@ from .config import (
     save_api_key,
 )
 from .databases import DATABASE_DETAILS, DATABASE_DISPLAY_ORDER
-from .export import FORMATS, infer_format, write_result
+from .export import FORMATS, check_export_dependencies, infer_format, write_result
 from .models import Batch, OptimizationResource, OptimizationResult, SearchResult, Usage
 from .optimization import _drive, _filename, normalize_scores
 from .ordering import open_order_drafts, prepare_order, procurement_contacts
@@ -267,7 +267,14 @@ def _add_output_options(parser: argparse.ArgumentParser) -> None:
         "-o",
         "--output",
         metavar="FILE",
-        help="Save results to FILE (.csv, .sdf, .smi, or .json; inferred from the suffix)",
+        help="Save results to FILE (.csv, .sdf, .smi, .json, or .html; inferred from the suffix)",
+    )
+    parser.add_argument(
+        "--html-limit",
+        type=int,
+        default=100,
+        metavar="N",
+        help="Maximum number of structures drawn in HTML output (default: 100)",
     )
     parser.add_argument(
         "--format",
@@ -658,19 +665,31 @@ def _databases(args) -> int:
     return 0
 
 
+def _check_output(args) -> None:
+    """Fail before the request if the chosen output file cannot be written."""
+
+    if getattr(args, "output", None):
+        check_export_dependencies(args.format or infer_format(args.output))
+
+
 def _emit_result(args, result: SearchResult, client: Client | None = None) -> int:
     library = None
     if not args.json and client is not None:
         library = _catalog_entry(client, result.meta.database)
     if args.output:
         selected = args.format or infer_format(args.output)
-        written = write_result(result, args.output, format=selected)
+        written = write_result(result, args.output, format=selected, html_limit=args.html_limit)
+        total = len(result)
+        saved = f"{written} of {total}" if written < total and selected == "html" else written
+        message = f"Saved {saved} molecules to {args.output} ({selected})."
+        if written < total and selected == "html":
+            message += " Use --html-limit to draw more."
         if not args.json:
             _print_result_table(result, library=library)
-            print(f"Saved {written} molecules to {args.output} ({selected}).")
+            print(message)
         else:
             print(json.dumps(result.raw, indent=2, sort_keys=True))
-            print(f"Saved {written} molecules to {args.output} ({selected}).", file=sys.stderr)
+            print(message, file=sys.stderr)
         return 0
     if args.json:
         print(json.dumps(result.raw, indent=2, sort_keys=True))
@@ -680,6 +699,7 @@ def _emit_result(args, result: SearchResult, client: Client | None = None) -> in
 
 
 def _search(args) -> int:
+    _check_output(args)
     with _open_client(args) as client:
         result = client.search(
             args.smiles,
@@ -692,6 +712,7 @@ def _search(args) -> int:
 
 
 def _substructure(args) -> int:
+    _check_output(args)
     with _open_client(args) as client:
         result = client.search_substructure(
             args.query,
@@ -705,6 +726,7 @@ def _substructure(args) -> int:
 
 
 def _sample(args) -> int:
+    _check_output(args)
     with _open_client(args) as client:
         result = client.sample(
             database=args.database,
