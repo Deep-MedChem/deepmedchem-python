@@ -3,6 +3,7 @@
 __version__ = "0.4.0b1"
 
 from . import aio
+from .batch import BatchQuery, BatchQueryResult, BatchResult, read_queries
 from .client import (
     AsyncClient,
     AsyncDMCClient,
@@ -41,6 +42,9 @@ __all__ = [
     "AsyncDMCClient",
     "AsyncOptimization",
     "Batch",
+    "BatchQuery",
+    "BatchQueryResult",
+    "BatchResult",
     "Client",
     "Config",
     "CredentialError",
@@ -70,6 +74,7 @@ __all__ = [
     "normalize_scores",
     "optimize",
     "prepare_order",
+    "read_queries",
     "sample",
     "search",
     "substructure",

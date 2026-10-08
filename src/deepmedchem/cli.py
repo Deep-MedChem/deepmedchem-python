@@ -11,7 +11,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import uuid
 from collections.abc import Iterable, Sequence
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +39,7 @@ from .optimization import _drive, _filename, normalize_scores
 from .ordering import open_order_drafts, prepare_order, procurement_contacts
 
 SEARCH_METHODS = ("morgan", "shape", "esp")
+BATCH_CONFIRM = 50  # batch runs above this many queries ask before starting
 
 
 # --- Presentation helpers ----------------------------------------------------
@@ -319,14 +322,36 @@ def _parser() -> argparse.ArgumentParser:
     )
 
     search = commands.add_parser("search", help="Similarity search for a SMILES query")
-    search.add_argument("smiles", help="Query molecule as SMILES")
+    search.add_argument("smiles", nargs="?", help="Query molecule as SMILES")
     search.add_argument(
-        "-d", "--database", required=True, help="Database abbreviation or full ID, see `databases`"
+        "-d", "--database", help="Database abbreviation or full ID, see `databases` (required)"
     )
     search.add_argument(
         "-m", "--method", choices=SEARCH_METHODS, default="morgan", help="Similarity method"
     )
-    search.add_argument("-n", "--limit", type=int, default=20, help="Number of hits")
+    search.add_argument(
+        "-n", "--limit", type=int, default=20, help="Number of hits (per query with --input)"
+    )
+    batch = search.add_argument_group(
+        "batch search", "search many query molecules from a file, each separately"
+    )
+    batch.add_argument(
+        "-i", "--input", metavar="FILE", help="Query molecules from .smi, .txt, .csv, .tsv or .sdf"
+    )
+    batch.add_argument("--smiles-column", help="SMILES column in a CSV/TSV input")
+    batch.add_argument("--id-column", help="ID column in a CSV/TSV input (or SDF property)")
+    batch.add_argument(
+        "--yes", action="store_true", help=f"Skip the confirmation above {BATCH_CONFIRM} molecules"
+    )
+    batch.add_argument(
+        "--state",
+        metavar="FILE",
+        help="Where to save the run state (default: <output>.run.json or "
+        "./deepmedchem-batch-<run id>.json)",
+    )
+    batch.add_argument(
+        "--resume", metavar="STATE_FILE", help="Reconnect to a saved batch run instead of a new one"
+    )
     _add_output_options(search)
     _add_connection_options(search)
 
@@ -699,6 +724,27 @@ def _emit_result(args, result: SearchResult, client: Client | None = None) -> in
 
 
 def _search(args) -> int:
+    given = [
+        name
+        for name, value in (
+            ("SMILES", args.smiles),
+            ("--input", args.input),
+            ("--resume", args.resume),
+        )
+        if value
+    ]
+    if len(given) != 1:
+        raise ValueError(
+            "give exactly one of: a SMILES query, --input FILE, or --resume STATE_FILE"
+        )
+    if args.resume or args.input:
+        # Batch accepts only .csv/.json, so it needs no RDKit check and keeps its
+        # own, clearer message for anything else.
+        return _search_many(args)
+    if not args.database:
+        raise ValueError("the following argument is required: -d/--database")
+    # Before the request is made or charged: a missing RDKit must fail here, not
+    # after the search has been paid for.
     _check_output(args)
     with _open_client(args) as client:
         result = client.search(
@@ -709,6 +755,175 @@ def _search(args) -> int:
             include_synthons=args.include_synthons,
         )
         return _emit_result(args, result, client)
+
+
+def _batch_progress():
+    """Return a progress printer that only reports when done/failed counts change."""
+
+    shown = []
+
+    def report(progress) -> None:
+        done = progress.succeeded + progress.failed + progress.cancelled
+        line = f"{done}/{progress.total} queries done ({progress.failed} failed)"
+        if shown and shown[-1] == line:
+            return
+        shown.append(line)
+        if sys.stderr.isatty():
+            print(f"\r{line}", end="", file=sys.stderr, flush=True)
+        else:
+            print(line, file=sys.stderr, flush=True)
+
+    return report
+
+
+def _search_many(args) -> int:
+    def say(message: str = "") -> None:
+        # With --json, stdout carries only the JSON document; status lines go to stderr.
+        print(message, file=sys.stderr if args.json else sys.stdout, flush=True)
+
+    if args.output and Path(args.output).suffix.lower() not in {".csv", ".json"}:
+        raise ValueError("batch results can be saved as .csv or .json")
+    with _open_client(args) as client:
+        try:
+            result = _run_batch(args, client, say)
+        except _BatchStopped as stopped:
+            return stopped.code
+        except KeyboardInterrupt:
+            state_path = getattr(args, "_state_path", None)
+            if state_path is None:
+                print("\nInterrupted; nothing was submitted.", file=sys.stderr)
+                return 130
+            print(
+                f"\nInterrupted. The run continues on the server; reconnect with:\n"
+                f"  dmc search --resume {state_path}",
+                file=sys.stderr,
+            )
+            return 130
+        except DeepMedChemError:
+            state_path = getattr(args, "_state_path", None)
+            if state_path is not None:
+                print(
+                    f"Reconnect without paying again: dmc search --resume {state_path}",
+                    file=sys.stderr,
+                )
+            raise
+        if sys.stderr.isatty():
+            print(file=sys.stderr)
+    if args.json:
+        print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+    else:
+        _print_batch_summary(result)
+    if args.output:
+        rows = result.to_file(args.output)
+        unit = "rows" if args.output.lower().endswith(".csv") else "queries"
+        say(f"Saved {rows} {unit} to {args.output}.")
+    # 0 only if the run completed and every query succeeded; failed, cancelled or
+    # never-run queries give exit code 3.
+    return 0 if result.complete else 3
+
+
+class _BatchStopped(Exception):
+    def __init__(self, code: int) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+def _run_batch(args, client, say):
+    """Start (or reconnect to) the batch run described by ``args`` and wait for it."""
+
+    from .batch import (
+        batch_database,
+        build_run,
+        ensure_started,
+        load_state,
+        read_queries,
+        start_batch,
+        wait_and_collect,
+    )
+
+    if args.resume:
+        state_path = Path(args.resume)
+        args._state_path = state_path
+        state = load_state(state_path)
+        if state.get("run_id"):
+            say(f"Reconnecting to run {state['run_id']} ({len(state['queries'])} queries).")
+        else:
+            say(
+                f"The run was not confirmed as created; re-sending it with the saved "
+                f"key ({len(state['queries'])} queries, no double charge)."
+            )
+        ensure_started(client, state, state_path)
+    else:
+        if not args.database:
+            raise ValueError("the following argument is required: -d/--database")
+        database_id = batch_database(args.database)
+        queries = read_queries(
+            args.input, smiles_column=args.smiles_column, id_column=args.id_column
+        )
+        duplicates = len(queries) - len({query.smiles for query in queries})
+        note = f" ({duplicates} repeat an earlier SMILES and are kept)" if duplicates else ""
+        say(f"Read {len(queries)} query molecules from {args.input}{note}.")
+        run = build_run(queries, database=database_id, method=args.method, limit=args.limit)
+        estimate = client.runs.estimate(run)
+        items = (estimate.get("work") or {}).get("items", len(queries))
+        say(
+            f"Estimate: {items} queries x {args.limit} hits on {database_id}; "
+            f"up to {items} credits (1 per successful query, failures refunded)."
+        )
+        if items > BATCH_CONFIRM and not args.yes:
+            if not sys.stdin.isatty():
+                raise ValueError(f"add --yes to run {items} queries without a prompt")
+            if input("Start the run? [y/N] ").strip().lower() not in {"y", "yes"}:
+                say("Cancelled; nothing was submitted.")
+                raise _BatchStopped(1)
+        if args.state:
+            state_path = Path(args.state)
+        elif args.output:
+            state_path = Path(f"{args.output}.run.json")
+        else:
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            state_path = Path(f"deepmedchem-batch-{stamp}-{uuid.uuid4().hex[:6]}.json")
+        # The state (with the idempotency key) is written before the run is created,
+        # so an interrupted create can be resumed without starting a second run.
+        args._state_path = state_path
+        state = start_batch(
+            client,
+            queries,
+            database=database_id,
+            method=args.method,
+            limit=args.limit,
+            state_file=state_path,
+            key_prefix="cli-batch",
+        )
+        say(f"Started run {state['run_id']}; state saved to {state_path}.")
+    return wait_and_collect(client, state, on_progress=_batch_progress(), state_file=state_path)
+
+
+def _print_batch_summary(result) -> None:
+    rows = []
+    for item in result.queries:
+        scores = [hit.score for hit in item.hits if hit.score is not None]
+        status = "no hits" if item.succeeded and not item.hits else item.status
+        rows.append(
+            [
+                item.query.query_id,
+                status,
+                len(item.hits),
+                f"{max(scores):.4f}" if scores else "-",
+                item.error_message or "",
+            ]
+        )
+    print(
+        _format_table(
+            ["query", "status", "hits", "best", "error"],
+            rows,
+            align_right=[False, False, True, True, False],
+        )
+    )
+    print(
+        f"{len(result.succeeded)} succeeded ({len(result.empty)} without hits), "
+        f"{len(result.failed)} failed. Run {result.run_id}, status {result.status}."
+    )
 
 
 def _substructure(args) -> int:

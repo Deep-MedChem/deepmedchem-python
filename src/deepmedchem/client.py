@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 import warnings
 from collections.abc import AsyncIterator, Iterator
@@ -512,6 +513,86 @@ class Client:
                     "include_synthons": include_synthons,
                 },
             )
+        )
+
+    def search_many(
+        self,
+        queries,
+        *,
+        database: str,
+        method: str = "morgan",
+        limit: int = 20,
+        state_file: str | os.PathLike[str] | None = None,
+        timeout: float | None = None,
+        poll_interval: float = 1.0,
+        on_progress=None,
+    ):
+        """Search each query molecule separately in one durable run and wait for the results.
+
+        ``queries`` is a list of SMILES, a ``{query_id: smiles}`` mapping, ``(id, smiles)``
+        pairs, or the output of ``deepmedchem.batch.read_queries(path)``. Every record is
+        its own query (duplicates are kept); ``limit`` is the number of hits *per query*.
+        Each successful query costs one credit; failed queries are refunded.
+
+        Every call starts a new run. Pass ``state_file`` to save the idempotency key
+        (before the run is created) and the run ID, then reconnect after an
+        interruption with :meth:`resume_search_many` instead of searching (and
+        paying) again. Without ``state_file``, an error raised after the request was
+        sent carries ``error.state``; pass that to :meth:`resume_search_many`.
+        Short network outages while waiting are retried automatically.
+        Only the DeepMedChem chemical spaces support batch runs; classic CHEESE
+        Search catalogues raise an error. Never prompts, so it is safe in scripts.
+        """
+
+        from .batch import batch_database, normalize_queries, start_batch, wait_and_collect
+
+        database_id = batch_database(database)
+        query_list = normalize_queries(queries)
+        state = start_batch(
+            self,
+            query_list,
+            database=database_id,
+            method=method,
+            limit=limit,
+            state_file=state_file,
+        )
+        return wait_and_collect(
+            self,
+            state,
+            timeout=timeout,
+            poll_interval=poll_interval,
+            on_progress=on_progress,
+            state_file=state_file,
+        )
+
+    def resume_search_many(
+        self,
+        state,
+        *,
+        timeout: float | None = None,
+        poll_interval: float = 1.0,
+        on_progress=None,
+    ):
+        """Reconnect to a batch run saved with ``state_file`` and return its results.
+
+        ``state`` is the state file path, its loaded dictionary, or ``error.state`` from
+        a failed :meth:`search_many`. If the run was never confirmed as created, the
+        same request is sent again with the saved idempotency key, so the server
+        returns the existing run (or creates it once). Nothing is charged twice.
+        """
+
+        from .batch import ensure_started, load_state, wait_and_collect
+
+        state_file = None if isinstance(state, dict) else state
+        loaded = state if isinstance(state, dict) else load_state(state)
+        ensure_started(self, loaded, state_file)
+        return wait_and_collect(
+            self,
+            loaded,
+            timeout=timeout,
+            poll_interval=poll_interval,
+            on_progress=on_progress,
+            state_file=state_file,
         )
 
     def search_cheese(
