@@ -97,6 +97,23 @@ For each vendor the command writes `email.txt` (the draft) and `molecules.csv` c
 database id, a `-DMCH` reference id, and SMILES. Scores, properties, and SDK price estimates are
 deliberately left out. DeepMedChem is CCed so the vendor can attribute the request.
 
+## Optimization (Navigator ask/tell)
+
+| Command | Purpose |
+| --- | --- |
+| `dmc optimize run NAME -d DB (--minimize\|--maximize) [--budget N] [--batch-size N] --score-cmd 'CMD {input} {output}' [--strategy S] [--druglike] [--property NAME=MIN:MAX] [--seed N] [--scorer JSON] [--objective-name L] [--units U] [--work-dir DIR] [--quiet]` | Creates (or resumes) NAME and scores every batch with the command until the budget is spent. Re-run the same command to resume. |
+| `dmc optimize ask NAME [-o batch.csv] [--wait SECONDS]` | Writes the pending batch as `id,smiles`. Exit 0 written, 3 nothing ready within `--wait` (default 300), 4 finished. |
+| `dmc optimize tell NAME scores.csv [--batch BATCH_ID] [--scorer JSON]` | Submits scores for the pending batch (or `--batch`). Ids missing from the CSV are submitted as failed. |
+| `dmc optimize status [NAME]` / `dmc optimize list [--status S]` | One optimization's state, or a table of all of them. |
+| `dmc optimize results NAME [--top N] [--order best\|round] [-o FILE]` | Scored molecules, best first; `-o` writes CSV. |
+| `dmc optimize cancel NAME` / `dmc optimize resume NAME` | Cancel; resume a `paused` optimization. |
+
+`--score-cmd` runs through the shell with `{input}` and `{output}` replaced by quoted paths.
+`{input}` is a CSV with `id,smiles`. The command must write `{output}`, a CSV with `id` and
+`score` columns and optionally `status` (`valid`, `failed`, `timeout`, `filtered`, `cancelled`),
+`error`, and any other columns, which are stored as metrics. An empty, `nan` or unparseable score
+is a failure. A non-zero exit aborts without submitting; the batch stays pending.
+
 ## Typical session
 
 ```bash
