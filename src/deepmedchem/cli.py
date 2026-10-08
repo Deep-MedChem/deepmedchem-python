@@ -431,6 +431,7 @@ def _add_optimize_parser(commands) -> None:
     run.add_argument(
         "--scorer", metavar="JSON", help='Scorer identity to pin, e.g. \'{"name": "glide"}\''
     )
+    run.add_argument("--hit-threshold", type=float, help="Score threshold defining a hit")
     run.add_argument("--objective-name", help="Label of the score, e.g. docking_score")
     run.add_argument("--units", help="Units of the score, e.g. kcal/mol")
     run.add_argument(
@@ -440,6 +441,19 @@ def _add_optimize_parser(commands) -> None:
     )
     run.add_argument("--quiet", action="store_true", help="Do not print per-round progress")
     _add_connection_options(run)
+
+    transition = actions.add_parser("transition", help="Switch strategy after the pending batch")
+    transition.add_argument("name")
+    transition.add_argument("strategy")
+    transition.add_argument("--idempotency-key", required=True)
+    _add_connection_options(transition)
+    seeds = actions.add_parser("seeds", help="Queue measured seeds from a JSON list")
+    seeds.add_argument("name")
+    seeds.add_argument("input")
+    seeds.add_argument("--mode", choices=("external", "synthon"), required=True)
+    seeds.add_argument("--scorer", metavar="JSON", help="Same scorer identity as the run")
+    seeds.add_argument("--idempotency-key", required=True)
+    _add_connection_options(seeds)
 
     ask = actions.add_parser(
         "ask",
@@ -940,6 +954,7 @@ def _optimize_run(args) -> int:
             seed=args.seed,
             scorer=scorer,
             objective_name=args.objective_name,
+            hit_threshold=args.hit_threshold,
             units=args.units,
         )
         try:
@@ -1084,6 +1099,20 @@ def _optimize_cancel_or_resume(args) -> int:
     return 0
 
 
+def _optimize_control(args) -> int:
+    with _open_client(args) as client:
+        optimization = client.optimizations.get(args.name)
+        if args.optimize_command == "transition":
+            optimization.transition(args.strategy, idempotency_key=args.idempotency_key)
+        else:
+            rows = json.loads(Path(args.input).read_text())
+            optimization.add_seeds(
+                rows, mode=args.mode, scorer=_json_option(args.scorer, "--scorer"),
+                idempotency_key=args.idempotency_key)
+    print(json.dumps(optimization.resource.raw, indent=2, sort_keys=True))
+    return 0
+
+
 _OPTIMIZE_COMMANDS = {
     "run": _optimize_run,
     "ask": _optimize_ask,
@@ -1093,6 +1122,8 @@ _OPTIMIZE_COMMANDS = {
     "results": _optimize_results,
     "cancel": _optimize_cancel_or_resume,
     "resume": _optimize_cancel_or_resume,
+    "seeds": _optimize_control,
+    "transition": _optimize_control,
 }
 
 

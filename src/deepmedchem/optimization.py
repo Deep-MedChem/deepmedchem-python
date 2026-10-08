@@ -12,6 +12,7 @@ and ``client.optimizations`` exposes the individual endpoints.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import math
 import numbers
@@ -191,6 +192,8 @@ def build_specification(
     metadata: Mapping[str, Any] | None = None,
     objective_name: str | None = None,
     units: str | None = None,
+    hit_threshold: float | None = None,
+    start_paused: bool = False,
 ) -> dict[str, Any]:
     """Validate the arguments of ``create`` and return the JSON body sent to the API."""
 
@@ -201,6 +204,10 @@ def build_specification(
     if batch_size > budget:
         raise ValueError(f"batch_size ({batch_size}) must not exceed budget ({budget})")
     objective: dict[str, Any] = {"direction": _check_direction(direction)}
+    if hit_threshold is not None:
+        if isinstance(hit_threshold, bool) or not math.isfinite(float(hit_threshold)):
+            raise ValueError("hit_threshold must be finite")
+        objective["hit_threshold"] = float(hit_threshold)
     for key, label in (("name", objective_name), ("units", units)):
         if label is not None:
             if not isinstance(label, str) or not 1 <= len(label) <= 64:
@@ -212,6 +219,8 @@ def build_specification(
         "budget": budget,
         "batch_size": batch_size,
     }
+    if start_paused:
+        spec["start_paused"] = True
     if _check_name(name) is not None:
         spec["name"] = name
     if strategy is not None:
@@ -593,6 +602,8 @@ class Optimizations:
         metadata: Mapping[str, Any] | None = None,
         objective_name: str | None = None,
         units: str | None = None,
+        hit_threshold: float | None = None,
+        start_paused: bool = False,
         idempotency_key: str | None = None,
     ) -> Optimization:
         """Create an optimization, or return the existing one with the same name and spec."""
@@ -611,6 +622,8 @@ class Optimizations:
             metadata=metadata,
             objective_name=objective_name,
             units=units,
+            hit_threshold=hit_threshold,
+            start_paused=start_paused,
         )
         payload = self._client._request(
             "POST",
@@ -730,6 +743,34 @@ class Optimizations:
             )
         )
         return [Observation.model_validate(item) for item in page.data], page.next_cursor
+
+    def add_seeds(self, optimization_id: str, rows, *, mode="external", scorer=None,
+                        idempotency_key: str | None = None) -> OptimizationResource:
+        """Queue measured seeds at a batch boundary; external SMILES train only the surrogate.
+
+        Synthon mode requires Navigator product ids and also seeds the search archive.
+        Seed evidence is not charged to the scoring budget.
+        """
+        body = {"mode": mode, "rows": list(rows)}
+        if scorer is not None:
+            body["scorer"] = dict(scorer)
+        key = idempotency_key or "seeds-" + hashlib.sha256(
+            json.dumps(body, sort_keys=True, allow_nan=False).encode()
+        ).hexdigest()
+        return OptimizationResource.model_validate(
+            self._client._request("POST", _path(optimization_id, "/seeds"), json=body,
+                                        headers={"Idempotency-Key": key})
+        )
+
+    def transition(self, optimization_id: str, strategy: str, *,
+                         idempotency_key: str | None = None) -> OptimizationResource:
+        """Switch after the pending batch is scored, or immediately when paused."""
+        key = idempotency_key or "transition-" + uuid.uuid4().hex
+        return OptimizationResource.model_validate(
+            self._client._request("POST", _path(optimization_id, ":transition"),
+                                        json={"strategy": strategy},
+                                        headers={"Idempotency-Key": key})
+        )
 
     def cancel(self, optimization_id: str) -> OptimizationResource:
         return OptimizationResource.model_validate(
@@ -855,6 +896,16 @@ class Optimization:
             observations = observations[:limit]
         return OptimizationResult(observations=observations, optimization=self.resource)
 
+    def add_seeds(self, rows, *, mode="external", scorer=None, idempotency_key=None):
+        self.resource = self._api.add_seeds(
+            self.id, rows, mode=mode, scorer=scorer, idempotency_key=idempotency_key)
+        return self
+
+    def transition(self, strategy, *, idempotency_key=None):
+        self.resource = self._api.transition(
+            self.id, strategy, idempotency_key=idempotency_key)
+        return self
+
     def cancel(self) -> Optimization:
         self.resource = self._api.cancel(self.id)
         return self
@@ -889,6 +940,8 @@ class AsyncOptimizations:
         metadata: Mapping[str, Any] | None = None,
         objective_name: str | None = None,
         units: str | None = None,
+        hit_threshold: float | None = None,
+        start_paused: bool = False,
         idempotency_key: str | None = None,
     ) -> AsyncOptimization:
         spec = build_specification(
@@ -905,6 +958,8 @@ class AsyncOptimizations:
             metadata=metadata,
             objective_name=objective_name,
             units=units,
+            hit_threshold=hit_threshold,
+            start_paused=start_paused,
         )
         payload = await self._client._request(
             "POST",
@@ -1016,6 +1071,34 @@ class AsyncOptimizations:
             )
         )
         return [Observation.model_validate(item) for item in page.data], page.next_cursor
+
+    async def add_seeds(self, optimization_id: str, rows, *, mode="external", scorer=None,
+                        idempotency_key: str | None = None) -> OptimizationResource:
+        """Queue measured seeds at a batch boundary; external SMILES train only the surrogate.
+
+        Synthon mode requires Navigator product ids and also seeds the search archive.
+        Seed evidence is not charged to the scoring budget.
+        """
+        body = {"mode": mode, "rows": list(rows)}
+        if scorer is not None:
+            body["scorer"] = dict(scorer)
+        key = idempotency_key or "seeds-" + hashlib.sha256(
+            json.dumps(body, sort_keys=True, allow_nan=False).encode()
+        ).hexdigest()
+        return OptimizationResource.model_validate(
+            await self._client._request("POST", _path(optimization_id, "/seeds"), json=body,
+                                        headers={"Idempotency-Key": key})
+        )
+
+    async def transition(self, optimization_id: str, strategy: str, *,
+                         idempotency_key: str | None = None) -> OptimizationResource:
+        """Switch after the pending batch is scored, or immediately when paused."""
+        key = idempotency_key or "transition-" + uuid.uuid4().hex
+        return OptimizationResource.model_validate(
+            await self._client._request("POST", _path(optimization_id, ":transition"),
+                                        json={"strategy": strategy},
+                                        headers={"Idempotency-Key": key})
+        )
 
     async def cancel(self, optimization_id: str) -> OptimizationResource:
         return OptimizationResource.model_validate(
@@ -1132,6 +1215,16 @@ class AsyncOptimization:
         if limit is not None:
             observations = observations[:limit]
         return OptimizationResult(observations=observations, optimization=self.resource)
+
+    async def add_seeds(self, rows, *, mode="external", scorer=None, idempotency_key=None):
+        self.resource = await self._api.add_seeds(
+            self.id, rows, mode=mode, scorer=scorer, idempotency_key=idempotency_key)
+        return self
+
+    async def transition(self, strategy, *, idempotency_key=None):
+        self.resource = await self._api.transition(
+            self.id, strategy, idempotency_key=idempotency_key)
+        return self
 
     async def cancel(self) -> AsyncOptimization:
         self.resource = await self._api.cancel(self.id)
@@ -1400,6 +1493,7 @@ def optimize(
     batch_size: int = 100,
     name: str | None = None,
     strategy: str | None = None,
+    hit_threshold: float | None = None,
     filters: str | None = None,
     properties: Mapping[str, Any] | None = None,
     seed: int | None = None,
@@ -1435,6 +1529,7 @@ def optimize(
             batch_size=batch_size,
             name=name,
             strategy=strategy,
+            hit_threshold=hit_threshold,
             filters=filters,
             properties=properties,
             seed=seed,

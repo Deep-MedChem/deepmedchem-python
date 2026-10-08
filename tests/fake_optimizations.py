@@ -17,6 +17,7 @@ import httpx
 
 TERMINAL = {"completed", "failed", "cancelled"}
 _SPEC_FIELDS = {
+    "start_paused",
     "name",
     "database",
     "objective",

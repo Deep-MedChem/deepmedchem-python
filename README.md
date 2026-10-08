@@ -505,3 +505,27 @@ For interactive RDKit visualization of similarity and SMARTS substructure querie
 - [Documentation](https://docs.deepmedchem.com/) and [Python quickstart](https://docs.deepmedchem.com/docs/guides/python/quickstart)
 - [Python package on PyPI](https://pypi.org/project/deepmedchem/)
 - [Python SDK on GitHub](https://github.com/Deep-MedChem/deepmedchem-python)
+
+
+### Seeded optimization and analog harvesting
+
+`client.optimizations.create(..., hit_threshold=-7, start_paused=True)` initializes without
+proposing. After status becomes `paused`, use `run.add_seeds(rows, mode="synthon")` with measured
+scores and Navigator product IDs, or `mode="external"` with SMILES and scores. SMILES-only seeds
+train the surrogate; in-space product seeds also initialize analog search. Neither spends the
+scoring budget. If a scorer was pinned, pass the same `scorer` metadata with seeds.
+
+After the seed operation finishes, `run.resume()` starts proposals. During an ask/tell loop,
+`run.transition("analog_harvest_accurate", idempotency_key="harvest-1")` queues a switch after
+scoring the current batch. `analog_harvest_fast` is also supported. Poll `run.refresh()` and inspect
+`resource.raw["pending_operation"]`; controls apply asynchronously and do not replace pending
+molecules. Invalid seeds pause the run with a reason and preserve its checkpoint.
+
+`dmc optimize seeds NAME seeds.json --mode synthon --idempotency-key seeds-1` and
+`dmc optimize transition NAME analog_harvest_fast --idempotency-key harvest-1` expose the same
+operations. `dmc optimize run` and `dmc.optimize()` accept a hit threshold (`--hit-threshold` /
+`hit_threshold`). See [the seed example](examples/optimization/05_seed_and_harvest.py).
+
+Custom `properties={"MolWt": (None, 350)}` windows are checked on assembled products by the
+upgraded worker, including when combined with `filters="druglike"`. Check the catalog's
+optimization property capabilities before requesting them.

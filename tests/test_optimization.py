@@ -870,9 +870,67 @@ def test_resource_accepts_server_nulls_before_the_engine_starts():
     from deepmedchem.models import Observation, OptimizationResource, SubmitReceipt
 
     resource = OptimizationResource.model_validate(
-        {"id": "opt_1", "status": "initializing", "engine": None, "progress": None,
-         "links": None, "specification": None, "best": None}
+        {
+            "id": "opt_1",
+            "status": "initializing",
+            "engine": None,
+            "progress": None,
+            "links": None,
+            "specification": None,
+            "best": None,
+        }
     )
     assert resource.engine == {} and resource.links == {} and resource.direction is None
     assert Observation.model_validate({"id": "a", "metrics": None}).metrics == {}
     assert SubmitReceipt.model_validate({"accepted": True, "counts": None}).counts == {}
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_control_requests_preserve_identity_and_hit_threshold(server, asynchronous):
+    controls = []
+    resource = None
+
+    def handler(request):
+        if request.url.path.endswith(("/seeds", ":transition")):
+            controls.append(request)
+            return httpx.Response(202, json=resource)
+        return server(request)
+
+    async def run_async():
+        nonlocal resource
+        async with _async_client(handler) as client:
+            opt = await client.optimizations.create(
+                database="enamine",
+                direction="minimize",
+                budget=6,
+                batch_size=3,
+                hit_threshold=-1.0,
+                start_paused=True,
+            )
+            resource = opt.resource.raw
+            await opt.add_seeds([{"smiles": "CCO", "score": -2.0}], mode="external")
+            await opt.add_seeds([{"smiles": "CCO", "score": -2.0}], mode="external")
+            await opt.transition("analog_harvest_fast", idempotency_key="switch-once")
+
+    if asynchronous:
+        asyncio.run(run_async())
+    else:
+        with _client(handler) as client:
+            opt = client.optimizations.create(
+                database="enamine",
+                direction="minimize",
+                budget=6,
+                batch_size=3,
+                hit_threshold=-1.0,
+                start_paused=True,
+            )
+            resource = opt.resource.raw
+            opt.add_seeds([{"smiles": "CCO", "score": -2.0}], mode="external")
+            opt.add_seeds([{"smiles": "CCO", "score": -2.0}], mode="external")
+            opt.transition("analog_harvest_fast", idempotency_key="switch-once")
+    assert resource["specification"]["objective"]["hit_threshold"] == -1.0
+    assert resource["specification"]["start_paused"] is True
+    assert controls[0].headers["idempotency-key"] == controls[1].headers["idempotency-key"]
+    assert json.loads(controls[0].content)["mode"] == "external"
+    assert controls[2].headers["idempotency-key"] == "switch-once"
+    assert json.loads(controls[2].content) == {"strategy": "analog_harvest_fast"}
