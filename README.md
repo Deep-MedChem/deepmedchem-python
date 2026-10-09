@@ -344,7 +344,10 @@ Credentials resolve from an explicit `api_key`, `DEEPMEDCHEM_API_KEY`, compatibi
 variables, a custom credential provider, the selected profile's OS-keyring entry, or the
 `credentials.json` fallback file. Set `DEEPMEDCHEM_CREDENTIAL_STORE=file` or `=keyring` to force one
 store. Use `dmc login --profile dev` for the development service; profiles never share
-credentials.
+credentials. Dev login opens `https://cheese-dev.deepmedchem.com`, reusing your session
+in that browser. If an older `config.toml` explicitly sets `[profiles.dev].web_url` to
+`https://cheese-new-dev.deepmedchem.com`, change it to `https://cheese-dev.deepmedchem.com`.
+Explicit profile URL overrides are preserved.
 
 Every request identifies its source with `X-DMC-Client`, `X-DMC-Client-Version`, and
 `X-DMC-SDK-Version`. The default values attribute direct SDK use to `deepmedchem-python`; an
