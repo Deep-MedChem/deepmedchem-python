@@ -10,6 +10,8 @@ def _handler(request: httpx.Request) -> httpx.Response:
     body = json.loads(request.content or b"{}")
     if request.url.path == "/api/v2/catalog":
         return httpx.Response(200, json={"spaces": []})
+    if request.url.path == "/available_databases_full":
+        return httpx.Response(200, json={})
     return httpx.Response(
         200,
         json={

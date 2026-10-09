@@ -34,7 +34,6 @@ def search(
     database: str,
     method: str = "morgan",
     limit: int = 20,
-    shortlist_multiplier: int = 10,
     include_synthons: bool = False,
     api_key: str | None = None,
     api_url: str | None = None,
@@ -60,7 +59,6 @@ def search(
             database=database,
             method=method,
             limit=limit,
-            shortlist_multiplier=shortlist_multiplier,
             include_synthons=include_synthons,
         )
 

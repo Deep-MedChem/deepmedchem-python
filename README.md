@@ -10,7 +10,7 @@
 The official, chemistry-thin Python client for the DeepMedChem hosted chemical-space platform.
 It contains no RDKit, models, databases, or proprietary search implementation.
 
-> **Beta:** `deepmedchem` 0.2 is available for early use. APIs may still change before the
+> **Beta:** `deepmedchem` 0.4 is available for early use. APIs may still change before the
 > stable release.
 
 ## Installation
@@ -39,48 +39,56 @@ The `dmc` command (also installed as `deepmedchem`) covers the everyday operatio
 writing Python:
 
 ```bash
-dmc databases                        # searchable databases, delivery time, order emails
+dmc databases                        # abbreviations, sizes, prices, order emails
+dmc databases --detailed             # full IDs, BioSolveIT mappings, availability, links
 dmc usage                            # account plan and CHEESE Credits remaining today
-dmc search "CC(=O)Oc1ccccc1C(=O)O" -d enamine-real-v5a -m shape -n 10
-dmc search "CC(=O)Oc1ccccc1C(=O)O" -d enamine-real-v5a -o aspirin.csv
-dmc substructure "[N;R0][N;R0]C(=O)" -d enamine-real-v5a -n 50 -o hydrazides.sdf
-dmc sample -d freedom-space-5 -n 100 --seed 7 -o sample.smi
+dmc search "CC(=O)Oc1ccccc1C(=O)O" -d enamine -m shape -n 10
+dmc search "CC(=O)Oc1ccccc1C(=O)O" -d enamine -o aspirin.csv
+dmc substructure "[N;R0][N;R0]C(=O)" -d enamine -n 10 --timeout-seconds 45 -o hydrazides.sdf
+dmc sample -d freedom -n 100 --seed 7 -o sample.smi
 dmc order aspirin.csv --get-quote
+dmc optimize run my-run -d enamine --minimize --score-cmd './dock.sh {input} {output}'
+dmc optimize status                  # your optimizations; also ask, tell, results, cancel
 ```
 
-`databases` lists every searchable space with its size, whether the vendor publishes per-compound
-prices, and the vendor address for orders and quotes:
+`databases` lists every searchable space with its size, whether per-compound price estimates
+are available, and the vendor address for orders and quotes. Output captured on September 11, 2026;
+the catalog can change. For Enamine, the size is an estimated number of source reagent
+combinations, marked with `~`, rather than unique molecular graphs. `--detailed` adds full IDs, BioSolveIT mappings, type, availability,
+success estimates, and vendor links. `--json` always returns the unmodified API catalog:
 
 ```text
 $ dmc databases
-database                molecules  prices  orders
-----------------------  ---------  ------  ------------------------
-cheminfinita-2026-02       794.2B  -       sales@otavachemicals.com
-d2b-spacem1                  1.5B  -       hello@molecule.one
-enamine-real-v5a           357.4B  yes     info@enamine.net
-freedom-space-5            296.4B  -       sales@chem-space.com
-synple-explore-2025-10       9.5T  -       sales@emolecules.com
-synple-synple-2025-10        7.6T  -       sales@emolecules.com
-vast-2026-h2                 6.8B  yes     contact@xtalpi.com
+abbreviation  molecules  prices  orders
+------------  ---------  ------  ------------------------
+enamine          ~93.4B  yes     info@enamine.net
+freedom          296.4B  yes     sales@chem-space.com
+explore            9.5T  yes     sales@emolecules.com
+synple             7.6T  yes     sales@emolecules.com
+vast               6.8B  yes     VAST@XtalPi.com
+cheminfinita     794.2B  -       sales@otavachemicals.com
+spacem1            1.5B  -       hello@molecule.one
 
-7 databases, made on demand and delivered in 3-6 weeks.
+7 databases. Lead times vary by database; see --detailed.
 Order or request quotes by email, or run `dmc order results.csv`.
 ```
 
 Searches print a table of rank, similarity score, price, and SMILES, followed by what was
 searched and the score range. Substructure hits show `exact` instead of a score, and samples
-have no score column. Product ids and the other API fields are kept in `--json` and in exports:
+have no score column. Product ids and the other API fields are kept in `--json` and in exports.
+
+Example output from the production API (September 11, 2026):
 
 ```text
-$ dmc search "CC(=O)Oc1ccccc1C(=O)O" -d enamine-real-v5a -n 3
+$ dmc search "CC(=O)Oc1ccccc1C(=O)O" -d enamine -n 3
 rank   score  price  smiles
-----  ------  -----  ----------------------
+----  ------  -----  -----------------------------
    1  0.7037   $245  O=C(O)Oc1ccccc1C(=O)O
    2  0.6667   $163  COC(=O)Oc1ccccc1C(=O)O
-   3  0.5312   $245  O=C(O)COc1ccccc1C(=O)O
+   3  0.6061   $163  CC(C)(C)OC(=O)Oc1ccccc1C(=O)O
 
-Searched 357.4B molecules (Enamine REAL v5a) in 380 ms.
-Similarity range: 0.53-0.70 ECFP4 Tanimoto.
+Searched ~93.4B source combinations (Enamine REAL v5a) in 396 ms.
+Similarity range: 0.61-0.70 ECFP4 Tanimoto.
 ```
 
 `-o/--output` saves the hits as CSV, SDF, SMILES (`.smi`), or JSON, inferred from the file suffix
@@ -88,6 +96,112 @@ Similarity range: 0.53-0.70 ECFP4 Tanimoto.
 from the response. SDF output needs RDKit (`pip install "deepmedchem[sdf]"`); the other formats
 have no extra dependencies. Every command accepts `--json` for the raw API response and
 `--profile` to pick a configured profile.
+
+### Enamine filtered population
+
+The production and development APIs use the filtered Enamine release `2026-09-06.2` by default for
+`database="enamine"`, including sampling, similarity, selections, runs, and substructure search.
+It applies MW ≤500, logP ≤5, HBA ≤10, HBD ≤5, rotatable bonds ≤10, and TPSA ≤140 Å²
+on the assembled product after selecting the first valid source topology. Price estimates
+remain available on the returned products.
+
+The updated estimate is **93.41B** source combinations (95% interval: 93.19–93.63B),
+based on 18.7 million draws. This is the historical approximately 95B population,
+replacing the larger 336.72B normalized population as the default.
+The catalogue reports the estimate and its confidence interval. The CLI marks
+estimated counts with `~`; this population counts source reagent combinations, which may
+produce the same molecular graph. Sampling is not uniform over unique molecular graphs.
+No client-side property preset is needed to select this population.
+
+```python
+from deepmedchem import Client
+
+with Client() as client:
+    sample = client.sample(database="enamine", count=20, seed=7)
+    matches = client.search_substructure("C(=O)N", database="enamine", limit=20)
+```
+
+## Enumerated and in-stock catalogues
+
+Classic CHEESE Search serves the enumerated make-on-demand libraries and the in-stock
+catalogues (Enamine REAL, the Chemspace 5B sets, XtalPi, Synple, Chemriya, Molecule.one,
+eXplore, Mcule, Molport, Chemspace screening, ZINC15). The SDK reaches them with the same API
+key: `search` routes those databases to CHEESE Search's synchronous `/molsearch`, and
+`catalog()` / `dmc databases` list them next to the platform spaces.
+
+```python
+from deepmedchem import Client
+
+with Client() as client:
+    hits = client.search("CC(=O)Oc1ccccc1C(=O)O", database="molport", method="shape", limit=50)
+    hits.to_csv("molport_hits.csv")
+```
+
+```bash
+dmc search "CC(=O)Oc1ccccc1C(=O)O" -d mcule-in-stock -n 20
+```
+
+Limits on these catalogues: `limit` is 1–100 per call (CHEESE Search answers larger requests only
+through its job API), results carry `similarity` scores but no price estimates, and
+`search_substructure`, `sample`, selections and runs raise `DeepMedChemError(code="unsupported_operation")`.
+Use the [CHEESE UI](https://cheese.deepmedchem.com/) for those workflows. If CHEESE Search is
+unreachable, `catalog()` returns the platform spaces alone and emits a `RuntimeWarning`.
+
+## DeepMedChem All Chemical Spaces
+
+Snapshot: September 11, 2026. Use the abbreviation in `database="enamine"` or `dmc search ... -d enamine`.
+Full database IDs remain supported. Abbreviations resolve to the releases listed by `dmc databases --detailed`.
+
+| Abbreviation | Type[^python-availability] | Size | Availability | Success rate | Prices[^price-estimates] | Orders | Link |
+| --- | --- | ---: | --- | --- | :---: | --- | :---: |
+| `enamine` | Make-On-Demand | ~93.41B source combinations | 3–4 weeks | >80% | yes | info@enamine.net | [🔗](https://enamine.net/compound-collections/real-compounds/real-space-navigator) |
+| `freedom` | Make-On-Demand | 296.4B | 5–6 weeks | >80% | yes | sales@chem-space.com | [🔗](https://chem-space.com/freedom-space) |
+| `explore` | Make-On-Demand | 9.5T | 3–4 weeks | >85% | yes | sales@emolecules.com | [🔗](https://www.emolecules.com/products/explore) |
+| `synple` | Make-On-Demand | 7.6T | 3–4 weeks | >85% | yes | sales@emolecules.com | [🔗](https://www.emolecules.com/products/explore) |
+| `cheminfinita` | Make-On-Demand | 794.2B | 5–8 weeks | 55–85% | - | sales@otavachemicals.com | [🔗](https://www.otavachemicals.com/) |
+| `spacem1` | Make-On-Demand | 1.5B | 2–6 weeks | >85% | - | hello@molecule.one | [🔗](https://molecule.one/) |
+| `vast` | Make-On-Demand | 6.8B | 2–4 weeks | 85%+ | yes | VAST@XtalPi.com | [🔗](https://aifchem.com/) |
+| `enamine-real` | Make-On-Demand (enumerated)[^cheese-search] | 9.56B | 3–4 weeks | >80% | - | libraries@enamine.net | [🔗](https://enamine.net/compound-collections/real-compounds) |
+| `chemspace-5b-ro5` | Make-On-Demand (enumerated)[^cheese-search] | 5.0B | 5–6 weeks | >80% | - | sales@chem-space.com | [🔗](https://chem-space.com/) |
+| `chemspace-5b-beyond-ro5` | Make-On-Demand (enumerated)[^cheese-search] | 5.0B | 5–6 weeks | >80% | - | sales@chem-space.com | [🔗](https://chem-space.com/) |
+| `chemspace-5b-freedom` | Make-On-Demand (enumerated)[^cheese-search] | 5.0B | 5–6 weeks | >80% | - | sales@chem-space.com | [🔗](https://chem-space.com/freedom-space) |
+| `xtalpi` | Make-On-Demand (enumerated)[^cheese-search] | 4.7B | 2–4 weeks | 85%+ | - | VAST@XtalPi.com | [🔗](https://aifchem.com/) |
+| `synple-4b` | Make-On-Demand (enumerated)[^cheese-search] | 3.9B | 3–4 weeks | >85% | - | sales@emolecules.com | [🔗](https://www.emolecules.com/products/explore) |
+| `chemriya` | Make-On-Demand (enumerated)[^cheese-search] | 1.4B | Ask vendor | N/A | - | info@chemriya.com | [🔗](https://www.otavachemicals.com/) |
+| `molecule-one` | Make-On-Demand (enumerated)[^cheese-search] | 68.0M | 2–6 weeks | >85% | - | hello@molecule.one | [🔗](https://molecule.one/) |
+| `explore-enumerated` | Make-On-Demand (enumerated)[^cheese-search] | 54.8M | 3–4 weeks | >85% | - | sales@emolecules.com | [🔗](https://www.emolecules.com/products/explore) |
+| `explore-diverse` | Make-On-Demand (enumerated)[^cheese-search] | 11.4M | 3–4 weeks | >85% | - | sales@emolecules.com | [🔗](https://www.emolecules.com/products/explore) |
+| `enamine-aa` | Make-On-Demand (enumerated)[^cheese-search] | 373.8K | 3–4 weeks | >80% | - | info@enamine.net | [🔗](https://enamine.net/) |
+| `mcule-in-stock` | In-Stock[^cheese-search] | 7.2M | Immediate | 100% | yes | order@mcule.com | [🔗](https://mcule.com/) |
+| `mcule-full`[^cheese-search] | In-Stock | 140.4M | Immediate | 100% | yes | order@mcule.com | [🔗](https://mcule.com/) |
+| `molport`[^cheese-search] | In-Stock | 5.9M | Immediate | 100% | yes | sales@molport.com | [🔗](https://molport.com/) |
+| `chemspace-screening`[^cheese-search] | In-Stock | 7.5M | Immediate | 100% | yes | sales@chem-space.com | [🔗](https://chem-space.com/) |
+| `zinc15`[^cheese-search] | Other | 697.1M | No availability info | N/A | unknown | N/A | [🔗](https://zinc15.docking.org/) |
+
+[^python-availability]: All rows are searchable from this package. Make-On-Demand spaces use the platform API with its full feature set. Rows marked [^cheese-search] are served by CHEESE Search; see *Enumerated and in-stock catalogues* below for what the SDK supports there.
+
+[^cheese-search]: Served by CHEESE Search (`api.cheese.deepmedchem.com`) rather than the platform API: similarity search only (`morgan`, `shape`, `esp`), at most 100 hits per call, no per-compound price estimates, no substructure search, sampling, selections or runs. Sizes from the live catalogue on September 24, 2026.
+
+[^price-estimates]: Prices are planning estimates per compound, before any discounts are applied, and generally assume a low number of molecules ordered and price per 1 mg. For instance VAST H2 2026 uses 1 mg per compound in a 50-compound order. Other databases similarly assume small orders; the exact basis varies by vendor. Request a final quote for your actual quantity and order size. Counts and price support for Make-On-Demand spaces come from the live API catalog. In-Stock rows use immediate availability and 100% success as stock-catalog conventions; confirm fulfillment with the vendor. MCULE-FULL includes the full purchasable catalog.
+
+## Migrating from BioSolveIT InfiniSee
+
+Use the DeepMedChem abbreviation in Python or with `-d`. The BioSolveIT slugs below identify
+analogous collections; they are not accepted as DeepMedChem database IDs. Releases and molecule
+counts differ. [BioSolveIT download catalog](https://www.biosolveit.de/chemical-spaces/).
+
+| DeepMedChem abbreviation | BioSolveIT slug |
+| --- | --- |
+| `enamine` | `REALSpace_95bn_2026-04`** |
+| `freedom` | `FreedomSpace_296bn_2026-03` |
+| `explore` | `eXplore_8tr_2026-06` |
+| `synple` | `Synple_8tr_2026-06` |
+| `cheminfinita` | `CHEMriya_55bn_2025-10`* |
+| `vast` | `VAST_4bn_2026-05` |
+
+\* No direct mapping: CHEMriya is a related Otava collection, not ChemInfinita. But it might be very similar. Contact Otava for details.
+
+\*\* No direct mapping: our Enamine version is built from public Enamine building blocks, so it is not identical to the BioSolveIT version. But it is very similar.
 
 ## Requesting quotes and orders
 
@@ -110,11 +224,14 @@ message asks the vendor to confirm final pricing, availability, lead time, and o
 processing. Use `--to ADDRESS` for a private database without a configured procurement contact,
 and `--database ID` for older CSV files that do not carry a database column.
 
+Account-specific usage snapshot from September 6, 2026:
+
 ```text
 $ dmc usage
 plan:      premium
-credits:   9,999 of 10,000 remaining today (1 used)
-resets:    2026-09-04T00:00:00+00:00 (in 13h 35m)
+credits:   9,992 of 10,000 remaining today (8 used)
+resets:    2026-09-07T00:00:00+00:00 (in 10h 59m)
+promo:     10x September promo (10x, base 1,000/day, until 2026-10-01)
 ```
 
 ## Quickstart
@@ -124,7 +241,7 @@ import deepmedchem as dmc
 
 result = dmc.search(
     "CC(=O)OC1=CC=CC=C1C(=O)O",  # Aspirin
-    database="enamine-real-v5a",
+    database="enamine",
     method="shape",
     limit=3,
 )
@@ -135,13 +252,13 @@ for hit in result.hits:
     print(f"{hit.rank}  score={hit.score:.4f}  price={price}  {hit.smiles}")
 ```
 
-Example output (the database release and search results can change):
+Example output from the production API (September 11, 2026):
 
 ```text
 SearchResult(3 molecules, method='shape', database='enamine-real-v5a')
 1  score=0.9726  price=$245  O=C(O)Oc1ccccc1C(=O)O
 2  score=0.9719  price=$163  COC(=O)Oc1ccccc1C(=O)O
-3  score=0.8713  price=$245  O=C(O)COc1ccccc1C(=O)O
+3  score=0.9551  price=$163  COC(=O)Oc1ccccc1C(C)=O
 ```
 
 Prices are estimates in whole US dollars for delivery to the United States. They are returned in
@@ -149,7 +266,41 @@ the original search response, so both `hit.price` and the aligned `result.prices
 available without another API request. Databases without price estimates return `None`; run
 `dmc databases` for the current list and the vendor address to request a binding quote.
 
+## Optimize with your own scorer
+
+Navigator proposes molecules from a chemical space, your function scores them locally (docking,
+an ML model, an RDKit property), and the scores steer the next proposals until the budget is
+spent. Only SMILES and numbers cross the network.
+
+```python
+import deepmedchem as dmc
+from rdkit import Chem
+from rdkit.Chem import QED
+
+def score(smiles):  # one value per SMILES, None for a molecule you cannot score
+    return [QED.qed(m) if (m := Chem.MolFromSmiles(s)) else None for s in smiles]
+
+result = dmc.optimize(score, direction="maximize", database="enamine",
+                      budget=500, batch_size=50, name="qed-demo")
+print(result.top(10))
+result.to_csv("qed_demo.csv")
+```
+
+`direction` is required and scores are never negated. `name=` makes the call resumable: re-run it
+after Ctrl-C or a crash and it continues, re-sending scores that were computed but not uploaded.
+A scorer may return dicts such as `{"score": -9.1, "cnn_score": 0.82}`; the extra keys are stored
+as metrics. For manual control use `client.optimizations.create(...)` with `opt.ask()` and
+`opt.tell(batch, scores)`; for shell scorers and HPC queues use
+`dmc optimize run NAME --score-cmd 'CMD {input} {output}'` or `dmc optimize ask`/`tell`.
+Worked examples (RDKit, your own ML model, GNINA docking) are in
+[`examples/optimization`](examples/optimization/README.md).
+
 ## SMILES and SMARTS substructure search
+
+Enamine substructure search is enabled in production on release `2026-09-06.2`.
+All 326 route partitions have native indexes. Returned products satisfy the filtered
+population rules and are checked against the original query, including bond order,
+recursive predicates, and chirality.
 
 Use `format="smiles"` for a concrete molecular graph, including the existing
 junction-spanning examples. Use `format="smarts"` for atom lists, ring constraints,
@@ -158,12 +309,17 @@ recursive expressions, and other SMARTS query features:
 ```python
 junction = dmc.substructure("CNC(=O)N1CCC1", format="smiles", database="enamine-real-v5a", limit=10)
 hydrazides = dmc.substructure(
-    "[N;R0][N;R0]C(=O)", format="smarts", database="enamine-real-v5a", limit=10
+    "[N;R0][N;R0]C(=O)", format="smarts", database="enamine-real-v5a",
+    limit=10, timeout_seconds=45, timeout=60,
 )
 ```
 
 See the runnable [substructure example](examples/docs/substructure_search.py) for several
-SQC-derived SMARTS queries. Complex recursive SMARTS can require a longer timeout.
+SQC-derived SMARTS queries. More demanding motifs can take tens of seconds.
+`timeout_seconds` sets the server search budget; `timeout` sets the SDK's HTTP timeout
+and should leave room for serialization and transport. A deadline can return fewer
+than `limit` hits; inspect `result.raw["timed_out"]`, coverage, and warnings. Exact
+returned matches do not imply an exhaustive search of every possible product.
 
 Any result writes itself with `result.to_csv(path)`, `result.to_sdf(path)`, or
 `result.to_file(path)` (format inferred from the suffix). `dmc.usage()` and `Client.usage()` return
@@ -180,8 +336,9 @@ response locally.
 The default profile calls `https://api.deepmedchem.com`. Keys created at
 `https://cheese.deepmedchem.com` work on both the legacy and v2 APIs. All keys for an account share
 one daily CHEESE Credit balance: one successful synchronous execution or durable-run item costs one
-credit. Synchronous work is terminated after 10 seconds; use the Runs API for longer work, where a
-basic item has a 60-second limit.
+credit. Ordinary synchronous work has a 10-second execution limit; use the Runs API
+for longer work, where a basic item has a 60-second limit. Substructure search uses
+its separate `timeout_seconds` budget.
 
 Credentials resolve from an explicit `api_key`, `DEEPMEDCHEM_API_KEY`, compatibility environment
 variables, a custom credential provider, the selected profile's OS-keyring entry, or the
@@ -200,9 +357,9 @@ the installed SDK version separately.
 `molecule-selection/1` and `run/1` documents; all chemistry and capability validation remains on
 the API.
 
-Exact RDKit constraints and experimental predicted-property acquisition are available only through
-`Selection`. The simple `search`, `sample`, CLI, and export helpers intentionally keep their
-ordinary interfaces.
+Exact RDKit constraints, fast predicted-property acquisition, and hard assembled-product predicted
+ranges are available through `Selection`. The simple `search`, `sample`, CLI, and export helpers
+keep their ordinary interfaces.
 
 ```python
 from deepmedchem import Client, Selection
@@ -229,11 +386,27 @@ with Client() as dmc:
     result = dmc.selections.create(selection)
 ```
 
-Every returned RDKit value is calculated on the assembled product and enforced literally. CP16
-values are predicted, `experimental-acquisition-only` ranking signals: they may reduce a similarity
-shortlist, but they are not measured assay results and do not prove that an ADMET threshold is met.
-The response exposes `hit.acquisition.predicted_value`, `hit.acquisition.applicable`, and one
-response-level `result.acquisition` provenance record.
+Every returned RDKit value is calculated on the assembled product and enforced literally. For
+predicted-property acquisition, factorized CP16 scores cheaply narrow the candidate pool before
+assembly and the pinned OpenADMET teacher predicts every unique surviving assembled product. The
+response exposes the two stages separately as `hit.acquisition.approximate_value` and
+`hit.acquisition.predicted_value`. These remain model predictions rather than assay measurements.
+
+A hard predicted-property range is enforced only by the assembled-product teacher:
+
+```python
+selection = (
+    Selection.from_database("enamine-real-v5a")
+    .reference("query", smiles="CC(=O)Oc1ccccc1C(=O)O")
+    .maximize_similarity("rdkit.ecfp4_tanimoto", reference="query")
+    .where_predicted_property(
+        "openadmet-herg-pchembl",
+        lte=5.0,
+        units="pChEMBL",
+    )
+    .limit(20)
+)
+```
 
 Property-filtered random sampling uses the same selection contract without acquisition:
 
@@ -285,6 +458,25 @@ The `navigator` terminal application is distributed separately as `dmc-navigator
 this SDK and adds file handling, login commands, terminal presentation, and Navigator-specific
 workflows.
 
+## Use with AI coding agents
+
+The repository ships an [Agent Skill](https://agentskills.io) in
+[`skills/deepmedchem`](skills/deepmedchem/SKILL.md) that teaches Claude Code, Codex, Cursor, and
+other skill-aware agents how to search chemical space with this package and the `dmc` command.
+
+```bash
+# Claude Code: add the marketplace once, then install the plugin
+/plugin marketplace add Deep-MedChem/deepmedchem-python
+/plugin install deepmedchem@deep-medchem
+
+# Any agent that supports the open skills format
+npx skills add Deep-MedChem/deepmedchem-python
+```
+
+You can also copy `skills/deepmedchem/` into `.claude/skills/` of a project (or `~/.claude/skills/`
+for every project), or zip the folder and upload it as a custom skill in Claude.ai or through the
+Skills API.
+
 ## Development
 
 ```bash
@@ -297,10 +489,43 @@ python -m build
 twine check dist/*
 ```
 
-API documentation: <https://docs.deepmedchem.com/docs/python/quickstart>
+API documentation: <https://docs.deepmedchem.com/docs/guides/python/quickstart>
 
 Runnable authenticated examples using the established Enamine query panels are in
 [`examples/live`](examples/live/README.md).
 
 For interactive RDKit visualization of similarity and SMARTS substructure queries, open the
 [`Enamine search notebook`](examples/notebooks/enamine_search.ipynb).
+
+## Links
+
+- [DeepMedChem website](https://deepmedchem.com/)
+- [CHEESE UI](https://cheese.deepmedchem.com/) and [database overview](https://cheese.deepmedchem.com/about)
+- [API](https://api.deepmedchem.com/) and [API reference](https://api.deepmedchem.com/api/v2/docs)
+- [Documentation](https://docs.deepmedchem.com/) and [Python quickstart](https://docs.deepmedchem.com/docs/guides/python/quickstart)
+- [Python package on PyPI](https://pypi.org/project/deepmedchem/)
+- [Python SDK on GitHub](https://github.com/Deep-MedChem/deepmedchem-python)
+
+
+### Seeded optimization and analog harvesting
+
+`client.optimizations.create(..., hit_threshold=-7, start_paused=True)` initializes without
+proposing. After status becomes `paused`, use `run.add_seeds(rows, mode="synthon")` with measured
+scores and Navigator product IDs, or `mode="external"` with SMILES and scores. SMILES-only seeds
+train the surrogate; in-space product seeds also initialize analog search. Neither spends the
+scoring budget. If a scorer was pinned, pass the same `scorer` metadata with seeds.
+
+After the seed operation finishes, `run.resume()` starts proposals. During an ask/tell loop,
+`run.transition("analog_harvest_accurate", idempotency_key="harvest-1")` queues a switch after
+scoring the current batch. `analog_harvest_fast` is also supported. Poll `run.refresh()` and inspect
+`resource.raw["pending_operation"]`; controls apply asynchronously and do not replace pending
+molecules. Invalid seeds pause the run with a reason and preserve its checkpoint.
+
+`dmc optimize seeds NAME seeds.json --mode synthon --idempotency-key seeds-1` and
+`dmc optimize transition NAME analog_harvest_fast --idempotency-key harvest-1` expose the same
+operations. `dmc optimize run` and `dmc.optimize()` accept a hit threshold (`--hit-threshold` /
+`hit_threshold`). See [the seed example](examples/optimization/05_seed_and_harvest.py).
+
+Custom `properties={"MolWt": (None, 350)}` windows are checked on assembled products by the
+upgraded worker, including when combined with `filters="druglike"`. Check the catalog's
+optimization property capabilities before requesting them.

@@ -28,5 +28,6 @@ for name, smarts in SMARTS_QUERIES.items():
         database=DATABASE,
         limit=3,
         timeout_seconds=60,
+        timeout=75,
     )
     print(f"{name}: {len(result)} hits")

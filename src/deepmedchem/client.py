@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
+import warnings
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
@@ -16,6 +18,7 @@ from .config import (
     resolve_api_key,
     resolve_profile,
 )
+from .databases import DATABASE_DETAILS, is_classic_database, resolve_database
 from .models import (
     Page,
     RunEvent,
@@ -33,6 +36,149 @@ from .selection import Run, Selection
 
 USAGE_PATH = "/rate-limit/status"
 
+# Classic CHEESE Search (the account host) serves the enumerated and in-stock
+# catalogues that the platform API does not carry. Similarity search for those
+# databases is proxied to its synchronous /molsearch endpoint.
+CLASSIC_SEARCH_PATH = "/molsearch"
+CLASSIC_CATALOG_PATH = "/available_databases_full"
+CLASSIC_MAX_RESULTS = 100
+_CLASSIC_SEARCH_TYPES = {
+    "morgan": "morgan",
+    "shape": "espsim_shape",
+    "esp": "espsim_electrostatic",
+}
+_CLASSIC_METRICS = {
+    "morgan": "ECFP4 Tanimoto",
+    "shape": "ESP-Sim shape",
+    "esp": "ESP-Sim electrostatic",
+}
+
+
+def _classic_search_params(
+    smiles: str, database_id: str, scorer: str, limit: int
+) -> dict[str, Any]:
+    if scorer not in _CLASSIC_SEARCH_TYPES:
+        raise ValueError("method must be one of: 'morgan', 'shape', 'esp'")
+    if not 1 <= int(limit) <= CLASSIC_MAX_RESULTS:
+        raise ValueError(
+            f"limit must be between 1 and {CLASSIC_MAX_RESULTS} for {database_id}; "
+            "CHEESE Search answers larger requests only through its job API."
+        )
+    return {
+        "search_input": smiles,
+        "search_type": _CLASSIC_SEARCH_TYPES[scorer],
+        "search_quality": "fast",
+        "db_names": database_id,
+        "n_neighbors": int(limit),
+        "descriptors": "false",
+        "properties": "false",
+    }
+
+
+def _classic_search_result(payload: dict[str, Any], database_id: str, scorer: str) -> SearchResult:
+    neighbors = payload.get("neighbors") or []
+    rows: list[dict[str, Any]] = []
+    for index, neighbor in enumerate(neighbors, start=1):
+        if not isinstance(neighbor, dict) or not neighbor.get("smiles"):
+            continue
+        score = neighbor.get("similarity", neighbor.get("score"))
+        row = {
+            key: value
+            for key, value in neighbor.items()
+            if key not in {"smiles", "id", "similarity", "score"}
+        }
+        row.update(
+            {
+                "rank": index,
+                "smiles": neighbor["smiles"],
+                "product_id": neighbor.get("id"),
+                "score": float(score) if score is not None else None,
+            }
+        )
+        rows.append(row)
+    info = payload.get("search_info") or {}
+    return SearchResult(
+        results=rows,
+        request_id=info.get("search_id"),
+        database_id=database_id,
+        scorer=scorer,
+        metric=_CLASSIC_METRICS.get(scorer),
+        counts={"returned": len(rows)},
+    )
+
+
+def _classic_catalog_libraries(payload: Any, present: set[str]) -> list[dict[str, Any]]:
+    """Turn /available_databases_full into platform-shaped library entries."""
+    libraries: list[dict[str, Any]] = []
+    if not isinstance(payload, dict):
+        return libraries
+    for database_id, info in payload.items():
+        if not isinstance(info, dict) or database_id in present:
+            continue
+        if not is_classic_database(database_id):
+            continue
+        details = DATABASE_DETAILS.get(database_id, {})
+        libraries.append(
+            {
+                "database_id": database_id,
+                "name": database_id,
+                "served_by": "cheese",
+                "vendor": info.get("Vendor"),
+                "website": info.get("Website") or details.get("url"),
+                "contact_email": info.get("Email"),
+                "product_count": _int_or_none(info.get("Number of molecules")),
+                "capabilities": {
+                    "search": True,
+                    "search_cheese": ["shape", "esp"],
+                    "search_substructure": False,
+                    "sample": False,
+                    "selections": False,
+                },
+                "pricing": {"available": False},
+            }
+        )
+    return libraries
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(str(value).replace(",", "").replace("_", "").strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _unsupported_classic_operation(operation: str, database_id: str) -> DeepMedChemError:
+    return DeepMedChemError(
+        f"{operation} is not available for {database_id}: that catalogue is served by CHEESE "
+        "Search, which the Python API reaches for similarity search only. Use "
+        "https://cheese.deepmedchem.com/ for the full CHEESE Search feature set.",
+        code="unsupported_operation",
+    )
+
+
+def _merge_classic_catalog(catalog: dict[str, Any], classic: Any) -> dict[str, Any]:
+    if not isinstance(catalog, dict):
+        return catalog
+    libraries = catalog.get("libraries")
+    if not isinstance(libraries, list):
+        return catalog
+    present = {
+        str(library.get("database_id")) for library in libraries if isinstance(library, dict)
+    }
+    extra = _classic_catalog_libraries(classic, present)
+    if extra:
+        catalog["libraries"] = libraries + extra
+    return catalog
+
+
+def _warn_classic_catalog_unavailable(error: DeepMedChemError) -> None:
+    warnings.warn(
+        "CHEESE Search catalogue unavailable; enumerated and in-stock databases are missing "
+        f"from this listing ({error}).",
+        RuntimeWarning,
+        stacklevel=3,
+    )
+
 
 class DeepMedChemError(RuntimeError):
     def __init__(
@@ -43,12 +189,16 @@ class DeepMedChemError(RuntimeError):
         status_code: int | None = None,
         request_id: str | None = None,
         retryable: bool = False,
+        field: str | None = None,
+        details: Any = None,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.status_code = status_code
         self.request_id = request_id
         self.retryable = retryable
+        self.field = field
+        self.details = details
 
 
 def _credentials(
@@ -81,6 +231,8 @@ def _raise_api_error(response: httpx.Response) -> None:
         status_code=response.status_code,
         request_id=error.get("request_id") or response.headers.get("x-request-id"),
         retryable=bool(error.get("retryable", response.status_code in {429, 503, 504})),
+        field=error.get("field"),
+        details=error.get("details"),
     )
 
 
@@ -254,6 +406,10 @@ class Client:
         )
         self.selections = _SyncSelections(self)
         self.runs = _SyncRuns(self)
+        # Imported here because the optimization module builds on this one.
+        from .optimization import Optimizations
+
+        self.optimizations = Optimizations(self)
         self._max_retries = max_retries
         self._retry_backoff = retry_backoff
 
@@ -267,6 +423,13 @@ class Client:
         self._client.close()
 
     def _request(self, method: str, path: str, **kwargs) -> dict[str, Any]:
+        return self._request_with_response(method, path, **kwargs)[0]
+
+    def _request_with_response(
+        self, method: str, path: str, **kwargs
+    ) -> tuple[Any, httpx.Response]:
+        """Send one request with retries; return the decoded JSON and the final response."""
+
         for attempt in range(self._max_retries + 1):
             response = None
             try:
@@ -276,7 +439,7 @@ class Client:
                     continue
                 if response.is_error:
                     _raise_api_error(response)
-                return response.json()
+                return response.json(), response
             except DeepMedChemError:
                 raise
             except httpx.HTTPError as error:
@@ -295,7 +458,22 @@ class Client:
         raise AssertionError("unreachable")
 
     def catalog(self) -> dict[str, Any]:
-        return self._request("GET", "/api/v2/catalog")
+        """Return the platform catalog, extended with the catalogues classic CHEESE serves."""
+
+        catalog = self._request("GET", "/api/v2/catalog")
+        try:
+            classic = self._request("GET", f"{self._account_url}{CLASSIC_CATALOG_PATH}")
+        except DeepMedChemError as error:
+            _warn_classic_catalog_unavailable(error)
+            return catalog
+        return _merge_classic_catalog(catalog, classic)
+
+    def _classic_search(
+        self, smiles: str, database_id: str, scorer: str, limit: int
+    ) -> SearchResult:
+        params = _classic_search_params(smiles, database_id, scorer, limit)
+        payload = self._request("GET", f"{self._account_url}{CLASSIC_SEARCH_PATH}", params=params)
+        return _classic_search_result(payload, database_id, scorer)
 
     def usage(self) -> Usage:
         """Return the account plan and today's CHEESE Credit usage for this key."""
@@ -309,18 +487,19 @@ class Client:
         database: str,
         method: str = "morgan",
         limit: int = 20,
-        shortlist_multiplier: int = 10,
         include_synthons: bool = False,
     ) -> SearchResult:
         if method not in {"morgan", "shape", "esp"}:
             raise ValueError("method must be one of: 'morgan', 'shape', 'esp'")
+        database_id = resolve_database(database)
+        if is_classic_database(database_id):
+            return self._classic_search(smiles, database_id, method, limit)
         if method != "morgan":
             return self.search_cheese(
                 smiles,
                 database=database,
                 scorer=method,
                 limit=limit,
-                shortlist_multiplier=shortlist_multiplier,
                 include_synthons=include_synthons,
             )
         return SearchResult.model_validate(
@@ -329,12 +508,91 @@ class Client:
                 "/api/v2/search",
                 json={
                     "query_smiles": smiles,
-                    "database_id": database,
+                    "database_id": database_id,
                     "limit": limit,
-                    "shortlist_multiplier": shortlist_multiplier,
                     "include_synthons": include_synthons,
                 },
             )
+        )
+
+    def search_many(
+        self,
+        queries,
+        *,
+        database: str,
+        method: str = "morgan",
+        limit: int = 20,
+        state_file: str | os.PathLike[str] | None = None,
+        timeout: float | None = None,
+        poll_interval: float = 1.0,
+        on_progress=None,
+    ):
+        """Search each query molecule separately in one durable run and wait for the results.
+
+        ``queries`` is a list of SMILES, a ``{query_id: smiles}`` mapping, ``(id, smiles)``
+        pairs, or the output of ``deepmedchem.batch.read_queries(path)``. Every record is
+        its own query (duplicates are kept); ``limit`` is the number of hits *per query*.
+        Each successful query costs one credit; failed queries are refunded.
+
+        Every call starts a new run. Pass ``state_file`` to save the idempotency key
+        (before the run is created) and the run ID, then reconnect after an
+        interruption with :meth:`resume_search_many` instead of searching (and
+        paying) again. Without ``state_file``, an error raised after the request was
+        sent carries ``error.state``; pass that to :meth:`resume_search_many`.
+        Short network outages while waiting are retried automatically.
+        Only the DeepMedChem chemical spaces support batch runs; classic CHEESE
+        Search catalogues raise an error. Never prompts, so it is safe in scripts.
+        """
+
+        from .batch import batch_database, normalize_queries, start_batch, wait_and_collect
+
+        database_id = batch_database(database)
+        query_list = normalize_queries(queries)
+        state = start_batch(
+            self,
+            query_list,
+            database=database_id,
+            method=method,
+            limit=limit,
+            state_file=state_file,
+        )
+        return wait_and_collect(
+            self,
+            state,
+            timeout=timeout,
+            poll_interval=poll_interval,
+            on_progress=on_progress,
+            state_file=state_file,
+        )
+
+    def resume_search_many(
+        self,
+        state,
+        *,
+        timeout: float | None = None,
+        poll_interval: float = 1.0,
+        on_progress=None,
+    ):
+        """Reconnect to a batch run saved with ``state_file`` and return its results.
+
+        ``state`` is the state file path, its loaded dictionary, or ``error.state`` from
+        a failed :meth:`search_many`. If the run was never confirmed as created, the
+        same request is sent again with the saved idempotency key, so the server
+        returns the existing run (or creates it once). Nothing is charged twice.
+        """
+
+        from .batch import ensure_started, load_state, wait_and_collect
+
+        state_file = None if isinstance(state, dict) else state
+        loaded = state if isinstance(state, dict) else load_state(state)
+        ensure_started(self, loaded, state_file)
+        return wait_and_collect(
+            self,
+            loaded,
+            timeout=timeout,
+            poll_interval=poll_interval,
+            on_progress=on_progress,
+            state_file=state_file,
         )
 
     def search_cheese(
@@ -344,19 +602,20 @@ class Client:
         database: str,
         scorer: str,
         limit: int = 20,
-        shortlist_multiplier: int = 10,
         include_synthons: bool = False,
     ) -> SearchResult:
+        database_id = resolve_database(database)
+        if is_classic_database(database_id):
+            return self._classic_search(smiles, database_id, scorer, limit)
         return SearchResult.model_validate(
             self._request(
                 "POST",
                 "/api/v2/search_cheese",
                 json={
                     "query_smiles": smiles,
-                    "database_id": database,
+                    "database_id": database_id,
                     "scorer": scorer,
                     "limit": limit,
-                    "shortlist_multiplier": shortlist_multiplier,
                     "include_synthons": include_synthons,
                 },
             )
@@ -372,13 +631,16 @@ class Client:
         timeout_seconds: int = 30,
         include_synthons: bool = False,
     ) -> SubstructureResult:
+        database_id = resolve_database(database)
+        if is_classic_database(database_id):
+            raise _unsupported_classic_operation("Substructure search", database_id)
         return SubstructureResult.model_validate(
             self._request(
                 "POST",
                 "/api/v2/search_substructure",
                 json={
                     "query": {"format": query_format, "value": query},
-                    "database_id": database,
+                    "database_id": database_id,
                     "limit": limit,
                     "timeout_seconds": timeout_seconds,
                     "include_synthons": include_synthons,
@@ -394,8 +656,11 @@ class Client:
         seed: int | None = None,
         include_synthons: bool = False,
     ) -> SampleResult:
+        database_id = resolve_database(database)
+        if is_classic_database(database_id):
+            raise _unsupported_classic_operation("Sampling", database_id)
         payload = {
-            "database_id": database,
+            "database_id": database_id,
             "count": count,
             "include_synthons": include_synthons,
         }
@@ -576,6 +841,9 @@ class AsyncClient:
         )
         self.selections = _AsyncSelections(self)
         self.runs = _AsyncRuns(self)
+        from .optimization import AsyncOptimizations
+
+        self.optimizations = AsyncOptimizations(self)
         self._max_retries = max_retries
         self._retry_backoff = retry_backoff
 
@@ -589,6 +857,13 @@ class AsyncClient:
         await self._client.aclose()
 
     async def _request(self, method: str, path: str, **kwargs) -> dict[str, Any]:
+        return (await self._request_with_response(method, path, **kwargs))[0]
+
+    async def _request_with_response(
+        self, method: str, path: str, **kwargs
+    ) -> tuple[Any, httpx.Response]:
+        """Send one request with retries; return the decoded JSON and the final response."""
+
         for attempt in range(self._max_retries + 1):
             response = None
             try:
@@ -598,7 +873,7 @@ class AsyncClient:
                     continue
                 if response.is_error:
                     _raise_api_error(response)
-                return response.json()
+                return response.json(), response
             except DeepMedChemError:
                 raise
             except httpx.HTTPError as error:
@@ -617,7 +892,24 @@ class AsyncClient:
         raise AssertionError("unreachable")
 
     async def catalog(self) -> dict[str, Any]:
-        return await self._request("GET", "/api/v2/catalog")
+        """Return the platform catalog, extended with the catalogues classic CHEESE serves."""
+
+        catalog = await self._request("GET", "/api/v2/catalog")
+        try:
+            classic = await self._request("GET", f"{self._account_url}{CLASSIC_CATALOG_PATH}")
+        except DeepMedChemError as error:
+            _warn_classic_catalog_unavailable(error)
+            return catalog
+        return _merge_classic_catalog(catalog, classic)
+
+    async def _classic_search(
+        self, smiles: str, database_id: str, scorer: str, limit: int
+    ) -> SearchResult:
+        params = _classic_search_params(smiles, database_id, scorer, limit)
+        payload = await self._request(
+            "GET", f"{self._account_url}{CLASSIC_SEARCH_PATH}", params=params
+        )
+        return _classic_search_result(payload, database_id, scorer)
 
     async def usage(self) -> Usage:
         """Return the account plan and today's CHEESE Credit usage for this key."""
@@ -630,13 +922,19 @@ class AsyncClient:
         method = kwargs.pop("method", "morgan")
         if method not in {"morgan", "shape", "esp"}:
             raise ValueError("method must be one of: 'morgan', 'shape', 'esp'")
+        database_id = resolve_database(kwargs.pop("database"))
+        if is_classic_database(database_id):
+            limit = kwargs.pop("limit", 20)
+            kwargs.pop("include_synthons", None)
+            if kwargs:
+                raise TypeError(f"unexpected search arguments: {sorted(kwargs)}")
+            return await self._classic_search(smiles, database_id, method, limit)
         if method != "morgan":
-            return await self.search_cheese(smiles, scorer=method, **kwargs)
+            return await self.search_cheese(smiles, database=database_id, scorer=method, **kwargs)
         payload = {
             "query_smiles": smiles,
-            "database_id": kwargs.pop("database"),
+            "database_id": database_id,
             "limit": kwargs.pop("limit", 20),
-            "shortlist_multiplier": kwargs.pop("shortlist_multiplier", 10),
             "include_synthons": kwargs.pop("include_synthons", False),
         }
         if kwargs:
@@ -646,12 +944,19 @@ class AsyncClient:
         )
 
     async def search_cheese(self, smiles: str, **kwargs) -> SearchResult:
+        database_id = resolve_database(kwargs.pop("database"))
+        scorer = kwargs.pop("scorer")
+        if is_classic_database(database_id):
+            limit = kwargs.pop("limit", 20)
+            kwargs.pop("include_synthons", None)
+            if kwargs:
+                raise TypeError(f"unexpected search arguments: {sorted(kwargs)}")
+            return await self._classic_search(smiles, database_id, scorer, limit)
         payload = {
             "query_smiles": smiles,
-            "database_id": kwargs.pop("database"),
-            "scorer": kwargs.pop("scorer"),
+            "database_id": database_id,
+            "scorer": scorer,
             "limit": kwargs.pop("limit", 20),
-            "shortlist_multiplier": kwargs.pop("shortlist_multiplier", 10),
             "include_synthons": kwargs.pop("include_synthons", False),
         }
         if kwargs:
@@ -661,9 +966,12 @@ class AsyncClient:
         )
 
     async def search_substructure(self, query: str, **kwargs) -> SubstructureResult:
+        database_id = resolve_database(kwargs.pop("database"))
+        if is_classic_database(database_id):
+            raise _unsupported_classic_operation("Substructure search", database_id)
         payload = {
             "query": {"format": kwargs.pop("query_format", "smarts"), "value": query},
-            "database_id": kwargs.pop("database"),
+            "database_id": database_id,
             "limit": kwargs.pop("limit", 100),
             "timeout_seconds": kwargs.pop("timeout_seconds", 30),
             "include_synthons": kwargs.pop("include_synthons", False),
@@ -675,8 +983,11 @@ class AsyncClient:
         )
 
     async def sample(self, **kwargs) -> SampleResult:
+        database_id = resolve_database(kwargs.pop("database"))
+        if is_classic_database(database_id):
+            raise _unsupported_classic_operation("Sampling", database_id)
         payload = {
-            "database_id": kwargs.pop("database"),
+            "database_id": database_id,
             "count": kwargs.pop("count", 100),
             "include_synthons": kwargs.pop("include_synthons", False),
         }

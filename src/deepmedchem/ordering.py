@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlencode
 
+from .databases import resolve_database
+
 DEEPMEDCHEM_CC = "info@deepmedchem.com"
 REFERENCE_SUFFIX = "-DMCH"
 INLINE_MOLECULE_LIMIT = 20
@@ -54,7 +56,7 @@ _register(
     "CHEMSPACE-5B-RO5",
     "CHEMSPACE-5B-FREEDOM",
 )
-_register(VendorContact("XtalPi", "contact@xtalpi.com"), "vast-2026-h2", "XTALPI", "XTALPI-SYNTHON")
+_register(VendorContact("XtalPi", "VAST@XtalPi.com"), "vast-2026-h2", "XTALPI", "XTALPI-SYNTHON")
 _register(
     VendorContact("OTAVA Chemicals", "sales@otavachemicals.com"),
     "cheminfinita-2026-02",
@@ -245,7 +247,7 @@ def read_order_csv(path: str | Path, *, database: str | None = None) -> list[Ord
                 raise ValueError(f"{source}: row {row_number} has no database ID")
 
             molecule = OrderMolecule(
-                database_id=database_id,
+                database_id=resolve_database(database_id),
                 deepmedchem_id=_reference_id(product_id, row_number=row_number - 1),
                 smiles=smiles,
             )

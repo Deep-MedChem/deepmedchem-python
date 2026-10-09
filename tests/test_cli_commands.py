@@ -110,12 +110,12 @@ def test_databases_table_lists_size_pricing_and_order_email(monkeypatch, capsys)
     assert cli.main(["databases"]) == 0
     out = capsys.readouterr().out
     header = out.splitlines()[0].split()
-    assert header == ["database", "molecules", "prices", "orders"]
-    enamine = next(line for line in out.splitlines() if line.startswith("enamine-real-v5a"))
-    assert enamine.split() == ["enamine-real-v5a", "357.4B", "yes", "info@enamine.net"]
-    d2b = next(line for line in out.splitlines() if line.startswith("d2b-spacem1"))
-    assert d2b.split() == ["d2b-spacem1", "1.5B", "-", "hello@molecule.one"]
-    assert "2 databases, made on demand and delivered in 3-6 weeks." in out
+    assert header == ["abbreviation", "molecules", "prices", "orders"]
+    enamine = next(line for line in out.splitlines() if line.startswith("enamine"))
+    assert enamine.split() == ["enamine", "357.4B", "yes", "info@enamine.net"]
+    d2b = next(line for line in out.splitlines() if line.startswith("spacem1"))
+    assert d2b.split() == ["spacem1", "1.5B", "-", "hello@molecule.one"]
+    assert "2 databases. Lead times vary by database; see --detailed." in out
 
 
 def test_catalog_alias_prints_json(monkeypatch, capsys) -> None:
@@ -156,13 +156,16 @@ def test_search_prints_table_and_summary(monkeypatch, capsys) -> None:
     assert "product_id" not in captured.out
     assert captured.err == ""
     # The search request goes out before the catalog lookup used for the summary line.
-    assert [request.url.path for request in seen] == ["/api/v2/search", "/api/v2/catalog"]
+    assert [request.url.path for request in seen] == [
+        "/api/v2/search",
+        "/api/v2/catalog",
+        "/available_databases_full",
+    ]
     body = json.loads(seen[0].content)
     assert body == {
         "query_smiles": "CC(=O)Oc1ccccc1C(=O)O",
         "database_id": "enamine-real-v5a",
         "limit": 2,
-        "shortlist_multiplier": 10,
         "include_synthons": False,
     }
 
@@ -203,7 +206,8 @@ def test_substructure_and_sample_reach_their_operations(monkeypatch, capsys) -> 
     seen = _install_client(monkeypatch)
     assert cli.main(["substructure", "c1ccccc1", "-d", "db", "-f", "smiles", "-n", "5"]) == 0
     assert cli.main(["sample", "-d", "db", "-n", "7", "--seed", "3"]) == 0
-    paths = [request.url.path for request in seen if request.url.path != "/api/v2/catalog"]
+    catalog_paths = {"/api/v2/catalog", "/available_databases_full"}
+    paths = [request.url.path for request in seen if request.url.path not in catalog_paths]
     assert paths == ["/api/v2/search_substructure", "/api/v2/sample"]
     assert json.loads(seen[0].content)["query"] == {"format": "smiles", "value": "c1ccccc1"}
     sample_request = next(request for request in seen if request.url.path == "/api/v2/sample")
@@ -240,3 +244,71 @@ def test_api_errors_exit_nonzero_with_code(monkeypatch, capsys) -> None:
     )
     assert cli.main(["search", "CCO", "-d", "db"]) == 1
     assert "No credits. [credit_limit_exceeded]" in capsys.readouterr().err
+
+
+def test_detailed_catalog_uses_live_counts_and_preserves_raw_json(monkeypatch, capsys):
+    _install_client(monkeypatch)
+    assert cli.main(["databases", "--detailed"]) == 0
+    out = capsys.readouterr().out
+    assert out.splitlines()[0].split() == [
+        "abbreviation", "database_id", "biosolveit_mapping", "type", "molecules",
+        "availability", "success", "prices", "orders", "link",
+    ]
+    assert "enamine-real-v5a" in out
+    assert "REALSpace_95bn_2026-04**" in out
+    assert "357.4B" in out  # Live fixture, not the README snapshot's 336.7B.
+    assert "public Enamine building blocks" in out
+    assert "MCULE-FULL" not in out
+    assert cli.main(["catalog", "--detailed", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == CATALOG
+
+
+def test_unknown_catalog_database_is_still_displayed(capsys):
+    cli._print_database_table({"libraries": [{"database_id": "private-space"}]}, detailed=True)
+    out = capsys.readouterr().out
+    assert "private-space" in out
+
+
+def test_cli_search_accepts_abbreviation(monkeypatch, capsys):
+    seen = _install_client(monkeypatch)
+    assert cli.main(["search", "CCO", "-d", "enamine"]) == 0
+    search = next(r for r in seen if r.url.path == "/api/v2/search")
+    assert json.loads(search.content)["database_id"] == "enamine-real-v5a"
+
+
+def test_catalog_display_order_and_unavailable_enamine_prices(capsys):
+    ids = [
+        "private-space", "d2b-spacem1", "cheminfinita-2026-02", "vast-2026-h2",
+        "synple-synple-2025-10", "synple-explore-2025-10", "freedom-space-5",
+        "enamine-real-v5a",
+    ]
+    catalog = {"libraries": [
+        {"database_id": db, "product_count": 1000, "pricing": {"available": False}}
+        for db in ids
+    ]}
+    original = json.dumps(catalog)
+    expected = [
+        "enamine", "freedom", "explore", "synple", "vast", "cheminfinita", "spacem1",
+        "private-space",
+    ]
+    for detailed in (False, True):
+        cli._print_database_table(catalog, detailed=detailed)
+        lines = capsys.readouterr().out.splitlines()[2:10]
+        assert [line.split()[0] for line in lines] == expected
+        if not detailed:
+            assert lines[0].split() == ["enamine", "1.0K", "-", "info@enamine.net"]
+    assert json.dumps(catalog) == original
+
+
+def test_databases_table_includes_classic_cheese_catalogues(capsys):
+    catalog = {"libraries": [
+        {"database_id": "enamine-real-v5a", "product_count": 1000, "pricing": {"available": True}},
+        {"database_id": "MOLPORT", "served_by": "cheese", "product_count": 5900000,
+         "contact_email": "sales@molport.com", "pricing": {"available": False}},
+    ]}
+    cli._print_database_table(catalog, detailed=False)
+    lines = capsys.readouterr().out.splitlines()
+    molport = next(line for line in lines if line.startswith("molport"))
+    assert molport.split() == ["molport", "5.9M", "-", "sales@molport.com"]
+    enamine_index = next(i for i, line in enumerate(lines) if line.startswith("enamine"))
+    assert lines.index(molport) > enamine_index
