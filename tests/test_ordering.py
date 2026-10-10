@@ -211,3 +211,15 @@ def test_cli_headless_keeps_artifacts_instead_of_opening_mail(
     assert cli.main(["order", str(source), "--output-dir", str(target)]) == 0
     assert "No graphical mail client detected" in capsys.readouterr().out
     assert (target / "molecule-one" / "email.txt").exists()
+
+
+def test_mcule_amino_acid_and_explore_5p4b_catalogues_have_procurement_contacts() -> None:
+    contacts = procurement_contacts()
+    for database_id in (
+        "MCULE-AA",
+        "MCULE-AA-IN-STOCK",
+        "MCULE-UNNATURAL-AA",
+        "MCULE-UNNATURAL-AA-IN-STOCK",
+    ):
+        assert contacts[database_id.casefold()].email == "order@mcule.com"
+    assert contacts["explore-5p4b"].email == "sales@emolecules.com"
