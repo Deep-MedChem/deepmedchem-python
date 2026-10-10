@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "deepmedchem"
-version = "0.3.0b5"
+version = "0.4.0b1"
 description = "Official Python client for the DeepMedChem chemical-space platform"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -39,8 +39,12 @@ dependencies = [
 
 [project.optional-dependencies]
 auth = []
-sdf = [
+rdkit = [
   "rdkit>=2023.9",
+]
+# Kept for existing installs; same as [rdkit].
+sdf = [
+  "deepmedchem[rdkit]",
 ]
 test = [
   "build>=1.2,<2",
@@ -65,6 +69,7 @@ packages = ["src/deepmedchem"]
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
+pythonpath = ["."]
 
 [tool.ruff]
 line-length = 100

@@ -77,3 +77,23 @@ def test_headless_login_prints_url_and_reports_file_store(monkeypatch, capsys) -
     assert "No display detected" in out
     assert "credentials.json" in out
     assert "secret-value" not in out
+
+
+def test_dev_browser_login_uses_existing_cheese_ui_session(monkeypatch, tmp_path) -> None:
+    import deepmedchem.config as config
+
+    monkeypatch.setattr(config, "config_path", lambda: tmp_path / "config.toml")
+    monkeypatch.setattr(config, "_legacy_config_path", lambda: tmp_path / "config.json")
+    monkeypatch.setattr(cli, "can_open_browser", lambda: True)
+    saved = []
+
+    def fake_browser_login(web_url, **kwargs):
+        assert web_url == "https://cheese-dev.deepmedchem.com"
+        assert kwargs["open_browser"] is True
+        return "dev-key", "ABCD-2345", f"{web_url}/navigator/login?code=ABCD-2345"
+
+    monkeypatch.setattr(cli, "browser_login", fake_browser_login)
+    monkeypatch.setattr(cli, "save_api_key", lambda token, profile: saved.append((token, profile)))
+    _mock_client(monkeypatch, 200)
+    assert cli.main(["login", "--profile", "dev"]) == 0
+    assert saved == [("dev-key", "dev")]

@@ -18,7 +18,8 @@ from platformdirs import user_config_path
 DEFAULT_API_URL = "https://api.deepmedchem.com"
 DEFAULT_WEB_URL = "https://cheese.deepmedchem.com"
 DEV_API_URL = "https://api-dev.deepmedchem.com"
-DEV_WEB_URL = "https://cheese-new-dev.deepmedchem.com"
+# Use the same UI origin as browser sign-in so device login reuses its session.
+DEV_WEB_URL = "https://cheese-dev.deepmedchem.com"
 # The account service answers usage and credit questions for the same API keys.
 DEFAULT_ACCOUNT_URL = "https://api.cheese.deepmedchem.com"
 DEV_ACCOUNT_URL = "https://api.cheese-dev.deepmedchem.com"

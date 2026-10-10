@@ -1,11 +1,20 @@
-"""Standard-library CLI for DeepMedChem: authentication, catalog, searches, and usage."""
+"""Standard-library CLI for DeepMedChem: authentication, catalog, searches, usage, optimization."""
 
 from __future__ import annotations
 
 import argparse
+import csv
 import json
+import re
+import shlex
+import shutil
+import subprocess
 import sys
+import tempfile
+import uuid
 from collections.abc import Iterable, Sequence
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from . import __version__
@@ -24,11 +33,13 @@ from .config import (
     save_api_key,
 )
 from .databases import DATABASE_DETAILS, DATABASE_DISPLAY_ORDER
-from .export import FORMATS, infer_format, write_result
-from .models import SearchResult, Usage
+from .export import FORMATS, check_export_dependencies, infer_format, write_result
+from .models import Batch, OptimizationResource, OptimizationResult, SearchResult, Usage
+from .optimization import _drive, _filename, normalize_scores
 from .ordering import open_order_drafts, prepare_order, procurement_contacts
 
 SEARCH_METHODS = ("morgan", "shape", "esp")
+BATCH_CONFIRM = 50  # batch runs above this many queries ask before starting
 
 
 # --- Presentation helpers ----------------------------------------------------
@@ -259,7 +270,14 @@ def _add_output_options(parser: argparse.ArgumentParser) -> None:
         "-o",
         "--output",
         metavar="FILE",
-        help="Save results to FILE (.csv, .sdf, .smi, or .json; inferred from the suffix)",
+        help="Save results to FILE (.csv, .sdf, .smi, .json, or .html; inferred from the suffix)",
+    )
+    parser.add_argument(
+        "--html-limit",
+        type=int,
+        default=100,
+        metavar="N",
+        help="Maximum number of structures drawn in HTML output (default: 100)",
     )
     parser.add_argument(
         "--format",
@@ -304,14 +322,36 @@ def _parser() -> argparse.ArgumentParser:
     )
 
     search = commands.add_parser("search", help="Similarity search for a SMILES query")
-    search.add_argument("smiles", help="Query molecule as SMILES")
+    search.add_argument("smiles", nargs="?", help="Query molecule as SMILES")
     search.add_argument(
-        "-d", "--database", required=True, help="Database abbreviation or full ID, see `databases`"
+        "-d", "--database", help="Database abbreviation or full ID, see `databases` (required)"
     )
     search.add_argument(
         "-m", "--method", choices=SEARCH_METHODS, default="morgan", help="Similarity method"
     )
-    search.add_argument("-n", "--limit", type=int, default=20, help="Number of hits")
+    search.add_argument(
+        "-n", "--limit", type=int, default=20, help="Number of hits (per query with --input)"
+    )
+    batch = search.add_argument_group(
+        "batch search", "search many query molecules from a file, each separately"
+    )
+    batch.add_argument(
+        "-i", "--input", metavar="FILE", help="Query molecules from .smi, .txt, .csv, .tsv or .sdf"
+    )
+    batch.add_argument("--smiles-column", help="SMILES column in a CSV/TSV input")
+    batch.add_argument("--id-column", help="ID column in a CSV/TSV input (or SDF property)")
+    batch.add_argument(
+        "--yes", action="store_true", help=f"Skip the confirmation above {BATCH_CONFIRM} molecules"
+    )
+    batch.add_argument(
+        "--state",
+        metavar="FILE",
+        help="Where to save the run state (default: <output>.run.json or "
+        "./deepmedchem-batch-<run id>.json)",
+    )
+    batch.add_argument(
+        "--resume", metavar="STATE_FILE", help="Reconnect to a saved batch run instead of a new one"
+    )
     _add_output_options(search)
     _add_connection_options(search)
 
@@ -364,7 +404,138 @@ def _parser() -> argparse.ArgumentParser:
     order.add_argument(
         "--no-open", action="store_true", help="Create files without opening an email client"
     )
+    _add_optimize_parser(commands)
     return parser
+
+
+def _add_optimize_parser(commands) -> None:
+    optimize = commands.add_parser(
+        "optimize",
+        help="Optimize your own score over a chemical space with Navigator (ask/tell)",
+        description=(
+            "Navigator proposes molecules, your scorer scores them, the scores go back. "
+            "`run` drives the whole loop with a shell command; `ask` and `tell` split it for "
+            "HPC queues."
+        ),
+    )
+    actions = optimize.add_subparsers(dest="optimize_command", required=True, metavar="COMMAND")
+
+    run = actions.add_parser(
+        "run",
+        help="Run the loop with a scoring command until the budget is spent",
+        description=(
+            "Create (or resume) the optimization NAME and score every batch with --score-cmd. "
+            "The command receives {input}, a CSV with id,smiles, and must write {output}, a CSV "
+            "with id,score and optionally status, error and metric columns. Re-running the same "
+            "command resumes."
+        ),
+    )
+    run.add_argument("name", metavar="NAME", help="Optimization name; re-running it resumes")
+    run.add_argument("-d", "--database", required=True, help="Database abbreviation or full ID")
+    direction = run.add_mutually_exclusive_group(required=True)
+    direction.add_argument(
+        "--minimize", dest="direction", action="store_const", const="minimize",
+        help="Lower scores are better (docking)",
+    )
+    direction.add_argument(
+        "--maximize", dest="direction", action="store_const", const="maximize",
+        help="Higher scores are better (predicted activity)",
+    )
+    run.add_argument("--budget", type=int, default=1000, help="Molecules to score in total")
+    run.add_argument("--batch-size", type=int, default=100, help="Molecules per batch")
+    run.add_argument(
+        "--score-cmd",
+        required=True,
+        metavar="CMD",
+        help="Shell command with {input} and {output} placeholders, "
+        "e.g. './dock.sh {input} {output}'",
+    )
+    run.add_argument("--strategy", help="Navigator strategy (default: gamma_diversity_screening)")
+    run.add_argument("--druglike", action="store_true", help="Apply the druglike filter")
+    run.add_argument(
+        "--property",
+        action="append",
+        default=[],
+        metavar="NAME=MIN:MAX",
+        help="Descriptor range, e.g. MolWt=:500 or TPSA=20:140 (repeatable)",
+    )
+    run.add_argument("--seed", type=int, help="Engine seed (default 0)")
+    run.add_argument(
+        "--scorer", metavar="JSON", help='Scorer identity to pin, e.g. \'{"name": "glide"}\''
+    )
+    run.add_argument("--hit-threshold", type=float, help="Score threshold defining a hit")
+    run.add_argument("--objective-name", help="Label of the score, e.g. docking_score")
+    run.add_argument("--units", help="Units of the score, e.g. kcal/mol")
+    run.add_argument(
+        "--work-dir",
+        metavar="DIR",
+        help="Keep each batch's input and output CSV here (default: a temporary directory)",
+    )
+    run.add_argument("--quiet", action="store_true", help="Do not print per-round progress")
+    _add_connection_options(run)
+
+    transition = actions.add_parser("transition", help="Switch strategy after the pending batch")
+    transition.add_argument("name")
+    transition.add_argument("strategy")
+    transition.add_argument("--idempotency-key", required=True)
+    _add_connection_options(transition)
+    seeds = actions.add_parser("seeds", help="Queue measured seeds from a JSON list")
+    seeds.add_argument("name")
+    seeds.add_argument("input")
+    seeds.add_argument("--mode", choices=("external", "synthon"), required=True)
+    seeds.add_argument("--scorer", metavar="JSON", help="Same scorer identity as the run")
+    seeds.add_argument("--idempotency-key", required=True)
+    _add_connection_options(seeds)
+
+    ask = actions.add_parser(
+        "ask",
+        help="Write the pending batch to a CSV (id,smiles)",
+        description=(
+            "Exit codes: 0 batch written; 3 no batch ready within --wait; 4 the optimization "
+            "has finished."
+        ),
+    )
+    ask.add_argument("name", metavar="NAME", help="Optimization name or id")
+    ask.add_argument("-o", "--output", metavar="FILE", help="CSV to write (default: BATCH_ID.csv)")
+    ask.add_argument(
+        "--wait", type=float, default=300.0, metavar="SECONDS",
+        help="How long to wait for a batch (default: 300)",
+    )
+    _add_connection_options(ask)
+
+    tell = actions.add_parser("tell", help="Submit a scores CSV (id,score[,status,error,...])")
+    tell.add_argument("name", metavar="NAME", help="Optimization name or id")
+    tell.add_argument("scores", metavar="SCORES.csv", help="CSV with id and score columns")
+    tell.add_argument(
+        "--batch", metavar="BATCH_ID", help="Batch the scores belong to (default: the pending one)"
+    )
+    tell.add_argument("--scorer", metavar="JSON", help="Scorer identity, checked against the pin")
+    _add_connection_options(tell)
+
+    status = actions.add_parser("status", help="Show one optimization, or list them all")
+    status.add_argument("name", metavar="NAME", nargs="?", help="Optimization name or id")
+    _add_connection_options(status)
+
+    listing = actions.add_parser("list", help="List your optimizations")
+    listing.add_argument("--status", dest="status_filter", help="Only this status")
+    _add_connection_options(listing)
+
+    results = actions.add_parser("results", help="Show or export the scored molecules")
+    results.add_argument("name", metavar="NAME", help="Optimization name or id")
+    results.add_argument("--top", type=int, metavar="N", help="Only the N best molecules")
+    results.add_argument(
+        "--order", choices=("best", "round"), default="best", help="Sort order (default: best)"
+    )
+    results.add_argument("-o", "--output", metavar="FILE", help="Write the rows to a CSV file")
+    _add_connection_options(results)
+
+    for action in ("cancel", "resume"):
+        command = actions.add_parser(
+            action,
+            help="Cancel an optimization" if action == "cancel" else "Resume a paused optimization",
+        )
+        command.add_argument("name", metavar="NAME", help="Optimization name or id")
+        _add_connection_options(command)
 
 
 # --- Commands -----------------------------------------------------------------
@@ -519,19 +690,31 @@ def _databases(args) -> int:
     return 0
 
 
+def _check_output(args) -> None:
+    """Fail before the request if the chosen output file cannot be written."""
+
+    if getattr(args, "output", None):
+        check_export_dependencies(args.format or infer_format(args.output))
+
+
 def _emit_result(args, result: SearchResult, client: Client | None = None) -> int:
     library = None
     if not args.json and client is not None:
         library = _catalog_entry(client, result.meta.database)
     if args.output:
         selected = args.format or infer_format(args.output)
-        written = write_result(result, args.output, format=selected)
+        written = write_result(result, args.output, format=selected, html_limit=args.html_limit)
+        total = len(result)
+        saved = f"{written} of {total}" if written < total and selected == "html" else written
+        message = f"Saved {saved} molecules to {args.output} ({selected})."
+        if written < total and selected == "html":
+            message += " Use --html-limit to draw more."
         if not args.json:
             _print_result_table(result, library=library)
-            print(f"Saved {written} molecules to {args.output} ({selected}).")
+            print(message)
         else:
             print(json.dumps(result.raw, indent=2, sort_keys=True))
-            print(f"Saved {written} molecules to {args.output} ({selected}).", file=sys.stderr)
+            print(message, file=sys.stderr)
         return 0
     if args.json:
         print(json.dumps(result.raw, indent=2, sort_keys=True))
@@ -541,6 +724,28 @@ def _emit_result(args, result: SearchResult, client: Client | None = None) -> in
 
 
 def _search(args) -> int:
+    given = [
+        name
+        for name, value in (
+            ("SMILES", args.smiles),
+            ("--input", args.input),
+            ("--resume", args.resume),
+        )
+        if value
+    ]
+    if len(given) != 1:
+        raise ValueError(
+            "give exactly one of: a SMILES query, --input FILE, or --resume STATE_FILE"
+        )
+    if args.resume or args.input:
+        # Batch accepts only .csv/.json, so it needs no RDKit check and keeps its
+        # own, clearer message for anything else.
+        return _search_many(args)
+    if not args.database:
+        raise ValueError("the following argument is required: -d/--database")
+    # Before the request is made or charged: a missing RDKit must fail here, not
+    # after the search has been paid for.
+    _check_output(args)
     with _open_client(args) as client:
         result = client.search(
             args.smiles,
@@ -552,7 +757,177 @@ def _search(args) -> int:
         return _emit_result(args, result, client)
 
 
+def _batch_progress():
+    """Return a progress printer that only reports when done/failed counts change."""
+
+    shown = []
+
+    def report(progress) -> None:
+        done = progress.succeeded + progress.failed + progress.cancelled
+        line = f"{done}/{progress.total} queries done ({progress.failed} failed)"
+        if shown and shown[-1] == line:
+            return
+        shown.append(line)
+        if sys.stderr.isatty():
+            print(f"\r{line}", end="", file=sys.stderr, flush=True)
+        else:
+            print(line, file=sys.stderr, flush=True)
+
+    return report
+
+
+def _search_many(args) -> int:
+    def say(message: str = "") -> None:
+        # With --json, stdout carries only the JSON document; status lines go to stderr.
+        print(message, file=sys.stderr if args.json else sys.stdout, flush=True)
+
+    if args.output and Path(args.output).suffix.lower() not in {".csv", ".json"}:
+        raise ValueError("batch results can be saved as .csv or .json")
+    with _open_client(args) as client:
+        try:
+            result = _run_batch(args, client, say)
+        except _BatchStopped as stopped:
+            return stopped.code
+        except KeyboardInterrupt:
+            state_path = getattr(args, "_state_path", None)
+            if state_path is None:
+                print("\nInterrupted; nothing was submitted.", file=sys.stderr)
+                return 130
+            print(
+                f"\nInterrupted. The run continues on the server; reconnect with:\n"
+                f"  dmc search --resume {state_path}",
+                file=sys.stderr,
+            )
+            return 130
+        except DeepMedChemError:
+            state_path = getattr(args, "_state_path", None)
+            if state_path is not None:
+                print(
+                    f"Reconnect without paying again: dmc search --resume {state_path}",
+                    file=sys.stderr,
+                )
+            raise
+        if sys.stderr.isatty():
+            print(file=sys.stderr)
+    if args.json:
+        print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+    else:
+        _print_batch_summary(result)
+    if args.output:
+        rows = result.to_file(args.output)
+        unit = "rows" if args.output.lower().endswith(".csv") else "queries"
+        say(f"Saved {rows} {unit} to {args.output}.")
+    # 0 only if the run completed and every query succeeded; failed, cancelled or
+    # never-run queries give exit code 3.
+    return 0 if result.complete else 3
+
+
+class _BatchStopped(Exception):
+    def __init__(self, code: int) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+def _run_batch(args, client, say):
+    """Start (or reconnect to) the batch run described by ``args`` and wait for it."""
+
+    from .batch import (
+        batch_database,
+        build_run,
+        ensure_started,
+        load_state,
+        read_queries,
+        start_batch,
+        wait_and_collect,
+    )
+
+    if args.resume:
+        state_path = Path(args.resume)
+        args._state_path = state_path
+        state = load_state(state_path)
+        if state.get("run_id"):
+            say(f"Reconnecting to run {state['run_id']} ({len(state['queries'])} queries).")
+        else:
+            say(
+                f"The run was not confirmed as created; re-sending it with the saved "
+                f"key ({len(state['queries'])} queries, no double charge)."
+            )
+        ensure_started(client, state, state_path)
+    else:
+        if not args.database:
+            raise ValueError("the following argument is required: -d/--database")
+        database_id = batch_database(args.database)
+        queries = read_queries(
+            args.input, smiles_column=args.smiles_column, id_column=args.id_column
+        )
+        duplicates = len(queries) - len({query.smiles for query in queries})
+        note = f" ({duplicates} repeat an earlier SMILES and are kept)" if duplicates else ""
+        say(f"Read {len(queries)} query molecules from {args.input}{note}.")
+        run = build_run(queries, database=database_id, method=args.method, limit=args.limit)
+        estimate = client.runs.estimate(run)
+        items = (estimate.get("work") or {}).get("items", len(queries))
+        say(
+            f"Estimate: {items} queries x {args.limit} hits on {database_id}; "
+            f"up to {items} credits (1 per successful query, failures refunded)."
+        )
+        if items > BATCH_CONFIRM and not args.yes:
+            if not sys.stdin.isatty():
+                raise ValueError(f"add --yes to run {items} queries without a prompt")
+            if input("Start the run? [y/N] ").strip().lower() not in {"y", "yes"}:
+                say("Cancelled; nothing was submitted.")
+                raise _BatchStopped(1)
+        if args.state:
+            state_path = Path(args.state)
+        elif args.output:
+            state_path = Path(f"{args.output}.run.json")
+        else:
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            state_path = Path(f"deepmedchem-batch-{stamp}-{uuid.uuid4().hex[:6]}.json")
+        # The state (with the idempotency key) is written before the run is created,
+        # so an interrupted create can be resumed without starting a second run.
+        args._state_path = state_path
+        state = start_batch(
+            client,
+            queries,
+            database=database_id,
+            method=args.method,
+            limit=args.limit,
+            state_file=state_path,
+            key_prefix="cli-batch",
+        )
+        say(f"Started run {state['run_id']}; state saved to {state_path}.")
+    return wait_and_collect(client, state, on_progress=_batch_progress(), state_file=state_path)
+
+
+def _print_batch_summary(result) -> None:
+    rows = []
+    for item in result.queries:
+        scores = [hit.score for hit in item.hits if hit.score is not None]
+        status = "no hits" if item.succeeded and not item.hits else item.status
+        rows.append(
+            [
+                item.query.query_id,
+                status,
+                len(item.hits),
+                f"{max(scores):.4f}" if scores else "-",
+                item.error_message or "",
+            ]
+        )
+    print(
+        _format_table(
+            ["query", "status", "hits", "best", "error"],
+            rows,
+            align_right=[False, False, True, True, False],
+        )
+    )
+    print(
+        f"{len(result.succeeded)} succeeded ({len(result.empty)} without hits), "
+        f"{len(result.failed)} failed. Run {result.run_id}, status {result.status}."
+    )
+
+
 def _substructure(args) -> int:
+    _check_output(args)
     with _open_client(args) as client:
         result = client.search_substructure(
             args.query,
@@ -566,6 +941,7 @@ def _substructure(args) -> int:
 
 
 def _sample(args) -> int:
+    _check_output(args)
     with _open_client(args) as client:
         result = client.sample(
             database=args.database,
@@ -611,6 +987,387 @@ def _order(args) -> int:
     return 0
 
 
+# --- Optimization commands ------------------------------------------------------------
+
+OPTIMIZE_NOT_READY = 3
+OPTIMIZE_FINISHED = 4
+_MISSING_SCORE = {"", "nan", "none", "null", "na", "n/a"}
+_INTEGER = re.compile(r"^[+-]?\d+$")
+
+
+class ScoreCommandError(RuntimeError):
+    """The scoring command failed; nothing was submitted."""
+
+
+def _json_option(value: str | None, flag: str) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    try:
+        parsed = json.loads(value)
+    except ValueError as error:
+        raise ValueError(f"{flag} must be a JSON object: {error}") from error
+    if not isinstance(parsed, dict):
+        raise ValueError(f"{flag} must be a JSON object")
+    return parsed
+
+
+def _property_options(values: Sequence[str]) -> dict[str, dict[str, float]] | None:
+    properties: dict[str, dict[str, float]] = {}
+    for value in values:
+        name, separator, bounds = value.partition("=")
+        low, colon, high = bounds.partition(":")
+        if not separator or not colon or not name.strip():
+            raise ValueError(
+                f"--property must look like NAME=MIN:MAX (either bound may be empty): {value}"
+            )
+        entry = {}
+        for key, text in (("min", low.strip()), ("max", high.strip())):
+            if text:
+                try:
+                    entry[key] = float(text)
+                except ValueError as error:
+                    raise ValueError(f"--property {value}: {text!r} is not a number") from error
+        properties[name.strip()] = entry
+    return properties or None
+
+
+def _csv_value(text: str) -> Any:
+    if _INTEGER.match(text):
+        return int(text)
+    try:
+        return float(text)
+    except ValueError:
+        return text
+
+
+def read_scores_csv(path: str | Path) -> dict[str, dict[str, Any]]:
+    """Read ``id,score[,status,error,metric...]`` rows into a mapping for normalize_scores()."""
+
+    rows: dict[str, dict[str, Any]] = {}
+    with open(path, newline="", encoding="utf-8-sig") as handle:
+        reader = csv.DictReader(handle)
+        columns = [str(name).strip() for name in reader.fieldnames or []]
+        if "id" not in columns or "score" not in columns:
+            raise ValueError(
+                f"{path} must have 'id' and 'score' columns; found {columns or 'no header'}"
+            )
+        for line, record in enumerate(reader, start=2):
+            cells = {
+                str(key).strip(): (value or "").strip()
+                for key, value in record.items()
+                if key is not None and isinstance(value, (str, type(None)))
+            }
+            molecule_id = cells.pop("id", "")
+            if not molecule_id:
+                raise ValueError(f"{path}:{line}: empty id")
+            if molecule_id in rows:
+                raise ValueError(f"{path}:{line}: duplicate id {molecule_id!r}")
+            raw = cells.pop("score", "")
+            entry: dict[str, Any] = {"score": None}
+            if raw.lower() not in _MISSING_SCORE:
+                try:
+                    entry["score"] = float(raw)
+                except ValueError:
+                    entry["error"] = f"unparseable score {raw[:50]!r}"
+            status = cells.pop("status", "")
+            if status:
+                entry["status"] = status
+            error = cells.pop("error", "")
+            if error:
+                entry["error"] = error
+            cells.pop("smiles", None)
+            for key, value in cells.items():
+                if key and value:
+                    entry[key] = _csv_value(value)
+            rows[molecule_id] = entry
+    return rows
+
+
+def _substitute(template: str, input_path: Path, output_path: Path) -> str:
+    return template.replace("{input}", shlex.quote(str(input_path))).replace(
+        "{output}", shlex.quote(str(output_path))
+    )
+
+
+def _score_with_command(
+    template: str, batch: Batch, *, work_dir: str | None, quiet: bool
+) -> list[dict[str, Any]]:
+    directory = Path(work_dir) if work_dir else Path(tempfile.mkdtemp(prefix="dmc-optimize-"))
+    directory.mkdir(parents=True, exist_ok=True)
+    stem = _filename(batch.id)
+    input_path = directory / f"{stem}.input.csv"
+    output_path = directory / f"{stem}.scores.csv"
+    batch.to_csv(input_path)
+    if output_path.exists():
+        output_path.unlink()
+    command = _substitute(template, input_path, output_path)
+    if not quiet:
+        print(f"Scoring batch {batch.id} ({len(batch)} molecules): {command}", file=sys.stderr)
+    finished = subprocess.run(command, shell=True, check=False)
+    if finished.returncode != 0:
+        raise ScoreCommandError(
+            f"The score command exited with status {finished.returncode}; nothing was "
+            f"submitted and batch {batch.id} stays pending. Its input is {input_path}."
+        )
+    if not output_path.is_file():
+        raise ScoreCommandError(
+            f"The score command did not write {output_path}; nothing was submitted and batch "
+            f"{batch.id} stays pending."
+        )
+    rows = normalize_scores(batch, read_scores_csv(output_path))
+    if not work_dir:
+        shutil.rmtree(directory, ignore_errors=True)
+    return rows
+
+
+def _status_line(resource: OptimizationResource) -> str:
+    reason = f" ({resource.status_reason})" if resource.status_reason else ""
+    return f"{resource.status}{reason}"
+
+
+def _print_optimization(resource: OptimizationResource) -> None:
+    spec = resource.specification
+    objective = spec.get("objective") or {}
+    progress = resource.progress
+    best = resource.best
+    print(f"name:       {resource.name or '-'}")
+    print(f"id:         {resource.id}")
+    print(f"status:     {_status_line(resource)}")
+    print(f"database:   {spec.get('database', '-')}")
+    print(f"objective:  {objective.get('direction', '-')} {objective.get('name') or ''}".rstrip())
+    print(f"strategy:   {spec.get('strategy') or (resource.engine or {}).get('strategy') or '-'}")
+    print(f"round:      {resource.round}")
+    print(
+        f"scored:     {progress.scored}/{progress.budget} "
+        f"({progress.valid} valid, {progress.failed} failed)"
+    )
+    if resource.pending_batch_id:
+        print(f"pending:    {resource.pending_batch_id}")
+    if best is not None:
+        print(f"best:       {_score(best.score)}  {best.smiles or ''}  ({best.id})")
+
+
+def _print_optimization_table(resources: Sequence[OptimizationResource]) -> None:
+    rows = [
+        [
+            resource.name or "-",
+            resource.id,
+            _status_line(resource),
+            resource.round,
+            f"{resource.progress.scored}/{resource.progress.budget}",
+            _score(resource.best.score) if resource.best is not None else "-",
+        ]
+        for resource in resources
+    ]
+    headers = ["name", "id", "status", "round", "scored", "best"]
+    print(_format_table(headers, rows, align_right=[False, False, False, True, True, True]))
+    print()
+    print(f"{len(rows)} optimizations.")
+
+
+def _print_observations(result: OptimizationResult, *, shown: int) -> None:
+    rows = [
+        [index, _score(row.score), row.status, row.round, row.id, row.smiles or ""]
+        for index, row in enumerate(list(result)[:shown], start=1)
+    ]
+    headers = ["rank", "score", "status", "round", "id", "smiles"]
+    print(_format_table(headers, rows, align_right=[True, True, False, True, False, False]))
+
+
+def _optimize_run(args) -> int:
+    if "{input}" not in args.score_cmd or "{output}" not in args.score_cmd:
+        raise ValueError("--score-cmd must contain both {input} and {output}")
+    scorer = _json_option(args.scorer, "--scorer")
+    with _open_client(args) as client:
+        optimization = client.optimizations.create(
+            database=args.database,
+            direction=args.direction,
+            budget=args.budget,
+            batch_size=args.batch_size,
+            name=args.name,
+            strategy=args.strategy,
+            filters="druglike" if args.druglike else None,
+            properties=_property_options(args.property),
+            seed=args.seed,
+            scorer=scorer,
+            objective_name=args.objective_name,
+            hit_threshold=args.hit_threshold,
+            units=args.units,
+        )
+        try:
+            result = _drive(
+                optimization,
+                lambda batch: _score_with_command(
+                    args.score_cmd, batch, work_dir=args.work_dir, quiet=args.quiet
+                ),
+                scorer=scorer,
+                progress=not args.quiet,
+                named=True,
+                resume_hint="re-run the same `dmc optimize run` command to resume",
+            )
+        except KeyboardInterrupt:
+            return 130
+    if args.json:
+        print(json.dumps(result.optimization.raw if result.optimization else {}, indent=2))
+    else:
+        top = result.top(10)
+        if top:
+            _print_observations(OptimizationResult(observations=top), shown=10)
+        print(f"Export everything with `dmc optimize results {args.name} -o results.csv`.")
+    return 0
+
+
+def _optimize_ask(args) -> int:
+    with _open_client(args) as client:
+        optimization = client.optimizations.get(args.name)
+        try:
+            batch = optimization.ask(timeout=max(0.0, args.wait))
+        except DeepMedChemError as error:
+            if error.code != "client_timeout":
+                raise
+            print(
+                f"No batch is ready yet (status: {optimization.status}); ask again later.",
+                file=sys.stderr,
+            )
+            return OPTIMIZE_NOT_READY
+    if batch is None:
+        print(
+            f"Optimization {args.name} is {_status_line(optimization.resource)}; there is "
+            "nothing left to score.",
+            file=sys.stderr,
+        )
+        return OPTIMIZE_FINISHED
+    path = args.output or f"{_filename(batch.id)}.csv"
+    batch.to_csv(path)
+    if args.json:
+        payload = {
+            "optimization_id": optimization.id,
+            "batch_id": batch.id,
+            "round": batch.round,
+            "molecules": len(batch),
+            "path": str(path),
+        }
+        print(json.dumps(payload, indent=2))
+    else:
+        print(f"Wrote batch {batch.id} (round {batch.round}, {len(batch)} molecules) to {path}.")
+        print(f"Score it, then run: dmc optimize tell {args.name} SCORES.csv")
+    return 0
+
+
+def _optimize_tell(args) -> int:
+    scores = read_scores_csv(args.scores)
+    scorer = _json_option(args.scorer, "--scorer")
+    with _open_client(args) as client:
+        optimization = client.optimizations.get(args.name)
+        resource, pending = client.optimizations.next_batch(optimization.id, wait=0)
+        batch_id = args.batch or (pending.id if pending is not None else None)
+        if batch_id is None:
+            raise ValueError(
+                f"Optimization {args.name} has no pending batch "
+                f"(status: {_status_line(resource)}). Pass --batch BATCH_ID to re-send the "
+                "scores of an earlier batch."
+            )
+        if pending is None or pending.id != batch_id:
+            # An earlier batch: normalize against it so a re-send rebuilds the same rows.
+            pending = client.optimizations.batch(optimization.id, batch_id)
+        rows = normalize_scores(pending, scores)
+        receipt = client.optimizations.submit(optimization.id, batch_id, rows, scorer=scorer)
+    if args.json:
+        print(json.dumps(receipt.raw, indent=2))
+        return 0
+    counts = ", ".join(f"{count} {status}" for status, count in sorted(receipt.counts.items()))
+    if receipt.duplicate:
+        print(f"Batch {batch_id} was already accepted with these scores; nothing changed.")
+    else:
+        print(f"Submitted {len(rows)} scores for batch {batch_id} ({counts}).")
+    if receipt.optimization is not None:
+        progress = receipt.optimization.progress
+        print(f"{progress.scored}/{progress.budget} molecules scored.")
+    return 0
+
+
+def _optimize_status(args) -> int:
+    with _open_client(args) as client:
+        if getattr(args, "name", None):
+            resource = client.optimizations.get(args.name).resource
+            if args.json:
+                print(json.dumps(resource.raw, indent=2, sort_keys=True))
+            else:
+                _print_optimization(resource)
+            return 0
+        resources = client.optimizations.list(status=getattr(args, "status_filter", None))
+    if args.json:
+        print(json.dumps([resource.raw for resource in resources], indent=2, sort_keys=True))
+    else:
+        _print_optimization_table(resources)
+    return 0
+
+
+def _optimize_results(args) -> int:
+    if args.top is not None and args.top < 1:
+        raise ValueError("--top must be a positive integer")
+    with _open_client(args) as client:
+        result = client.optimizations.get(args.name).results(order=args.order, limit=args.top)
+    if args.output:
+        written = result.to_csv(args.output)
+    if args.json:
+        print(json.dumps(result.to_records(), indent=2))
+    else:
+        shown = min(len(result), args.top or 20)
+        _print_observations(result, shown=shown)
+        if len(result) > shown:
+            print(f"... {len(result) - shown} more; use --top N or -o FILE.")
+    if args.output:
+        print(f"Saved {written} rows to {args.output}.", file=sys.stderr if args.json else None)
+    return 0
+
+
+def _optimize_cancel_or_resume(args) -> int:
+    with _open_client(args) as client:
+        optimization = client.optimizations.get(args.name)
+        if args.optimize_command == "cancel":
+            optimization.cancel()
+        else:
+            optimization.resume()
+    if args.json:
+        print(json.dumps(optimization.resource.raw, indent=2, sort_keys=True))
+    else:
+        print(f"{optimization.name or optimization.id}: {_status_line(optimization.resource)}")
+    return 0
+
+
+def _optimize_control(args) -> int:
+    with _open_client(args) as client:
+        optimization = client.optimizations.get(args.name)
+        if args.optimize_command == "transition":
+            optimization.transition(args.strategy, idempotency_key=args.idempotency_key)
+        else:
+            rows = json.loads(Path(args.input).read_text())
+            optimization.add_seeds(
+                rows, mode=args.mode, scorer=_json_option(args.scorer, "--scorer"),
+                idempotency_key=args.idempotency_key)
+    print(json.dumps(optimization.resource.raw, indent=2, sort_keys=True))
+    return 0
+
+
+_OPTIMIZE_COMMANDS = {
+    "run": _optimize_run,
+    "ask": _optimize_ask,
+    "tell": _optimize_tell,
+    "status": _optimize_status,
+    "list": _optimize_status,
+    "results": _optimize_results,
+    "cancel": _optimize_cancel_or_resume,
+    "resume": _optimize_cancel_or_resume,
+    "seeds": _optimize_control,
+    "transition": _optimize_control,
+}
+
+
+def _optimize(args) -> int:
+    return _OPTIMIZE_COMMANDS[args.optimize_command](args)
+
+
 _COMMANDS = {
     "login": _login,
     "status": _status,
@@ -622,6 +1379,7 @@ _COMMANDS = {
     "substructure": _substructure,
     "sample": _sample,
     "order": _order,
+    "optimize": _optimize,
 }
 
 
@@ -631,6 +1389,9 @@ def main(argv: list[str] | None = None) -> int:
         return _COMMANDS[args.command](args)
     except (CredentialError, LoginError, ValueError, ImportError, OSError) as error:
         print(str(error), file=sys.stderr)
+        return 1
+    except ScoreCommandError as error:
+        print(f"error: {error}", file=sys.stderr)
         return 1
     except DeepMedChemError as error:
         suffix = f" [{error.code}]" if error.code else ""
