@@ -411,6 +411,46 @@ selection = (
 )
 ```
 
+### Similarity thresholds
+
+`maximize_similarity` chooses the one ranking metric. `require_similarity` adds exact bounds that
+every returned molecule must pass. All thresholds must pass (AND); a lower and an upper bound on
+one metric form an interval; and a threshold may use the ranking metric itself.
+
+```python
+selection = (
+    Selection.from_database("enamine-real-v5a")
+    .reference("query", smiles="CC(=O)Oc1ccccc1C(=O)O")
+    .require_similarity("rdkit.ecfp4_tanimoto", reference="query", gte=0.4, lt=0.85)
+    .require_similarity("cheese.shape", reference="query", gte=0.7)
+    .maximize_similarity("cheese.shape", reference="query")
+    .include("constraint_evidence")
+    .limit(50)
+)
+```
+
+| Metric ID | Score | Range |
+| --- | --- | --- |
+| `rdkit.ecfp4_tanimoto` | RDKit Tanimoto on Morgan fingerprints (radius 2, 2048 bits) | 0 to 1 |
+| `cheese.shape` | Cosine of CHEESE shape embeddings | -1 to 1 |
+| `cheese.electrostatic` | Cosine of CHEESE electrostatic embeddings | -1 to 1 |
+
+- Operators are `gt`, `gte`, `lt`, and `lte`. Scores are compared unrounded; `constraint_evidence`
+  shows each hit's value rounded to four decimals.
+- Thresholds need a ranked selection with exactly one similarity objective, and must use that
+  objective's reference. Unsupported metrics or operators, non-finite values, values outside the
+  metric's range, and contradictory bounds are rejected (HTTP 422) before any search or run starts.
+- Scores for the ranking metric are reused. A threshold on another CHEESE metric runs that model
+  on each remaining candidate, so it costs more than an ECFP4 threshold.
+
+Thresholds filter the candidate pool the engine evaluates for this query, before `limit` is
+applied. The engine proposes candidates with an ECFP4 prescreen, assembles them, applies the
+exact filters, scores them, applies the thresholds, and then ranks and truncates. If too few
+candidates pass, it enlarges the pool up to a fixed bound; the response can still hold fewer than
+`limit` hits, with a `partial_results` warning and `counts.similarity_threshold_dropped`.
+Thresholds therefore do not guarantee the globally best matching molecules in the whole chemical
+space.
+
 Property-filtered random sampling uses the same selection contract without acquisition:
 
 ```python
