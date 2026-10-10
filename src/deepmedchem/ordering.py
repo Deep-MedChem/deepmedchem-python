@@ -68,6 +68,7 @@ _register(
     "synple-explore-2025-10",
     "EXPLORE-ENUMERATED",
     "EXPLORE-DIVERSE",
+    "EXPLORE-5P4B",
     "SYNPLE-1B",
     "SYNPLE-4B",
     "EMOLECULES-SYNPLE-SYNTHON",
@@ -91,7 +92,15 @@ _register(
     "ENAMINE-CARBOXYLIC",
 )
 _register(VendorContact("Chemriya", "info@chemriya.com"), "CHEMRIYA")
-_register(VendorContact("Mcule", "order@mcule.com"), "MCULE-FULL", "MCULE-IN-STOCK")
+_register(
+    VendorContact("Mcule", "order@mcule.com"),
+    "MCULE-FULL",
+    "MCULE-IN-STOCK",
+    "MCULE-AA",
+    "MCULE-AA-IN-STOCK",
+    "MCULE-UNNATURAL-AA",
+    "MCULE-UNNATURAL-AA-IN-STOCK",
+)
 _register(VendorContact("Molport", "sales@molport.com"), "MOLPORT")
 
 CURRENT_DATABASE_IDS: tuple[str, ...] = (
