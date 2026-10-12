@@ -20,9 +20,6 @@ DEFAULT_WEB_URL = "https://cheese.deepmedchem.com"
 DEV_API_URL = "https://api-dev.deepmedchem.com"
 # Use the same UI origin as browser sign-in so device login reuses its session.
 DEV_WEB_URL = "https://cheese-dev.deepmedchem.com"
-# The account service answers usage and credit questions for the same API keys.
-DEFAULT_ACCOUNT_URL = "https://api.cheese.deepmedchem.com"
-DEV_ACCOUNT_URL = "https://api.cheese-dev.deepmedchem.com"
 SERVICE = "deepmedchem"
 ACCOUNT = "default-api-key"
 LEGACY_SERVICE = "dmc-navigator"
@@ -49,14 +46,11 @@ CredentialSource = Union[CredentialProvider, Callable[[], Optional[str]]]
 class Profile:
     api_url: str
     web_url: str
-    account_url: str = DEFAULT_ACCOUNT_URL
 
 
 DEFAULT_PROFILES: Mapping[str, Profile] = {
-    "default": Profile(
-        api_url=DEFAULT_API_URL, web_url=DEFAULT_WEB_URL, account_url=DEFAULT_ACCOUNT_URL
-    ),
-    "dev": Profile(api_url=DEV_API_URL, web_url=DEV_WEB_URL, account_url=DEV_ACCOUNT_URL),
+    "default": Profile(api_url=DEFAULT_API_URL, web_url=DEFAULT_WEB_URL),
+    "dev": Profile(api_url=DEV_API_URL, web_url=DEV_WEB_URL),
 }
 
 
@@ -72,10 +66,6 @@ class Config:
     @property
     def web_url(self) -> str:
         return self.profile().web_url
-
-    @property
-    def account_url(self) -> str:
-        return self.profile().account_url
 
     def profile(self, name: str | None = None) -> Profile:
         selected = name or self.active_profile
@@ -100,7 +90,6 @@ def _profile_from_payload(payload: Mapping[str, object], fallback: Profile) -> P
     return Profile(
         api_url=str(payload.get("api_url") or fallback.api_url).rstrip("/"),
         web_url=str(payload.get("web_url") or fallback.web_url).rstrip("/"),
-        account_url=str(payload.get("account_url") or fallback.account_url).rstrip("/"),
     )
 
 
@@ -137,9 +126,6 @@ def load_config() -> Config:
             or default.api_url
         ).rstrip("/"),
         web_url=(os.environ.get("DEEPMEDCHEM_WEB_URL") or default.web_url).rstrip("/"),
-        account_url=(os.environ.get("DEEPMEDCHEM_ACCOUNT_URL") or default.account_url).rstrip(
-            "/"
-        ),
     )
     return Config(active_profile=active, profiles=profiles)
 
@@ -154,7 +140,6 @@ def save_config(config: Config) -> None:
                 f"[profiles.{name}]",
                 f'api_url = "{profile.api_url}"',
                 f'web_url = "{profile.web_url}"',
-                f'account_url = "{profile.account_url}"',
                 "",
             ]
         )

@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlencode
 
-from .databases import resolve_database
+from .databases import expand_database_alias
 
 DEEPMEDCHEM_CC = "info@deepmedchem.com"
 REFERENCE_SUFFIX = "-DMCH"
@@ -256,7 +256,7 @@ def read_order_csv(path: str | Path, *, database: str | None = None) -> list[Ord
                 raise ValueError(f"{source}: row {row_number} has no database ID")
 
             molecule = OrderMolecule(
-                database_id=resolve_database(database_id),
+                database_id=expand_database_alias(database_id),
                 deepmedchem_id=_reference_id(product_id, row_number=row_number - 1),
                 smiles=smiles,
             )

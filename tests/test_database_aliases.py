@@ -75,38 +75,48 @@ def test_order_csv_abbreviation_and_fallback(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "alias,expected",
+    "database",
     [
-        ("molport", "MOLPORT"),
-        ("mcule-in-stock", "MCULE-IN-STOCK"),
-        ("MCULE-FULL", "MCULE-FULL"),
-        ("chemspace-screening", "CHEMSPACE-SCREENING"),
-        ("zinc15", "ZINC15"),
-        ("enamine-real", "ENAMINE-REAL"),
-        ("chemspace-5b-ro5", "CHEMSPACE-5B-RO5"),
-        ("explore-enumerated", "EXPLORE-ENUMERATED"),
-        ("explore-5p4b", "EXPLORE-5P4B"),
-        ("synple-4b", "SYNPLE-4B"),
-        ("xtalpi", "XTALPI"),
-        ("chemriya", "CHEMRIYA"),
-        ("molecule-one", "MOLECULE-ONE"),
-        ("enamine-aa", "ENAMINE-AA"),
-        # Mcule amino-acid sets (cheese issue #437), served by classic CHEESE since 2026-10-02.
-        ("mcule-aa", "MCULE-AA"),
-        ("mcule-aa-in-stock", "MCULE-AA-IN-STOCK"),
-        ("mcule-unnatural-aa", "MCULE-UNNATURAL-AA"),
-        ("mcule-unnatural-aa-in-stock", "MCULE-UNNATURAL-AA-IN-STOCK"),
+        "molport",
+        "mcule-in-stock",
+        "MCULE-FULL",
+        "chemspace-screening",
+        "zinc15",
+        "enamine-real",
+        "chemspace-5b-ro5",
+        "chemspace-5b-beyond-ro5",
+        "chemspace-5b-freedom",
+        "explore-enumerated",
+        "explore-diverse",
+        "explore-5p4b",
+        "synple-4b",
+        "xtalpi",
+        "chemriya",
+        "molecule-one",
+        "enamine-aa",
+        "mcule-aa",
+        "mcule-aa-in-stock",
+        "mcule-unnatural-aa",
+        "mcule-unnatural-aa-in-stock",
     ],
 )
-def test_classic_database_aliases_resolve_to_cheese_ids(alias, expected):
-    from deepmedchem.databases import is_classic_database, resolve_database
+def test_retired_cheese_databases_and_aliases_are_rejected(database):
+    from deepmedchem.databases import RETIRED_DATABASES, resolve_database
 
-    assert resolve_database(alias) == expected
-    assert is_classic_database(expected)
+    with pytest.raises(ValueError, match=f"{database.upper()} was a classic CHEESE Search"):
+        resolve_database(database)
+    assert len(RETIRED_DATABASES) == 21
 
 
-def test_platform_databases_are_not_classic():
-    from deepmedchem.databases import is_classic_database
+def test_platform_and_private_databases_resolve_verbatim():
+    from deepmedchem.databases import DATABASE_DETAILS, resolve_database
 
-    assert not is_classic_database("enamine-real-v5a")
-    assert not is_classic_database("Private-Space")
+    assert resolve_database("enamine-real-v5a") == "enamine-real-v5a"
+    assert resolve_database("Private-Space") == "Private-Space"
+    assert all("served_by" not in info for info in DATABASE_DETAILS.values())
+
+
+def test_order_csvs_from_cheese_exports_keep_their_database_ids(tmp_path):
+    path = tmp_path / "molecules.csv"
+    path.write_text("smiles,database_id\nCCO,MCULE-IN-STOCK\n")
+    assert read_order_csv(path)[0].database_id == "MCULE-IN-STOCK"

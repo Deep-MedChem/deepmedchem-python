@@ -143,3 +143,22 @@ def test_credential_store_can_be_forced(monkeypatch, tmp_path) -> None:
         pass
     else:  # pragma: no cover
         raise AssertionError("expected CredentialError")
+
+
+def test_config_written_with_account_url_still_loads(monkeypatch, tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        'active_profile = "default"\n\n[profiles.default]\n'
+        'api_url = "https://api.example.test/"\nweb_url = "https://web.example.test"\n'
+        'account_url = "https://account.example.test"\n'
+    )
+    monkeypatch.setattr(config, "config_path", lambda: path)
+    monkeypatch.delenv("DEEPMEDCHEM_API_URL", raising=False)
+    monkeypatch.delenv("DMC_API_URL", raising=False)
+    monkeypatch.delenv("DEEPMEDCHEM_WEB_URL", raising=False)
+    loaded = config.load_config()
+    assert loaded.profile() == config.Profile(
+        api_url="https://api.example.test", web_url="https://web.example.test"
+    )
+    config.save_config(loaded)
+    assert "account_url" not in path.read_text()

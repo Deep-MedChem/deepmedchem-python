@@ -343,11 +343,11 @@ def test_search_many_never_prompts(monkeypatch) -> None:
     assert len(result) == 60
 
 
-def test_classic_catalogues_are_rejected_before_any_request() -> None:
+def test_retired_cheese_catalogues_are_rejected_before_any_request() -> None:
     fake = FakeRuns()
     with (
         _client(fake) as client,
-        pytest.raises(DeepMedChemError, match="Batch search is not available for MOLPORT"),
+        pytest.raises(ValueError, match="MOLPORT was a classic CHEESE Search catalogue"),
     ):
         client.search_many(["CCO"], database="molport")
     assert fake.requests == []
@@ -447,7 +447,7 @@ def test_cli_resume_reconnects_without_a_new_run(monkeypatch, capsys, tmp_path) 
         (["search", "CCO", "-i", "x.smi", "-d", "enamine"], "give exactly one of"),
         (["search", "CCO"], "-d/--database"),
         (["search", "-i", "x.smi"], "-d/--database"),
-        (["search", "-i", "x.smi", "-d", "molport"], "Batch search is not available for MOLPORT"),
+        (["search", "-i", "x.smi", "-d", "molport"], "MOLPORT was a classic CHEESE Search"),
         (["search", "-i", "x.smi", "-d", "enamine", "-o", "hits.sdf"], "saved as .csv or .json"),
     ],
 )
