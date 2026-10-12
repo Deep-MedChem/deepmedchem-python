@@ -100,19 +100,33 @@ def test_order_csv_abbreviation_and_fallback(tmp_path):
         "mcule-unnatural-aa-in-stock",
     ],
 )
-def test_retired_cheese_databases_and_aliases_are_rejected(database):
-    from deepmedchem.databases import RETIRED_DATABASES, resolve_database
+def test_retired_cheese_databases_are_sent_casefolded_and_explained(database):
+    from deepmedchem.databases import (
+        RETIRED_DATABASES,
+        resolve_database,
+        retired_database_message,
+    )
 
-    with pytest.raises(ValueError, match=f"{database.upper()} was a classic CHEESE Search"):
-        resolve_database(database)
+    # The platform API will serve several of these under the same casefolded IDs.
+    assert resolve_database(database) == database.casefold()
+    assert resolve_database(database.upper()) == database.casefold()
+    message = retired_database_message(database)
+    assert message.startswith(f"{database.upper()} was a classic CHEESE Search catalogue")
+    assert "dmc databases" in message
     assert len(RETIRED_DATABASES) == 21
 
 
 def test_platform_and_private_databases_resolve_verbatim():
-    from deepmedchem.databases import DATABASE_DETAILS, resolve_database
+    from deepmedchem.databases import (
+        DATABASE_DETAILS,
+        resolve_database,
+        retired_database_message,
+    )
 
     assert resolve_database("enamine-real-v5a") == "enamine-real-v5a"
     assert resolve_database("Private-Space") == "Private-Space"
+    assert retired_database_message("Private-Space") is None
+    assert retired_database_message("enamine-real-v5a") is None
     assert all("served_by" not in info for info in DATABASE_DETAILS.values())
 
 

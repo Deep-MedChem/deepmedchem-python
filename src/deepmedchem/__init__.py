@@ -11,6 +11,7 @@ from .client import (
     DeepMedChemError,
     DMCClient,
     DMCError,
+    RetiredDatabaseError,
 )
 from .config import Config, CredentialError, CredentialProvider
 from .facade import catalog, sample, search, substructure
@@ -62,6 +63,7 @@ __all__ = [
     "OrderBundle",
     "OrderDraft",
     "OrderMolecule",
+    "RetiredDatabaseError",
     "Run",
     "SampleResult",
     "SearchMeta",
