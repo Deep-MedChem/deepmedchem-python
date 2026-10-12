@@ -57,6 +57,7 @@ dmc status --verify                # confirms the profile and that the API accep
 | Plan and remaining daily credits | `dmc usage` | `dmc.usage()` |
 | Multi-constraint or multi-query work | see references | `Selection`, `Run`, `Client.runs` |
 | Exact RDKit property filters, experimental ADMET acquisition | see references | `Selection.where`, `.require_preset`, `.acquire_predicted_property` |
+| Filter by similarity bounds while ranking by another metric (e.g. ECFP4 ≥ 0.4, maximize shape) | see references | `Selection.require_similarity`, `.maximize_similarity` |
 | Ask vendors for quotes or orders | `dmc order results.csv --get-quote` | `prepare_order(...)` |
 | Optimize the user's own score (docking, ML model, property) | `dmc optimize run NAME -d DB --minimize --score-cmd 'CMD {input} {output}'` | `dmc.optimize(score, direction=..., database=DB, name=...)` |
 

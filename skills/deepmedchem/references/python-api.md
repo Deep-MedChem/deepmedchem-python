@@ -127,6 +127,30 @@ with Client() as client:
 presets, pattern ids, and metrics are validated server-side; the catalog lists what a release
 supports. When `estimate.execution_tier` is not synchronous, submit the selection as a run.
 
+### Similarity thresholds
+
+`maximize_similarity` sets the single ranking metric; `require_similarity` adds exact filters.
+All thresholds must pass, a threshold may use the ranking metric, and call order does not matter.
+
+```python
+sel = (
+    Selection.from_database("enamine-real-v5a")
+    .reference("query", smiles="CC(=O)Oc1ccccc1C(=O)O")
+    .require_similarity("rdkit.ecfp4_tanimoto", reference="query", gte=0.4, lt=0.85)  # interval
+    .require_similarity("cheese.shape", reference="query", gte=0.7)
+    .maximize_similarity("cheese.shape", reference="query")
+    .limit(50)
+)
+```
+
+- One call takes at most one lower (`gt`/`gte`) and one upper (`lt`/`lte`) bound.
+- Metrics and ranges: `rdkit.ecfp4_tanimoto` 0 to 1; `cheese.shape` and `cheese.electrostatic`
+  (embedding cosine) -1 to 1.
+- Thresholds must use the objective's reference in a ranked selection with one objective;
+  invalid thresholds are rejected with HTTP 422 before execution.
+- Filtering applies to the candidate pool evaluated for this query, before `limit`; results can
+  be fewer than `limit` (`partial_results` warning) and are not a global optimum over the space.
+
 ### Exact RDKit constraints and predicted-property acquisition
 
 `where` and `require_preset` are literal constraints: the API recalculates every RDKit descriptor
