@@ -54,6 +54,48 @@ def test_usage_reads_the_platform_api_with_the_same_key() -> None:
     assert captured[0].headers["x-api-key"] == "scoped-token"
 
 
+def test_usage_on_a_server_without_the_endpoint_raises_a_clear_error() -> None:
+    def handler(request: httpx.Request):
+        return httpx.Response(
+            404,
+            json={"error": {"code": "http_error", "message": "Not Found", "request_id": "r-1"}},
+        )
+
+    with Client(
+        api_key="token", api_url="https://old.example.test", transport=httpx.MockTransport(handler)
+    ) as client:
+        with pytest.raises(DeepMedChemError) as sync_error:
+            client.usage()
+
+    async def scenario():
+        async with AsyncClient(
+            api_key="token",
+            api_url="https://old.example.test",
+            transport=httpx.MockTransport(handler),
+        ) as client:
+            await client.usage()
+
+    with pytest.raises(DeepMedChemError) as async_error:
+        asyncio.run(scenario())
+    for error in (sync_error.value, async_error.value):
+        assert error.code == "usage_unavailable"
+        assert error.status_code == 404
+        assert error.request_id == "r-1"
+        assert "/api/v2/usage" in str(error)
+
+
+def test_usage_keeps_other_errors_unchanged() -> None:
+    def handler(request: httpx.Request):
+        return httpx.Response(401, json={"error": {"code": "unauthorized", "message": "nope"}})
+
+    with Client(
+        api_key="token", api_url="https://api.example.test", transport=httpx.MockTransport(handler)
+    ) as client:
+        with pytest.raises(DeepMedChemError) as error:
+            client.usage()
+    assert error.value.code == "unauthorized"
+
+
 def _run_resource(status="queued"):
     terminal = status in {"completed", "completed_with_errors", "failed", "cancelled"}
     return {

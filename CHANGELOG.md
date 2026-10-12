@@ -27,7 +27,8 @@ more.
   `unlimited`, `window`, `usage_day`, `reset_at`, `seconds_to_reset`, `user_id`. The camelCase
   aliases (`resetAt`, `secondsToReset`, `userId`) and the `promo` block (`UsagePromotion`) are
   gone, and `dmc usage --json` prints the platform response. `limit` and `remaining` are `None`
-  for unmetered service keys. `dmc status --verify` still checks the key but no longer prints
+  for unmetered service keys. A server that predates the endpoint (404) raises
+  `DeepMedChemError` with code `usage_unavailable`. `dmc status --verify` still checks the key but no longer prints
   `plan` or `credits_*`; use `dmc usage`.
 - **`account_url` removed.** The `account_url` client argument, the profile field and the
   `DEEPMEDCHEM_ACCOUNT_URL` environment variable are gone, and `dmc status` no longer prints
