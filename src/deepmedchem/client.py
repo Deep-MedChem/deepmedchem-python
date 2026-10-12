@@ -28,9 +28,12 @@ from .models import (
     SelectionResult,
     SelectionValidation,
     SubstructureResult,
+    Usage,
 )
 from .selection import Run, Selection
 from .subsets import sample_selection, search_filters, similarity_selection
+
+USAGE_PATH = "/api/v2/usage"
 
 
 class DeepMedChemError(RuntimeError):
@@ -310,6 +313,11 @@ class Client:
         """Return the platform catalog of searchable databases."""
 
         return self._request("GET", "/api/v2/catalog")
+
+    def usage(self) -> Usage:
+        """Return the account plan and today's CHEESE Credit balance; costs no credits."""
+
+        return Usage.model_validate(self._request("GET", USAGE_PATH))
 
     def search(
         self,
@@ -755,6 +763,11 @@ class AsyncClient:
         """Return the platform catalog of searchable databases."""
 
         return await self._request("GET", "/api/v2/catalog")
+
+    async def usage(self) -> Usage:
+        """Return the account plan and today's CHEESE Credit balance; costs no credits."""
+
+        return Usage.model_validate(await self._request("GET", USAGE_PATH))
 
     async def search(self, smiles: str, **kwargs) -> SearchResult:
         method = kwargs.pop("method", "morgan")

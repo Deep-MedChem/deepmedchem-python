@@ -35,6 +35,25 @@ def test_module_level_operations_use_scientific_surface() -> None:
     assert dmc.catalog(**options) == {"spaces": []}
 
 
+def test_module_level_usage_uses_the_platform_api() -> None:
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        return httpx.Response(
+            200, json={"plan": "private", "limit": 100, "used": 3, "remaining": 97}
+        )
+
+    options = {
+        "api_key": "token",
+        "api_url": "https://example.test",
+        "transport": httpx.MockTransport(handler),
+    }
+    assert dmc.usage(**options).remaining == 97
+    assert asyncio.run(dmc.aio.usage(**options)).plan == "private"
+    assert seen == ["/api/v2/usage", "/api/v2/usage"]
+
+
 def test_prices_are_read_from_the_search_response_without_an_extra_request() -> None:
     requests = []
 

@@ -13,7 +13,7 @@ from .client import (
     DMCError,
 )
 from .config import Config, CredentialError, CredentialProvider
-from .facade import catalog, sample, search, substructure
+from .facade import catalog, sample, search, substructure, usage
 from .models import (
     Batch,
     Hit,
@@ -27,6 +27,7 @@ from .models import (
     SelectionResult,
     SubmitReceipt,
     SubstructureResult,
+    Usage,
 )
 from .optimization import (
     AsyncOptimization,
@@ -76,6 +77,7 @@ __all__ = [
     "subsets",
     "SubmitReceipt",
     "SubstructureResult",
+    "Usage",
     "aio",
     "catalog",
     "normalize_scores",
@@ -85,5 +87,6 @@ __all__ = [
     "sample",
     "search",
     "substructure",
+    "usage",
     "__version__",
 ]

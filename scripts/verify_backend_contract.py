@@ -53,6 +53,8 @@ def main() -> None:
             transport=httpx.MockTransport(handler),
         ) as dmc:
             assert dmc.catalog()["libraries"]
+            usage = dmc.usage()
+            assert usage.unlimited and usage.reset_at and usage.seconds_to_reset is not None
             assert dmc.search("CCO", database="enamine-real-v5a", limit=1).results
             assert dmc.search_cheese(
                 "CCO", database="enamine-real-v5a", scorer="shape", limit=1
