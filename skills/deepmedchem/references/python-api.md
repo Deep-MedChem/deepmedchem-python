@@ -18,6 +18,7 @@ dmc.substructure(query, *, database, format="smarts", limit=100, timeout_seconds
 dmc.sample(*, database, count=100, seed=None, include_synthons=False,
            subset=None, where=None) -> SampleResult
 dmc.catalog() -> dict            # {"libraries": [{"database_id", "name", "product_count", "pricing", ...}], ...}
+dmc.usage() -> Usage
 ```
 
 - `method` must be `"morgan"`, `"shape"`, or `"esp"`; non-Morgan methods call the CHEESE
@@ -44,6 +45,7 @@ Methods on `Client` (all mirrored as coroutines on `AsyncClient`):
 | Method | Notes |
 | --- | --- |
 | `catalog()` | Public catalog document. |
+| `usage()` | `Usage` from `GET /api/v2/usage`; free. |
 | `search(smiles, *, database, method="morgan", limit=20, include_synthons=False, subset=None, where=None, require=None, exclude=None)` | Dispatches to `search_cheese` for `shape`/`esp`; any filter sends one selection instead. |
 | `search_cheese(smiles, *, database, scorer, limit=20, include_synthons=False)` | `scorer` is `"shape"` or `"esp"`. |
 | `search_substructure(query, *, query_format="smarts", database, limit=100, timeout_seconds=30, include_synthons=False)` | Exact matches. |
@@ -78,6 +80,10 @@ result.to_pandas()   # DataFrame, requires pandas
 
 `Hit.price` is an `int | None` estimate in whole US dollars. `SampleResult` adds
 `sampling_method`, `sampling_version`, `seed`.
+
+`Usage` fields: `plan` (alias `tier`), `limit`, `used`, `remaining`, `unlimited`, `window`,
+`usage_day`, `reset_at`, `seconds_to_reset`, `user_id`. `limit`/`remaining` are `None` for
+unmetered service keys.
 
 ## Export helpers
 

@@ -21,6 +21,7 @@ Global behaviour:
 | `dmc login [--profile P] [--no-browser] [--token-stdin] [--timeout S]` | Device login. Prints an approval code and URL, opens a browser when a display exists, waits for approval, stores the key. `--token-stdin` reads an existing key from stdin instead. |
 | `dmc status [--verify] [--json]` | Shows the active profile, API URL, and credential store. `--verify` makes one request to confirm the key is accepted. |
 | `dmc logout [--profile P]` | Removes the locally stored key for the profile. |
+| `dmc usage [--json]` | Plan, daily CHEESE Credit limit, used, remaining and reset time. Free. |
 
 ## Discovery
 
@@ -133,6 +134,7 @@ is a failure. A non-zero exit aborts without submitting; the batch stays pending
 
 ```bash
 dmc login
+dmc usage
 dmc databases
 dmc search "O=C(Nc1ccccc1)c1ccncc1" -d enamine-real-v5a -m shape -n 50 -o shape_hits.csv
 dmc substructure "[#6]C(=O)N[c;R]" -d enamine-real-v5a -n 200 -o amides.csv

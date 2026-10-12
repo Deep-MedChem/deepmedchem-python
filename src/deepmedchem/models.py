@@ -257,6 +257,35 @@ class SampleResult(SearchResult):
         return "sample"
 
 
+class Usage(APIModel):
+    """Today's CHEESE Credit balance for the account that owns the API key.
+
+    The balance is shared by every key and client of the account (CHEESE web,
+    classic API and the platform API) and resets at midnight UTC.
+    """
+
+    plan: str | None = None
+    limit: int | None = None
+    used: int = 0
+    remaining: int | None = None
+    unlimited: bool = False
+    window: str | None = "day"
+    usage_day: str | None = None
+    reset_at: str | None = None
+    seconds_to_reset: int | None = None
+    user_id: str | None = None
+
+    @property
+    def tier(self) -> str | None:
+        """Alias for ``plan``: registered, private, premium, ..."""
+
+        return self.plan
+
+    def __repr__(self) -> str:
+        credits = "unlimited" if self.unlimited else f"{self.remaining}/{self.limit} remaining"
+        return f"Usage(plan={self.plan!r}, credits={credits})"
+
+
 class SelectionValidation(APIModel):
     valid: bool
     normalized_selection: dict[str, Any]

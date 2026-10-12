@@ -19,10 +19,16 @@ more.
   Other unknown or private database IDs still pass through to the platform API unchanged.
 - **`catalog()` / `dmc databases` list the platform catalog only.** They no longer merge in
   `/available_databases_full` or emit the `RuntimeWarning` when CHEESE Search is unreachable.
-- **Usage removed.** `Client.usage()`, `AsyncClient.usage()`, `deepmedchem.usage()`,
-  `deepmedchem.aio.usage()`, the `Usage` model and `dmc usage` are gone, because the platform
-  API has no usage endpoint yet. `dmc status --verify` still checks the key but no longer prints
-  `plan` or `credits_*`. The CHEESE web app shows the daily credit balance.
+- **Usage now comes from the platform API.** `Client.usage()`, `AsyncClient.usage()`,
+  `deepmedchem.usage()`, `deepmedchem.aio.usage()` and `dmc usage` read the new
+  `GET /api/v2/usage` on the `api_url` host instead of classic `/rate-limit/status`. The balance is
+  the same account-wide daily CHEESE Credit ledger, and reading it costs no credits. The `Usage`
+  model follows the platform's snake_case wire format: `plan`, `limit`, `used`, `remaining`,
+  `unlimited`, `window`, `usage_day`, `reset_at`, `seconds_to_reset`, `user_id`. The camelCase
+  aliases (`resetAt`, `secondsToReset`, `userId`) and the `promo` block (`UsagePromotion`) are
+  gone, and `dmc usage --json` prints the platform response. `limit` and `remaining` are `None`
+  for unmetered service keys. `dmc status --verify` still checks the key but no longer prints
+  `plan` or `credits_*`; use `dmc usage`.
 - **`account_url` removed.** The `account_url` client argument, the profile field and the
   `DEEPMEDCHEM_ACCOUNT_URL` environment variable are gone, and `dmc status` no longer prints
   `account_url`. Existing `config.toml` files that still contain `account_url` load normally;

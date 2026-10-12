@@ -41,6 +41,7 @@ writing Python:
 ```bash
 dmc databases                        # abbreviations, sizes, prices, order emails
 dmc databases --detailed             # full IDs, BioSolveIT mappings, availability, links
+dmc usage                            # account plan and CHEESE Credits remaining today
 dmc search "CC(=O)Oc1ccccc1C(=O)O" -d enamine -m shape -n 10
 dmc search "CC(=O)Oc1ccccc1C(=O)O" -d enamine -o aspirin.csv
 dmc substructure "[N;R0][N;R0]C(=O)" -d enamine -n 10 --timeout-seconds 45 -o hydrazides.sdf
@@ -338,9 +339,12 @@ than `limit` hits; inspect `result.raw["timed_out"]`, coverage, and warnings. Ex
 returned matches do not imply an exhaustive search of every possible product.
 
 Any result writes itself with `result.to_csv(path)`, `result.to_sdf(path)`, or
-`result.to_file(path)` (format inferred from the suffix).
+`result.to_file(path)` (format inferred from the suffix). `dmc.usage()` and `Client.usage()` return
+the account plan and today's CHEESE Credit balance (`plan`, `limit`, `used`, `remaining`,
+`unlimited`, `reset_at`, `seconds_to_reset`) from `GET /api/v2/usage`. The balance is shared by all
+of the account's keys and the CHEESE web app, resets at midnight UTC, and reading it is free.
 
-Module-level `search`, `substructure`, `sample`, and `catalog` operations create and close
+Module-level `search`, `substructure`, `sample`, `catalog`, and `usage` operations create and close
 a small internal client. The explicit `Client` remains available for connection reuse and advanced
 selections/runs. Search results behave as ordered SMILES sequences (`result[0]`, `result[:3]`,
 `list(result)`) while retaining typed hits, scores, prices, metadata, warnings, and the complete raw

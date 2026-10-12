@@ -1,4 +1,4 @@
-"""Standard-library CLI for DeepMedChem: authentication, catalog, searches, optimization."""
+"""Standard-library CLI for DeepMedChem: authentication, catalog, searches, usage, optimization."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ from .config import (
 )
 from .databases import DATABASE_DETAILS, DATABASE_DISPLAY_ORDER, resolve_database
 from .export import FORMATS, check_export_dependencies, infer_format, write_result
-from .models import Batch, OptimizationResource, OptimizationResult, SearchResult
+from .models import Batch, OptimizationResource, OptimizationResult, SearchResult, Usage
 from .optimization import _drive, _filename, normalize_scores
 from .ordering import open_order_drafts, prepare_order, procurement_contacts
 from .subsets import (
@@ -105,6 +105,14 @@ def _date(value: str | None) -> str:
     if value and len(value) >= 10 and value[4] == "-" and value[7] == "-":
         return value[:10]
     return value or "?"
+
+
+def _duration(seconds: int | None) -> str:
+    if seconds is None:
+        return "?"
+    hours, rest = divmod(max(int(seconds), 0), 3600)
+    minutes = rest // 60
+    return f"{hours}h {minutes:02d}m"
 
 
 def _library_count(library: dict[str, Any]) -> str:
@@ -322,6 +330,18 @@ def _add_filter_options(parser: argparse.ArgumentParser, *, structures: bool = T
     )
 
 
+def _print_usage(usage: Usage) -> None:
+    print(f"plan:      {usage.plan or 'unknown'}")
+    if usage.unlimited:
+        print(f"credits:   unlimited ({usage.used:,} used today)")
+        return
+    remaining = "?" if usage.remaining is None else f"{usage.remaining:,}"
+    limit = "?" if usage.limit is None else f"{usage.limit:,}"
+    print(f"credits:   {remaining} of {limit} remaining today ({usage.used:,} used)")
+    if usage.reset_at:
+        print(f"resets:    {usage.reset_at} (in {_duration(usage.seconds_to_reset)})")
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="dmc",
@@ -352,6 +372,9 @@ def _parser() -> argparse.ArgumentParser:
     databases.add_argument(
         "--detailed", action="store_true", help="Show full IDs, mappings and provider details"
     )
+
+    usage = commands.add_parser("usage", help="Show account plan and remaining daily credits")
+    _add_connection_options(usage)
 
     search = commands.add_parser("search", help="Similarity search for a SMILES query")
     search.add_argument("smiles", nargs="?", help="Query molecule as SMILES")
@@ -701,6 +724,16 @@ def _logout(args) -> int:
         profile = _profile(args, config)
         delete_api_key(profile=profile)
         print(f"Local credential removed (profile: {profile}).")
+    return 0
+
+
+def _usage(args) -> int:
+    with _open_client(args) as client:
+        usage = client.usage()
+    if args.json:
+        print(json.dumps(usage.raw, indent=2, sort_keys=True))
+    else:
+        _print_usage(usage)
     return 0
 
 
@@ -1527,6 +1560,7 @@ _COMMANDS = {
     "logout": _logout,
     "databases": _databases,
     "catalog": _databases,
+    "usage": _usage,
     "search": _search,
     "substructure": _substructure,
     "sample": _sample,

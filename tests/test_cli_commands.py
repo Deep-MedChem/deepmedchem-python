@@ -35,6 +35,19 @@ CATALOG = {
         },
     ]
 }
+USAGE = {
+    "object": "usage",
+    "user_id": "00000000-0000-4000-8000-000000000001",
+    "plan": "premium",
+    "unlimited": False,
+    "limit": 1000,
+    "used": 1,
+    "remaining": 999,
+    "window": "day",
+    "usage_day": "2026-10-12",
+    "reset_at": "2026-10-13T00:00:00Z",
+    "seconds_to_reset": 3660,
+}
 HITS = [
     {
         "rank": 1,
@@ -57,6 +70,8 @@ def _handler(seen, request: httpx.Request) -> httpx.Response:
     seen.append(request)
     if request.url.path == "/api/v2/catalog":
         return httpx.Response(200, json=CATALOG)
+    if request.url.path == "/api/v2/usage":
+        return httpx.Response(200, json=USAGE)
     if request.url.path == "/api/v2/search":
         return httpx.Response(
             200,
@@ -109,6 +124,32 @@ def test_catalog_alias_prints_json(monkeypatch, capsys) -> None:
     _install_client(monkeypatch)
     assert cli.main(["catalog", "--json"]) == 0
     assert json.loads(capsys.readouterr().out) == CATALOG
+
+
+def test_usage_reports_plan_and_daily_credits_from_the_platform_api(monkeypatch, capsys) -> None:
+    seen = _install_client(monkeypatch)
+    assert cli.main(["usage"]) == 0
+    out = capsys.readouterr().out
+    assert "plan:      premium" in out
+    assert "999 of 1,000 remaining today (1 used)" in out
+    assert "resets:    2026-10-13T00:00:00Z (in 1h 01m)" in out
+    assert [(request.method, request.url.path) for request in seen] == [("GET", "/api/v2/usage")]
+    assert seen[0].headers["x-api-key"] == "token"
+
+
+def test_usage_json_prints_the_response(monkeypatch, capsys) -> None:
+    _install_client(monkeypatch)
+    assert cli.main(["usage", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == USAGE
+
+
+def test_usage_for_unlimited_accounts(capsys) -> None:
+    from deepmedchem import Usage
+
+    cli._print_usage(Usage(plan="registered", unlimited=True, limit=1_000_000, used=12))
+    lines = capsys.readouterr().out.splitlines()
+    assert lines == ["plan:      registered", "credits:   unlimited (12 used today)"]
 
 
 def test_search_prints_table_and_summary(monkeypatch, capsys) -> None:
