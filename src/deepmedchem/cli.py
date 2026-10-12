@@ -1,4 +1,4 @@
-"""Standard-library CLI for DeepMedChem: authentication, catalog, searches, usage, optimization."""
+"""Standard-library CLI for DeepMedChem: authentication, catalog, searches, optimization."""
 
 from __future__ import annotations
 
@@ -32,9 +32,9 @@ from .config import (
     resolve_profile,
     save_api_key,
 )
-from .databases import DATABASE_DETAILS, DATABASE_DISPLAY_ORDER
+from .databases import DATABASE_DETAILS, DATABASE_DISPLAY_ORDER, resolve_database
 from .export import FORMATS, check_export_dependencies, infer_format, write_result
-from .models import Batch, OptimizationResource, OptimizationResult, SearchResult, Usage
+from .models import Batch, OptimizationResource, OptimizationResult, SearchResult
 from .optimization import _drive, _filename, normalize_scores
 from .ordering import open_order_drafts, prepare_order, procurement_contacts
 
@@ -97,14 +97,6 @@ def _date(value: str | None) -> str:
     if value and len(value) >= 10 and value[4] == "-" and value[7] == "-":
         return value[:10]
     return value or "?"
-
-
-def _duration(seconds: int | None) -> str:
-    if seconds is None:
-        return "?"
-    hours, rest = divmod(max(int(seconds), 0), 3600)
-    minutes = rest // 60
-    return f"{hours}h {minutes:02d}m"
 
 
 def _library_count(library: dict[str, Any]) -> str:
@@ -234,28 +226,6 @@ def _print_result_table(result: SearchResult, *, library: dict[str, Any] | None 
         print(line)
 
 
-def _print_usage(usage: Usage) -> None:
-    print(f"plan:      {usage.plan or 'unknown'}")
-    if usage.unlimited:
-        print(f"credits:   unlimited ({usage.used:,} used today)")
-    else:
-        remaining = "?" if usage.remaining is None else f"{usage.remaining:,}"
-        limit = "?" if usage.limit is None else f"{usage.limit:,}"
-        print(f"credits:   {remaining} of {limit} remaining today ({usage.used:,} used)")
-        if usage.reset_at:
-            print(f"resets:    {usage.reset_at} (in {_duration(usage.seconds_to_reset)})")
-    promo = usage.promo
-    if promo is not None and promo.label:
-        extra = []
-        if promo.multiplier:
-            extra.append(f"{promo.multiplier:g}x")
-        if promo.base_limit is not None:
-            extra.append(f"base {promo.base_limit:,}/day")
-        if promo.ends_at:
-            extra.append(f"until {_date(promo.ends_at)}")
-        print(f"promo:     {promo.label} ({', '.join(extra)})")
-
-
 # --- Argument parsing ----------------------------------------------------------
 
 
@@ -309,9 +279,6 @@ def _parser() -> argparse.ArgumentParser:
     logout = commands.add_parser("logout", help="Remove locally stored credentials")
     logout.add_argument("--profile")
     logout.add_argument("--all", action="store_true")
-
-    usage = commands.add_parser("usage", help="Show account plan and remaining daily credits")
-    _add_connection_options(usage)
 
     databases = commands.add_parser(
         "databases", aliases=["catalog"], help="List searchable databases and their pricing"
@@ -630,7 +597,6 @@ def _status(args) -> int:
         "profile": profile,
         "api_url": target.api_url,
         "web_url": target.web_url,
-        "account_url": target.account_url,
         "config_path": str(config_path()),
         "authenticated": authenticated,
     }
@@ -642,11 +608,7 @@ def _status(args) -> int:
             try:
                 with Client(profile=profile) as client:
                     client.catalog()
-                    usage = client.usage()
                 payload["verified"] = True
-                payload["plan"] = usage.plan
-                payload["credits_remaining"] = "unlimited" if usage.unlimited else usage.remaining
-                payload["credits_limit"] = usage.limit
             except DeepMedChemError as error:
                 payload["verified"] = False
                 payload["error"] = str(error)
@@ -667,16 +629,6 @@ def _logout(args) -> int:
         profile = _profile(args, config)
         delete_api_key(profile=profile)
         print(f"Local credential removed (profile: {profile}).")
-    return 0
-
-
-def _usage(args) -> int:
-    with _open_client(args) as client:
-        usage = client.usage()
-    if args.json:
-        print(json.dumps(usage.raw, indent=2, sort_keys=True))
-    else:
-        _print_usage(usage)
     return 0
 
 
@@ -832,7 +784,6 @@ def _run_batch(args, client, say):
     """Start (or reconnect to) the batch run described by ``args`` and wait for it."""
 
     from .batch import (
-        batch_database,
         build_run,
         ensure_started,
         load_state,
@@ -856,7 +807,7 @@ def _run_batch(args, client, say):
     else:
         if not args.database:
             raise ValueError("the following argument is required: -d/--database")
-        database_id = batch_database(args.database)
+        database_id = resolve_database(args.database)
         queries = read_queries(
             args.input, smiles_column=args.smiles_column, id_column=args.id_column
         )
@@ -1372,7 +1323,6 @@ _COMMANDS = {
     "login": _login,
     "status": _status,
     "logout": _logout,
-    "usage": _usage,
     "databases": _databases,
     "catalog": _databases,
     "search": _search,

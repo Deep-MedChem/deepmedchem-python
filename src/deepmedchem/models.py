@@ -257,46 +257,6 @@ class SampleResult(SearchResult):
         return "sample"
 
 
-class UsagePromotion(APIModel):
-    """A temporary multiplier applied to the daily credit allowance."""
-
-    id: str | None = None
-    label: str | None = None
-    multiplier: float | None = None
-    base_limit: int | None = Field(default=None, alias="baseLimit")
-    starts_at: str | None = Field(default=None, alias="startsAt")
-    ends_at: str | None = Field(default=None, alias="endsAt")
-
-    model_config = ConfigDict(extra="allow", populate_by_name=True)
-
-
-class Usage(APIModel):
-    """Daily CHEESE Credit usage for the account that owns the API key."""
-
-    model_config = ConfigDict(extra="allow", populate_by_name=True)
-
-    plan: str | None = None
-    limit: int | None = None
-    used: int = 0
-    remaining: int | None = None
-    unlimited: bool = False
-    window: str | None = "day"
-    reset_at: str | None = Field(default=None, alias="resetAt")
-    seconds_to_reset: int | None = Field(default=None, alias="secondsToReset")
-    promo: UsagePromotion | None = None
-    user_id: str | None = Field(default=None, alias="userId")
-
-    @property
-    def tier(self) -> str | None:
-        """Alias for ``plan``: free, registered, private, premium, ..."""
-
-        return self.plan
-
-    def __repr__(self) -> str:
-        credits = "unlimited" if self.unlimited else f"{self.remaining}/{self.limit} remaining"
-        return f"Usage(plan={self.plan!r}, credits={credits})"
-
-
 class SelectionValidation(APIModel):
     valid: bool
     normalized_selection: dict[str, Any]

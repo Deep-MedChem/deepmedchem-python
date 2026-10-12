@@ -35,16 +35,6 @@ CATALOG = {
         },
     ]
 }
-USAGE = {
-    "plan": "premium",
-    "limit": 10000,
-    "used": 1,
-    "remaining": 9999,
-    "resetAt": "2026-09-04T00:00:00+00:00",
-    "secondsToReset": 3600,
-    "unlimited": False,
-    "promo": {"label": "10x September promo", "multiplier": 10.0, "baseLimit": 1000},
-}
 HITS = [
     {
         "rank": 1,
@@ -67,8 +57,6 @@ def _handler(seen, request: httpx.Request) -> httpx.Response:
     seen.append(request)
     if request.url.path == "/api/v2/catalog":
         return httpx.Response(200, json=CATALOG)
-    if request.url.path == "/rate-limit/status":
-        return httpx.Response(200, json=USAGE)
     if request.url.path == "/api/v2/search":
         return httpx.Response(
             200,
@@ -98,7 +86,6 @@ def _install_client(monkeypatch):
             Client,
             api_key="token",
             api_url="https://api.example.test",
-            account_url="https://account.example.test",
             transport=httpx.MockTransport(functools.partial(_handler, seen)),
         ),
     )
@@ -124,25 +111,6 @@ def test_catalog_alias_prints_json(monkeypatch, capsys) -> None:
     assert json.loads(capsys.readouterr().out) == CATALOG
 
 
-def test_usage_reports_plan_credits_and_promo(monkeypatch, capsys) -> None:
-    seen = _install_client(monkeypatch)
-    assert cli.main(["usage"]) == 0
-    out = capsys.readouterr().out
-    assert "plan:      premium" in out
-    assert "9,999 of 10,000 remaining today (1 used)" in out
-    assert "10x September promo" in out
-    assert seen[0].url.host == "account.example.test"
-    assert seen[0].headers["x-api-key"] == "token"
-
-
-def test_usage_json_uses_raw_payload(monkeypatch, capsys) -> None:
-    _install_client(monkeypatch)
-    assert cli.main(["usage", "--json"]) == 0
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["plan"] == "premium"
-    assert payload["remaining"] == 9999
-
-
 def test_search_prints_table_and_summary(monkeypatch, capsys) -> None:
     seen = _install_client(monkeypatch)
     assert cli.main(["search", "CC(=O)Oc1ccccc1C(=O)O", "-d", "enamine-real-v5a", "-n", "2"]) == 0
@@ -159,7 +127,6 @@ def test_search_prints_table_and_summary(monkeypatch, capsys) -> None:
     assert [request.url.path for request in seen] == [
         "/api/v2/search",
         "/api/v2/catalog",
-        "/available_databases_full",
     ]
     body = json.loads(seen[0].content)
     assert body == {
@@ -206,8 +173,7 @@ def test_substructure_and_sample_reach_their_operations(monkeypatch, capsys) -> 
     seen = _install_client(monkeypatch)
     assert cli.main(["substructure", "c1ccccc1", "-d", "db", "-f", "smiles", "-n", "5"]) == 0
     assert cli.main(["sample", "-d", "db", "-n", "7", "--seed", "3"]) == 0
-    catalog_paths = {"/api/v2/catalog", "/available_databases_full"}
-    paths = [request.url.path for request in seen if request.url.path not in catalog_paths]
+    paths = [request.url.path for request in seen if request.url.path != "/api/v2/catalog"]
     assert paths == ["/api/v2/search_substructure", "/api/v2/sample"]
     assert json.loads(seen[0].content)["query"] == {"format": "smiles", "value": "c1ccccc1"}
     sample_request = next(request for request in seen if request.url.path == "/api/v2/sample")
@@ -299,16 +265,3 @@ def test_catalog_display_order_and_unavailable_enamine_prices(capsys):
             assert lines[0].split() == ["enamine", "1.0K", "-", "info@enamine.net"]
     assert json.dumps(catalog) == original
 
-
-def test_databases_table_includes_classic_cheese_catalogues(capsys):
-    catalog = {"libraries": [
-        {"database_id": "enamine-real-v5a", "product_count": 1000, "pricing": {"available": True}},
-        {"database_id": "MOLPORT", "served_by": "cheese", "product_count": 5900000,
-         "contact_email": "sales@molport.com", "pricing": {"available": False}},
-    ]}
-    cli._print_database_table(catalog, detailed=False)
-    lines = capsys.readouterr().out.splitlines()
-    molport = next(line for line in lines if line.startswith("molport"))
-    assert molport.split() == ["molport", "5.9M", "-", "sales@molport.com"]
-    enamine_index = next(i for i, line in enumerate(lines) if line.startswith("enamine"))
-    assert lines.index(molport) > enamine_index

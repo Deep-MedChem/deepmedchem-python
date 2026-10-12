@@ -375,23 +375,6 @@ class BatchResult:
         return pd.DataFrame.from_records(self.to_records())
 
 
-def batch_database(database: str) -> str:
-    """Resolve ``database`` and reject classic CHEESE Search catalogues with a clear message."""
-
-    from .client import DeepMedChemError
-    from .databases import is_classic_database, resolve_database
-
-    database_id = resolve_database(database)
-    if is_classic_database(database_id):
-        raise DeepMedChemError(
-            f"Batch search is not available for {database_id}: batch runs cover the "
-            "DeepMedChem chemical spaces (see `dmc databases`). Search this CHEESE "
-            "Search catalogue one molecule at a time with search().",
-            code="unsupported_operation",
-        )
-    return database_id
-
-
 def build_run(queries: Sequence[BatchQuery], *, database: str, method: str, limit: int):
     """Return the ``selection_batch`` run for ``queries`` (one item per query)."""
 

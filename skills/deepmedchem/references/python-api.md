@@ -17,7 +17,6 @@ dmc.substructure(query, *, database, format="smarts", limit=100, timeout_seconds
                  include_synthons=False) -> SubstructureResult
 dmc.sample(*, database, count=100, seed=None, include_synthons=False) -> SampleResult
 dmc.catalog() -> dict            # {"libraries": [{"database_id", "name", "product_count", "pricing", ...}], ...}
-dmc.usage() -> Usage
 ```
 
 - `method` must be `"morgan"`, `"shape"`, or `"esp"`; non-Morgan methods call the CHEESE
@@ -34,7 +33,7 @@ from deepmedchem import Client, AsyncClient
 
 Client(api_key=None, *, api_url=None, profile=None, timeout=45.0, transport=None,
        credential_provider=None, application="deepmedchem-python", application_version=None,
-       max_retries=2, retry_backoff=0.25, account_url=None)
+       max_retries=2, retry_backoff=0.25)
 ```
 
 Methods on `Client` (all mirrored as coroutines on `AsyncClient`):
@@ -42,7 +41,6 @@ Methods on `Client` (all mirrored as coroutines on `AsyncClient`):
 | Method | Notes |
 | --- | --- |
 | `catalog()` | Public catalog document. |
-| `usage()` | `Usage` from the account service. |
 | `search(smiles, *, database, method="morgan", limit=20, shortlist_multiplier=10, include_synthons=False)` | Dispatches to `search_cheese` for `shape`/`esp`. |
 | `search_cheese(smiles, *, database, scorer, limit=20, shortlist_multiplier=10, include_synthons=False)` | `scorer` is `"shape"` or `"esp"`. |
 | `search_substructure(query, *, query_format="smarts", database, limit=100, timeout_seconds=30, include_synthons=False)` | Exact matches. |
@@ -77,9 +75,6 @@ result.to_pandas()   # DataFrame, requires pandas
 
 `Hit.price` is an `int | None` estimate in whole US dollars. `SampleResult` adds
 `sampling_method`, `sampling_version`, `seed`.
-
-`Usage` fields: `plan`, `limit`, `used`, `remaining`, `unlimited`, `window`, `reset_at`,
-`seconds_to_reset`, `promo` (`label`, `multiplier`, `base_limit`, `ends_at`), `user_id`.
 
 ## Export helpers
 
@@ -283,7 +278,7 @@ argument. Only database id, a `-DMCH` reference id, and SMILES reach the vendor 
 - Credentials resolve from the `api_key` argument, `DEEPMEDCHEM_API_KEY`, a custom
   `CredentialProvider`, the profile's OS-keyring entry, then `credentials.json`.
 - Config lives in `config.toml` under the platform user config directory
-  (`~/.config/deepmedchem/` on Linux). Profiles hold `api_url`, `web_url`, `account_url`;
-  `DEEPMEDCHEM_API_URL`, `DEEPMEDCHEM_ACCOUNT_URL`, and `DEEPMEDCHEM_PROFILE` override them.
+  (`~/.config/deepmedchem/` on Linux). Profiles hold `api_url` and `web_url`;
+  `DEEPMEDCHEM_API_URL`, `DEEPMEDCHEM_WEB_URL`, and `DEEPMEDCHEM_PROFILE` override them.
 - Every request sends `X-DMC-Client`, `X-DMC-Client-Version`, and `X-DMC-SDK-Version`; set
   `application` and `application_version` on the client when embedding the SDK in a product.

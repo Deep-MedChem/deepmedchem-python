@@ -6,7 +6,7 @@ description: >-
   the `deepmedchem` Python package and its `dmc` CLI. Use when a task involves finding
   purchasable analogs or similar molecules for a SMILES (ECFP4/Morgan, 3D shape, or
   electrostatic similarity), exact SMILES/SMARTS substructure search, random sampling of a
-  chemical space, exporting hits to CSV/SDF/SMILES, checking CHEESE Credits, building
+  chemical space, exporting hits to CSV/SDF/SMILES, building
   molecule-selection/1 documents or durable runs, preparing vendor quote and order
   requests, or optimizing a user's own score (docking such as GNINA or Glide, an ML model, an
   RDKit property) over a chemical space with Navigator ask/tell (`dmc.optimize`,
@@ -54,7 +54,6 @@ dmc status --verify                # confirms the profile and that the API accep
 | Exact substructure, SMARTS query (default) | `dmc substructure QUERY -d DB` | `dmc.substructure(query, database=DB)` |
 | Exact substructure from a concrete SMILES | `dmc substructure SMILES -f smiles -d DB` | `format="smiles"` |
 | Random molecules from a space | `dmc sample -d DB -n N --seed S` | `dmc.sample(database=DB, count=N, seed=S)` |
-| Plan and remaining daily credits | `dmc usage` | `dmc.usage()` |
 | Multi-constraint or multi-query work | see references | `Selection`, `Run`, `Client.runs` |
 | Exact RDKit property filters, experimental ADMET acquisition | see references | `Selection.where`, `.require_preset`, `.acquire_predicted_property` |
 | Ask vendors for quotes or orders | `dmc order results.csv --get-quote` | `prepare_order(...)` |
@@ -93,7 +92,6 @@ hits.to_csv("hits.csv")                    # or .to_sdf(), .to_file(path), .to_p
 
 subs = dmc.substructure("[N;R0]C(=O)[N;R0]", database="enamine-real-v5a", limit=100, timeout_seconds=60)
 rand = dmc.sample(database="freedom-space-5", count=50, seed=1)
-print(dmc.usage())                         # plan, limit, used, remaining, reset_at
 ```
 
 Module-level functions open and close a client per call. For many calls, reuse one client:
@@ -164,7 +162,7 @@ dmc optimize status [NAME] | results NAME --top 50 -o best.csv | cancel NAME | r
 ## Rules that keep results correct and cheap
 
 - **One credit per call.** Every successful synchronous search, substructure, or sample costs
-  one CHEESE Credit from a shared daily balance. Check `dmc usage` before loops and batch work
+  one CHEESE Credit from a shared daily balance (shown in the CHEESE web app). Batch work
   into durable runs instead of thousands of single calls.
 - **10 second synchronous budget.** Slow SMARTS (recursive, many wildcards) can time out; raise
   `timeout_seconds` on substructure, simplify the pattern, or move to a run.
@@ -201,9 +199,9 @@ dmc optimize status [NAME] | results NAME --top 50 -o best.csv | cancel NAME | r
 | --- | --- |
 | `missing_api_key` | `dmc login`, or export `DEEPMEDCHEM_API_KEY`; check `dmc status`. |
 | HTTP 401 / 403 | Key revoked or wrong profile; `dmc login --profile default` again. |
-| HTTP 429 or `remaining: 0` | Daily credits exhausted; `dmc usage` shows the reset time. |
+| HTTP 429 / `credit_limit_exceeded` | Daily credits exhausted; the CHEESE web app shows the reset time. |
 | Substructure timeout | Increase `--timeout-seconds`, simplify the SMARTS, or lower `-n`. |
-| Unknown database | Copy the exact `database_id` from `dmc databases --json`. |
+| Unknown database | Copy the exact `database_id` from `dmc databases --json`. Enumerated and in-stock catalogues (Mcule, Molport, ZINC15, ENAMINE-REAL, ...) are not reachable from the SDK; do not retry them. |
 | SDF export fails | `pip install "deepmedchem[sdf]"` (needs RDKit). |
 | `optimization_not_enabled` (403) | Optimization is in an allowlisted beta; ask DeepMedChem for access. |
 | `idempotency_conflict` on create | The name is taken by a different specification; choose a new `name`. |
