@@ -37,6 +37,14 @@ from .export import FORMATS, check_export_dependencies, infer_format, write_resu
 from .models import Batch, OptimizationResource, OptimizationResult, SearchResult
 from .optimization import _drive, _filename, normalize_scores
 from .ordering import open_order_drafts, prepare_order, procurement_contacts
+from .subsets import (
+    SUBSETS,
+    Filters,
+    Pattern,
+    sample_selection,
+    search_filters,
+    similarity_selection,
+)
 
 SEARCH_METHODS = ("morgan", "shape", "esp")
 BATCH_CONFIRM = 50  # batch runs above this many queries ask before starting
@@ -257,6 +265,63 @@ def _add_output_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--include-synthons", action="store_true", help=argparse.SUPPRESS)
 
 
+def _count_range(text: str) -> tuple[int, int | None]:
+    match = re.fullmatch(r"(\d+)(?:-(\d*))?", text.strip())
+    if not match:
+        raise ValueError(f"write a count as N, N-M or N- (at least N), got {text!r}")
+    low = int(match.group(1))
+    if match.group(2) is None:
+        return low, low
+    return low, int(match.group(2)) if match.group(2) else None
+
+
+def _add_filter_options(parser: argparse.ArgumentParser, *, structures: bool = True) -> None:
+    group = parser.add_argument_group(
+        "filters",
+        "restrict results; every returned molecule satisfies all filters (see `dmc subsets`)",
+    )
+    group.add_argument(
+        "--subset",
+        action="append",
+        metavar="NAME",
+        help="Named virtual subset, e.g. amino-acids, ro5, druglike (repeatable; also "
+        "-d DATABASE:NAME)",
+    )
+    group.add_argument(
+        "--where",
+        action="append",
+        metavar="EXPR",
+        help="Property filter: mw, logp, hbd, hba, rotb, tpsa, fsp3, arom, e.g. 'mw<=450', "
+        "'tpsa=40..90', '1<=hbd<=3' (repeatable)",
+    )
+    if structures:
+        group.add_argument(
+            "--require",
+            action="append",
+            metavar="SMARTS",
+            help="Results must contain this SMARTS (repeatable)",
+        )
+        group.add_argument(
+            "--require-count",
+            action="append",
+            nargs=2,
+            metavar=("N[-M]", "SMARTS"),
+            help="Results must contain SMARTS N times, N-M times, or N- (at least N) times",
+        )
+        group.add_argument(
+            "--exclude",
+            action="append",
+            metavar="SMARTS",
+            help="Results must not contain this SMARTS (repeatable)",
+        )
+    group.add_argument(
+        "--explain",
+        action="store_true",
+        help="Print the selection document and the server's validation and estimate, "
+        "without running it (no credit)",
+    )
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="dmc",
@@ -319,6 +384,7 @@ def _parser() -> argparse.ArgumentParser:
     batch.add_argument(
         "--resume", metavar="STATE_FILE", help="Reconnect to a saved batch run instead of a new one"
     )
+    _add_filter_options(search)
     _add_output_options(search)
     _add_connection_options(search)
 
@@ -346,8 +412,14 @@ def _parser() -> argparse.ArgumentParser:
     sample.add_argument("-d", "--database", required=True, help="Database abbreviation or full ID")
     sample.add_argument("-n", "--count", type=int, default=100, help="Number of molecules")
     sample.add_argument("--seed", type=int, help="Reproducible sampling seed")
+    _add_filter_options(sample, structures=False)
     _add_output_options(sample)
     _add_connection_options(sample)
+
+    subsets = commands.add_parser(
+        "subsets", help="List named virtual subsets usable with --subset"
+    )
+    subsets.add_argument("--json", action="store_true", help="Print definitions as JSON")
 
     order = commands.add_parser(
         "order", help="Prepare vendor email drafts from a DeepMedChem results CSV"
@@ -689,12 +761,28 @@ def _search(args) -> int:
         raise ValueError(
             "give exactly one of: a SMILES query, --input FILE, or --resume STATE_FILE"
         )
+    database, filters = _cli_filters(args) if args.database else (args.database, Filters())
     if args.resume or args.input:
+        if filters or args.explain:
+            raise ValueError(
+                "filters and --explain apply to one query; batch search (--input) does not "
+                "take them yet"
+            )
         # Batch accepts only .csv/.json, so it needs no RDKit check and keeps its
         # own, clearer message for anything else.
         return _search_many(args)
     if not args.database:
         raise ValueError("the following argument is required: -d/--database")
+    if filters or args.explain:
+        selection = similarity_selection(
+            args.smiles,
+            database=database,
+            filters=filters,
+            method=args.method,
+            limit=args.limit,
+            include_synthons=args.include_synthons,
+        )
+        return _run_selection(args, selection, filters)
     # Before the request is made or charged: a missing RDKit must fail here, not
     # after the search has been paid for.
     _check_output(args)
@@ -707,6 +795,110 @@ def _search(args) -> int:
             include_synthons=args.include_synthons,
         )
         return _emit_result(args, result, client)
+
+
+def _cli_filters(args) -> tuple[str, Filters]:
+    require = list(getattr(args, "require", None) or [])
+    for count, smarts in getattr(args, "require_count", None) or []:
+        low, high = _count_range(count)
+        require.append(Pattern(smarts, low, high))
+    return search_filters(
+        args.database,
+        subset=args.subset,
+        where=args.where,
+        require=require,
+        exclude=getattr(args, "exclude", None),
+    )
+
+
+def _run_selection(args, selection, filters: Filters) -> int:
+    """Run (or with --explain only describe) one filtered search or sample."""
+
+    if args.explain:
+        return _explain(args, selection)
+    _check_output(args)
+    with _open_client(args) as client:
+        result = client.selections.create(selection)
+        code = _emit_result(args, result, client)
+    if not args.json:
+        _print_filter_notes(result, filters, requested=selection.to_dict()["portfolio"]["limit"])
+    return code
+
+
+def _explain(args, selection) -> int:
+    document = selection.to_dict()
+    with _open_client(args) as client:
+        validation = client.selections.validate(document)
+        estimate = client.selections.estimate(document) if validation.valid else None
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "selection": document,
+                    "validation": validation.raw,
+                    "estimate": estimate.raw if estimate else None,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0 if validation.valid else 1
+    print(json.dumps(document, indent=2))
+    print()
+    print(f"valid: {validation.valid}")
+    for item in validation.constraint_execution:
+        message = f" - {item.get('message')}" if item.get("message") else ""
+        print(f"  {item.get('path')}: {item.get('status')}{message}")
+    for warning in validation.warnings:
+        print(f"warning: {warning.get('message') or warning}")
+    if estimate is not None:
+        print(f"execution: {estimate.execution_tier}")
+    print("Nothing was run and no credit was used.")
+    return 0 if validation.valid else 1
+
+
+def _print_filter_notes(result: SearchResult, filters: Filters, *, requested: int) -> None:
+    if filters:
+        print("Filters (checked by the server on every result):")
+        for line in filters.describe():
+            print(f"  {line}")
+    anchored = result.counts.get("anchored_constraints")
+    if anchored:
+        print(f"Search restricted to synthons that can carry: {', '.join(anchored)}.")
+    for warning in result.warnings:
+        if warning.code == "partial_results" and len(result) < requested:
+            print(
+                f"Only {len(result)} of {requested} requested molecules satisfy the filters "
+                "among the candidates the server examined.",
+                file=sys.stderr,
+            )
+        else:
+            print(f"warning: {warning.message or warning.code}", file=sys.stderr)
+
+
+def _subsets(args) -> int:
+    if args.json:
+        payload = {
+            name: {
+                "version": subset.version,
+                "description": subset.description,
+                "definition": subset.definition(),
+                "note": subset.note or None,
+                "kind": "structure" if subset.structural else "property",
+            }
+            for name, subset in SUBSETS.items()
+        }
+        print(json.dumps(payload, indent=2))
+        return 0
+    rows = [
+        [name, "structure" if subset.structural else "property", subset.description]
+        for name, subset in SUBSETS.items()
+    ]
+    print(_format_table(["subset", "kind", "description"], rows))
+    print()
+    print("Use: dmc search SMILES -d DATABASE --subset NAME  (or -d DATABASE:NAME).")
+    print("Definitions: dmc subsets --json")
+    return 0
 
 
 def _batch_progress():
@@ -892,6 +1084,16 @@ def _substructure(args) -> int:
 
 
 def _sample(args) -> int:
+    database, filters = _cli_filters(args)
+    if filters or args.explain:
+        selection = sample_selection(
+            database=database,
+            filters=filters,
+            count=args.count,
+            seed=args.seed,
+            include_synthons=args.include_synthons,
+        )
+        return _run_selection(args, selection, filters)
     _check_output(args)
     with _open_client(args) as client:
         result = client.sample(
@@ -1328,6 +1530,7 @@ _COMMANDS = {
     "search": _search,
     "substructure": _substructure,
     "sample": _sample,
+    "subsets": _subsets,
     "order": _order,
     "optimize": _optimize,
 }

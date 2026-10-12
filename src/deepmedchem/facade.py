@@ -6,7 +6,7 @@ from typing import Any
 
 from .client import Client
 from .config import CredentialSource
-from .models import SampleResult, SearchResult, SubstructureResult
+from .models import SampleResult, SearchResult, SelectionResult, SubstructureResult
 
 
 def _client_options(
@@ -35,6 +35,10 @@ def search(
     method: str = "morgan",
     limit: int = 20,
     include_synthons: bool = False,
+    subset: str | list[str] | None = None,
+    where=None,
+    require=None,
+    exclude=None,
     api_key: str | None = None,
     api_url: str | None = None,
     profile: str | None = None,
@@ -42,7 +46,11 @@ def search(
     timeout: float = 45.0,
     transport: Any = None,
 ) -> SearchResult:
-    """Run one ranked similarity search and close its internal transport."""
+    """Run one ranked similarity search and close its internal transport.
+
+    ``subset``, ``where``, ``require`` and ``exclude`` restrict the search (see
+    :meth:`Client.search`); the server enforces them on every returned molecule.
+    """
 
     with Client(
         **_client_options(
@@ -60,6 +68,10 @@ def search(
             method=method,
             limit=limit,
             include_synthons=include_synthons,
+            subset=subset,
+            where=where,
+            require=require,
+            exclude=exclude,
         )
 
 
@@ -106,14 +118,16 @@ def sample(
     count: int = 100,
     seed: int | None = None,
     include_synthons: bool = False,
+    subset: str | list[str] | None = None,
+    where=None,
     api_key: str | None = None,
     api_url: str | None = None,
     profile: str | None = None,
     credential_provider: CredentialSource | None = None,
     timeout: float = 45.0,
     transport: Any = None,
-) -> SampleResult:
-    """Sample one chemical space and close the internal transport."""
+) -> SampleResult | SelectionResult:
+    """Sample one chemical space, optionally a property subset, and close the transport."""
 
     with Client(
         **_client_options(
@@ -130,6 +144,8 @@ def sample(
             count=count,
             seed=seed,
             include_synthons=include_synthons,
+            subset=subset,
+            where=where,
         )
 
 

@@ -5,7 +5,9 @@ description: >-
   VAST and others, billions to trillions of molecules) through the DeepMedChem platform with
   the `deepmedchem` Python package and its `dmc` CLI. Use when a task involves finding
   purchasable analogs or similar molecules for a SMILES (ECFP4/Morgan, 3D shape, or
-  electrostatic similarity), exact SMILES/SMARTS substructure search, random sampling of a
+  electrostatic similarity), similarity restricted to a subset (amino acids, carboxylic
+  acids, covalent warheads, Rule-of-5 or drug-like property windows, or any SMARTS the user
+  requires or excludes), exact SMILES/SMARTS substructure search, random sampling of a
   chemical space, exporting hits to CSV/SDF/SMILES, building
   molecule-selection/1 documents or durable runs, preparing vendor quote and order
   requests, or optimizing a user's own score (docking such as GNINA or Glide, an ML model, an
@@ -16,7 +18,7 @@ license: MIT
 compatibility: Requires Python 3.9+, `pip install deepmedchem`, and network access to api.deepmedchem.com with a CHEESE API key.
 metadata:
   author: Deep MedChem
-  version: "1.1"
+  version: "1.2"
   homepage: https://github.com/Deep-MedChem/deepmedchem-python
 ---
 
@@ -51,6 +53,8 @@ dmc status --verify                # confirms the profile and that the API accep
 | Which databases exist, their size, order contact | `dmc databases` (`--json` for ids) | `dmc.catalog()` |
 | Nearest neighbours by 2D fingerprint (default) | `dmc search SMILES -d DB -n N` | `dmc.search(smiles, database=DB, limit=N)` |
 | 3D shape or electrostatic analogs | `dmc search SMILES -d DB -m shape` / `-m esp` | `method="shape"` / `method="esp"` |
+| Analogs inside a subset (amino acids, ro5, ...) | `dmc search SMILES -d DB --subset NAME` or `-d DB:NAME` | `dmc.search(smiles, database=DB, subset=NAME)` |
+| Analogs with property limits or required/excluded SMARTS | `--where "mw<=450" --require SMARTS --exclude SMARTS` | `where=[...]`, `require=[...]`, `exclude=[...]` |
 | Exact substructure, SMARTS query (default) | `dmc substructure QUERY -d DB` | `dmc.substructure(query, database=DB)` |
 | Exact substructure from a concrete SMILES | `dmc substructure SMILES -f smiles -d DB` | `format="smiles"` |
 | Random molecules from a space | `dmc sample -d DB -n N --seed S` | `dmc.sample(database=DB, count=N, seed=S)` |
@@ -71,6 +75,10 @@ dmc substructure "[N;R0][N;R0]C(=O)" -d enamine-real-v5a -n 50 -o hydrazides.sdf
 dmc substructure "CNC(=O)N1CCC1" -f smiles -d enamine-real-v5a -n 20
 dmc sample -d freedom-space-5 -n 100 --seed 7 -o sample.smi
 dmc search "c1ccncc1" -d enamine-real-v5a --json > raw.json              # full API payload
+dmc search "N[C@@H](Cc1ccccc1)C(=O)O" -d synple --subset amino-acids -n 20  # virtual subset
+dmc search "CC(=O)Oc1ccccc1C(=O)O" -d enamine:ro5 --where "tpsa<=90" --exclude "[N+](=O)[O-]"
+dmc search "CC(=O)Oc1ccccc1C(=O)O" -d synple:amino-acids --explain       # document only, no credit
+dmc subsets                                                               # names and definitions
 dmc order hits.csv --get-quote --no-open                                  # email.txt + molecules.csv per vendor
 ```
 
@@ -92,6 +100,9 @@ hits.to_csv("hits.csv")                    # or .to_sdf(), .to_file(path), .to_p
 
 subs = dmc.substructure("[N;R0]C(=O)[N;R0]", database="enamine-real-v5a", limit=100, timeout_seconds=60)
 rand = dmc.sample(database="freedom-space-5", count=50, seed=1)
+aa = dmc.search("N[C@@H](Cc1ccccc1)C(=O)O", database="synple", subset="amino-acids", limit=20)
+ro5 = dmc.search(query, database="enamine", subset="ro5", where=["mw<=450"], require=["c1ccncc1"])
+lead = dmc.sample(database="enamine", subset="druglike", count=100)    # property subsets only
 ```
 
 Module-level functions open and close a client per call. For many calls, reuse one client:
@@ -176,6 +187,15 @@ dmc optimize status [NAME] | results NAME --top 50 -o best.csv | cancel NAME | r
   none. Binding quotes come from the vendor via `dmc order --get-quote`.
 - **Ordering never sends anything.** `dmc order` and `prepare_order` only write `email.txt`
   and a price-free `molecules.csv` per vendor and open a local mail draft.
+- **Filters are server constraints, not post-filters.** `subset`, `where`, `require` and
+  `exclude` turn the search into one selection; the server checks every returned molecule.
+  Never imitate a filter by searching unfiltered and dropping hits yourself: that silently
+  loses recall. If you must post-process hits, say it applies only to the returned hits.
+  Fewer hits than requested come with a `partial_results` warning; report it rather than
+  re-querying. Filtered searches return at most 200 hits; sampling takes property subsets
+  only (`ro5`, `druglike`, `beyond-ro5`, `ro3`, `--where`). There is no price filter.
+  Use the subset names from `dmc subsets`; matching ignores stereochemistry, so D/L or
+  natural/unnatural amino acids cannot be separated.
 - **Predicted ADMET is not a measurement.** `acquire_predicted_property` only reranks and trims
   a similarity shortlist; its values are `experimental-acquisition-only` predictions. Never
   describe them as measured, safe, or as meeting an ADMET threshold. Only `where` and

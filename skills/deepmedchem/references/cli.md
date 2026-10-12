@@ -38,11 +38,26 @@ Ranked similarity search for one query molecule.
 
 | Flag | Meaning |
 | --- | --- |
-| `-d, --database ID` | Required database id. |
+| `-d, --database ID` | Required database id. `ID:SUBSET[,SUBSET]` also applies named subsets. |
 | `-m, --method {morgan,shape,esp}` | `morgan` (default) is ECFP4 Tanimoto; `shape` and `esp` are CHEESE 3D shape and electrostatic similarity. |
-| `-n, --limit N` | Number of hits (default 20). |
+| `-n, --limit N` | Number of hits (default 20; at most 200 with filters). |
 | `-o, --output FILE` | Save hits; format inferred from `.csv`, `.sdf`, `.smi`, `.json`. |
 | `--format {csv,sdf,smi,json}` | Output format when it cannot be inferred. |
+| `--subset NAME` | Named virtual subset from `dmc subsets` (`amino-acids`, `ro5`, `druglike`, ...). Repeatable. |
+| `--where EXPR` | Exact RDKit property filter on `mw`, `logp`, `hbd`, `hba`, `rotb`, `tpsa`, `fsp3`, `arom`: `mw<=450`, `logp<4`, `tpsa=40..90`, `1<=hbd<=3`. Repeatable. |
+| `--require SMARTS` | Every hit contains the pattern. Repeatable. |
+| `--require-count N[-M] SMARTS` | Every hit contains the pattern N times, N-M times, or at least N times (`2-`). |
+| `--exclude SMARTS` | No hit contains the pattern. Repeatable. |
+| `--explain` | Print the selection document, the server's validation and its execution estimate; runs nothing and costs nothing. |
+
+All filters combine with AND and turn the search into one `molecule-selection/1` request
+(`POST /api/v2/selections`); the server checks every hit against every filter. A shorter
+result than `-n` comes with a printed `partial_results` note. Filters do not combine with
+`--input` batch search yet.
+
+### `dmc subsets [--json]`
+
+Lists the named virtual subsets. `--json` prints each SMARTS and property condition.
 
 ### `dmc substructure QUERY -d DATABASE [options]`
 
@@ -63,6 +78,7 @@ Random molecules from a space, useful for baselines and property distributions.
 | --- | --- |
 | `-n, --count N` | Number of molecules (default 100). |
 | `--seed S` | Reproducible sampling. |
+| `--subset NAME`, `--where EXPR`, `--explain` | Property subsets and filters as for `search` (structure subsets are not available for sampling). |
 | `-o, --output FILE`, `--format` | As for `search`. |
 
 ### Output

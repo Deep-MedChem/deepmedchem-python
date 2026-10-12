@@ -2,7 +2,7 @@
 
 __version__ = "0.4.0b1"
 
-from . import aio
+from . import aio, subsets
 from .batch import BatchQuery, BatchQueryResult, BatchResult, read_queries
 from .client import (
     AsyncClient,
@@ -24,6 +24,7 @@ from .models import (
     SampleResult,
     SearchMeta,
     SearchResult,
+    SelectionResult,
     SubmitReceipt,
     SubstructureResult,
 )
@@ -35,6 +36,7 @@ from .optimization import (
 )
 from .ordering import OrderBundle, OrderDraft, OrderMolecule, prepare_order
 from .selection import Run, Selection
+from .subsets import SUBSETS, Filters, Pattern, PropertyCondition, Subset
 
 __all__ = [
     "AsyncClient",
@@ -65,6 +67,13 @@ __all__ = [
     "SearchMeta",
     "SearchResult",
     "Selection",
+    "SelectionResult",
+    "SUBSETS",
+    "Filters",
+    "Pattern",
+    "PropertyCondition",
+    "Subset",
+    "subsets",
     "SubmitReceipt",
     "SubstructureResult",
     "aio",

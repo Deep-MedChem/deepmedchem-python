@@ -30,6 +30,7 @@ from .models import (
     SubstructureResult,
 )
 from .selection import Run, Selection
+from .subsets import sample_selection, search_filters, similarity_selection
 
 
 class DeepMedChemError(RuntimeError):
@@ -318,9 +319,36 @@ class Client:
         method: str = "morgan",
         limit: int = 20,
         include_synthons: bool = False,
+        subset: str | list[str] | None = None,
+        where=None,
+        require=None,
+        exclude=None,
     ) -> SearchResult:
+        """Rank molecules of ``database`` by similarity to ``smiles``.
+
+        ``subset`` (a name from ``deepmedchem.subsets.SUBSETS``, or ``database=
+        "synple:amino-acids"``), ``where`` (``"mw<=450"``), ``require`` and ``exclude``
+        (SMARTS) restrict the search. Filtered searches run as one selection: the
+        server enforces every constraint on every returned molecule and returns a
+        :class:`SelectionResult`.
+        """
+
         if method not in {"morgan", "shape", "esp"}:
             raise ValueError("method must be one of: 'morgan', 'shape', 'esp'")
+        database, filters = search_filters(
+            database, subset=subset, where=where, require=require, exclude=exclude
+        )
+        if filters:
+            return self.selections.create(
+                similarity_selection(
+                    smiles,
+                    database=database,
+                    filters=filters,
+                    method=method,
+                    limit=limit,
+                    include_synthons=include_synthons,
+                )
+            )
         database_id = resolve_database(database)
         if method != "morgan":
             return self.search_cheese(
@@ -478,7 +506,22 @@ class Client:
         count: int = 100,
         seed: int | None = None,
         include_synthons: bool = False,
-    ) -> SampleResult:
+        subset: str | list[str] | None = None,
+        where=None,
+    ) -> SampleResult | SelectionResult:
+        """Draw random molecules, optionally restricted to a property subset."""
+
+        database, filters = search_filters(database, subset=subset, where=where)
+        if filters:
+            return self.selections.create(
+                sample_selection(
+                    database=database,
+                    filters=filters,
+                    count=count,
+                    seed=seed,
+                    include_synthons=include_synthons,
+                )
+            )
         database_id = resolve_database(database)
         payload = {
             "database_id": database_id,
@@ -717,7 +760,26 @@ class AsyncClient:
         method = kwargs.pop("method", "morgan")
         if method not in {"morgan", "shape", "esp"}:
             raise ValueError("method must be one of: 'morgan', 'shape', 'esp'")
-        database_id = resolve_database(kwargs.pop("database"))
+        database, filters = search_filters(
+            kwargs.pop("database"),
+            subset=kwargs.pop("subset", None),
+            where=kwargs.pop("where", None),
+            require=kwargs.pop("require", None),
+            exclude=kwargs.pop("exclude", None),
+        )
+        if filters:
+            selection = similarity_selection(
+                smiles,
+                database=database,
+                filters=filters,
+                method=method,
+                limit=kwargs.pop("limit", 20),
+                include_synthons=kwargs.pop("include_synthons", False),
+            )
+            if kwargs:
+                raise TypeError(f"unexpected search arguments: {sorted(kwargs)}")
+            return await self.selections.create(selection)
+        database_id = resolve_database(database)
         if method != "morgan":
             return await self.search_cheese(smiles, database=database_id, scorer=method, **kwargs)
         payload = {
@@ -764,7 +826,23 @@ class AsyncClient:
         )
 
     async def sample(self, **kwargs) -> SampleResult:
-        database_id = resolve_database(kwargs.pop("database"))
+        database, filters = search_filters(
+            kwargs.pop("database"),
+            subset=kwargs.pop("subset", None),
+            where=kwargs.pop("where", None),
+        )
+        if filters:
+            selection = sample_selection(
+                database=database,
+                filters=filters,
+                count=kwargs.pop("count", 100),
+                seed=kwargs.pop("seed", None),
+                include_synthons=kwargs.pop("include_synthons", False),
+            )
+            if kwargs:
+                raise TypeError(f"unexpected sample arguments: {sorted(kwargs)}")
+            return await self.selections.create(selection)
+        database_id = resolve_database(database)
         payload = {
             "database_id": database_id,
             "count": kwargs.pop("count", 100),
