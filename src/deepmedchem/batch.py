@@ -505,12 +505,19 @@ def start_batch(
 ) -> dict[str, Any]:
     """Save the state (with a new idempotency key), then create the run; return the state."""
 
+    from .client import RetiredDatabaseError
+
     build_run(queries, database=database, method=method, limit=limit)  # validate first
     key = f"{key_prefix}-{uuid.uuid4().hex}"
     state = make_state(None, key, database, method, limit, queries)
     if state_file is not None:
         save_state(state, state_file)
-    return _create(client, state, state_file)
+    try:
+        return _create(client, state, state_file)
+    except RetiredDatabaseError:
+        if state_file is not None:  # no run exists or can be resumed; drop the file just written
+            Path(state_file).unlink(missing_ok=True)
+        raise
 
 
 def ensure_started(client: Client, state: dict[str, Any], state_file=None) -> dict[str, Any]:
