@@ -312,3 +312,198 @@ def test_databases_table_includes_classic_cheese_catalogues(capsys):
     assert molport.split() == ["molport", "5.9M", "-", "sales@molport.com"]
     enamine_index = next(i for i, line in enumerate(lines) if line.startswith("enamine"))
     assert lines.index(molport) > enamine_index
+
+
+# Tests for classic (enumerated and in-stock) libraries served by CHEESE Search
+
+
+def _classic_search_handler(request: httpx.Request) -> httpx.Response:
+    """Mock handler for classic database searches via CHEESE Search."""
+    if request.url.path == "/api/v2/catalog":
+        return httpx.Response(200, json=CATALOG)
+    if request.url.path == "/rate-limit/status":
+        return httpx.Response(200, json=USAGE)
+    if request.url.path == "/available_databases_full":
+        # CHEESE Search catalog
+        return httpx.Response(
+            200,
+            json={
+                "molport": {"Vendor": "Molport", "Number of molecules": "5900000", "Website": "molport.com", "Email": "sales@molport.com"},
+                "mcule-in-stock": {"Vendor": "MCULE", "Number of molecules": "7200000"},
+                "enamine-real": {"Vendor": "Enamine", "Number of molecules": "9560000000"},
+                "zinc15": {"Vendor": "ZINC15", "Number of molecules": "697100000"},
+            },
+        )
+    if request.url.path == "/molsearch":
+        # CHEESE Search similarity search endpoint (used for classic libraries)
+        return httpx.Response(
+            200,
+            json={
+                "neighbors": [
+                    {"smiles": "O=C(O)Oc1ccccc1C(=O)O", "id": "mol-001", "similarity": 1.0},
+                    {"smiles": "COC(=O)Oc1ccccc1C(=O)O", "id": "mol-002", "similarity": 0.95},
+                ],
+                "search_info": {"search_id": "req-001"},
+            },
+        )
+    return httpx.Response(404, json={"error": {"code": "not_found", "message": "nope"}})
+
+
+def test_cli_search_works_with_classic_instock_library(monkeypatch, capsys):
+    """Test that CLI search works with classic in-stock libraries (molport, mcule, etc)."""
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return _classic_search_handler(request)
+
+    monkeypatch.setattr(
+        cli,
+        "Client",
+        functools.partial(
+            Client,
+            api_key="token",
+            api_url="https://api.example.test",
+            account_url="https://account.example.test",
+            transport=httpx.MockTransport(handler),
+        ),
+    )
+    assert cli.main(["search", "CCO", "-d", "molport", "-n", "2"]) == 0
+    captured = capsys.readouterr()
+    # CHEESE Search results have similarity scores but no price estimates
+    assert "rank" in captured.out and "score" in captured.out and "price" in captured.out
+    assert "O=C(O)Oc1ccccc1C(=O)O" in captured.out
+    assert "MOLPORT" in captured.out
+
+
+def test_cli_search_works_with_classic_enumerated_library(monkeypatch, capsys):
+    """Test that CLI search works with enumerated libraries (enamine-real, zinc15, etc)."""
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return _classic_search_handler(request)
+
+    monkeypatch.setattr(
+        cli,
+        "Client",
+        functools.partial(
+            Client,
+            api_key="token",
+            api_url="https://api.example.test",
+            account_url="https://account.example.test",
+            transport=httpx.MockTransport(handler),
+        ),
+    )
+    assert cli.main(["search", "CCO", "-d", "enamine-real", "-n", "2"]) == 0
+    captured = capsys.readouterr()
+    assert "rank" in captured.out and "score" in captured.out
+    assert "O=C(O)Oc1ccccc1C(=O)O" in captured.out
+    assert "ENAMINE-REAL" in captured.out
+
+
+def test_cli_search_classic_library_accepts_alias(monkeypatch, capsys):
+    """Test that classic library aliases resolve correctly (e.g., molport → MOLPORT)."""
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return _classic_search_handler(request)
+
+    monkeypatch.setattr(
+        cli,
+        "Client",
+        functools.partial(
+            Client,
+            api_key="token",
+            api_url="https://api.example.test",
+            account_url="https://account.example.test",
+            transport=httpx.MockTransport(handler),
+        ),
+    )
+    assert cli.main(["search", "CCO", "-d", "molport"]) == 0
+    # Verify that the alias was resolved to the uppercase ID
+    classic_search_request = next((r for r in seen if r.url.path == "/molsearch"), None)
+    assert classic_search_request is not None
+    assert "db_names=MOLPORT" in str(classic_search_request.url.params)
+
+
+def test_cli_search_classic_library_output_formats(monkeypatch, tmp_path):
+    """Test that classic library search results can be exported to various formats."""
+    def handler(request):
+        return _classic_search_handler(request)
+
+    monkeypatch.setattr(
+        cli,
+        "Client",
+        functools.partial(
+            Client,
+            api_key="token",
+            api_url="https://api.example.test",
+            account_url="https://account.example.test",
+            transport=httpx.MockTransport(handler),
+        ),
+    )
+    # Test CSV export
+    csv_file = tmp_path / "classic_results.csv"
+    assert cli.main(["search", "CCO", "-d", "molport", "-o", str(csv_file)]) == 0
+    assert csv_file.exists()
+    with open(csv_file, newline="") as f:
+        rows = list(csv.DictReader(f))
+    assert len(rows) == 2
+    assert rows[0]["smiles"] == "O=C(O)Oc1ccccc1C(=O)O"
+
+    # Test JSON export
+    json_file = tmp_path / "classic_results.json"
+    assert cli.main(["search", "CCO", "-d", "mcule-in-stock", "-o", str(json_file), "--format", "json"]) == 0
+    assert json_file.exists()
+    result = json.loads(json_file.read_text())
+    assert "results" in result
+
+
+def test_cli_substructure_unsupported_on_classic_libraries(monkeypatch, capsys):
+    """Test that substructure search raises unsupported_operation for classic libraries."""
+    def handler(request):
+        if request.url.path == "/api/v2/catalog":
+            return httpx.Response(200, json=CATALOG)
+        return httpx.Response(404)
+
+    monkeypatch.setattr(
+        cli,
+        "Client",
+        functools.partial(
+            Client,
+            api_key="token",
+            api_url="https://api.example.test",
+            account_url="https://account.example.test",
+            transport=httpx.MockTransport(handler),
+            max_retries=0,
+        ),
+    )
+    assert cli.main(["substructure", "c1ccccc1", "-d", "molport"]) == 1
+    captured = capsys.readouterr()
+    assert "unsupported_operation" in captured.err or "not available" in captured.err
+
+
+def test_cli_sample_unsupported_on_classic_libraries(monkeypatch, capsys):
+    """Test that sampling raises unsupported_operation for classic libraries."""
+    def handler(request):
+        if request.url.path == "/api/v2/catalog":
+            return httpx.Response(200, json=CATALOG)
+        return httpx.Response(404)
+
+    monkeypatch.setattr(
+        cli,
+        "Client",
+        functools.partial(
+            Client,
+            api_key="token",
+            api_url="https://api.example.test",
+            account_url="https://account.example.test",
+            transport=httpx.MockTransport(handler),
+            max_retries=0,
+        ),
+    )
+    assert cli.main(["sample", "-d", "enamine-real", "-n", "10"]) == 1
+    captured = capsys.readouterr()
+    assert "unsupported_operation" in captured.err or "not available" in captured.err
