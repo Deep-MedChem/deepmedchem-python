@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 import deepmedchem.cli as cli
-from deepmedchem import Client, DeepMedChemError
+from deepmedchem import Client, DeepMedChemError, RetiredDatabaseError
 from deepmedchem.batch import (
     MAX_BATCH_QUERIES,
     build_run,
@@ -28,6 +28,7 @@ class FakeRuns:
         self.lose_create_responses = 0  # create the run, then drop the response
         self.retrieve_errors = 0  # connection errors on the next run polls
         self.create_error = None  # (status, code) returned instead of creating
+        self.unserved = {"molport"}  # database IDs this platform does not serve
 
     def _resource(self, run_id):
         run = self.runs[run_id]
@@ -96,6 +97,19 @@ class FakeRuns:
         body = json.loads(request.read() or b"{}")
         self.requests.append((request.method, request.url.path, request.headers, body))
         path = request.url.path
+        if path in {"/api/v2/runs:estimate", "/api/v2/runs"} and any(
+            f'"database_id": "{database_id}"' in json.dumps(body) for database_id in self.unserved
+        ):
+            return httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "code": "capability_unavailable",
+                        "message": "The selected database is not available.",
+                        "field": "database.database_id",
+                    }
+                },
+            )
         if path == "/api/v2/runs:estimate":
             return httpx.Response(
                 200, json={"admissible": True, "work": {"items": len(body["items"])}}
@@ -343,14 +357,25 @@ def test_search_many_never_prompts(monkeypatch) -> None:
     assert len(result) == 60
 
 
-def test_retired_cheese_catalogues_are_rejected_before_any_request() -> None:
+def test_unserved_retired_catalogue_fails_without_a_reconnect_hint(tmp_path) -> None:
     fake = FakeRuns()
     with (
         _client(fake) as client,
-        pytest.raises(ValueError, match="MOLPORT was a classic CHEESE Search catalogue"),
+        pytest.raises(RetiredDatabaseError, match="MOLPORT was a classic CHEESE Search") as caught,
     ):
-        client.search_many(["CCO"], database="molport")
-    assert fake.requests == []
+        client.search_many(["CCO"], database="MOLPORT", state_file=tmp_path / "s.json")
+    assert isinstance(caught.value, ValueError)
+    assert "resume_search_many" not in str(caught.value)
+    sent = [entry[3]["selection_template"]["database"]["database_id"] for entry in fake.created()]
+    assert sent == ["molport"]
+
+
+def test_retired_catalogue_runs_once_the_platform_serves_it() -> None:
+    fake = FakeRuns()
+    fake.unserved = set()
+    with _client(fake) as client:
+        result = client.search_many(["CCO"], database="MOLPORT", poll_interval=0)
+    assert len(result) == 1
 
 
 def test_timeout_names_the_run_to_reconnect(tmp_path) -> None:
@@ -447,7 +472,6 @@ def test_cli_resume_reconnects_without_a_new_run(monkeypatch, capsys, tmp_path) 
         (["search", "CCO", "-i", "x.smi", "-d", "enamine"], "give exactly one of"),
         (["search", "CCO"], "-d/--database"),
         (["search", "-i", "x.smi"], "-d/--database"),
-        (["search", "-i", "x.smi", "-d", "molport"], "MOLPORT was a classic CHEESE Search"),
         (["search", "-i", "x.smi", "-d", "enamine", "-o", "hits.sdf"], "saved as .csv or .json"),
     ],
 )
@@ -455,6 +479,16 @@ def test_cli_rejects_invalid_batch_arguments(monkeypatch, capsys, argv, message)
     _install(monkeypatch, FakeRuns())
     assert cli.main(argv) == 1
     assert message in capsys.readouterr().err
+
+
+def test_cli_batch_on_unserved_retired_catalogue_says_why_once(monkeypatch, capsys, tmp_path):
+    fake = FakeRuns()
+    _install(monkeypatch, fake)
+    source = tmp_path / "series.smi"
+    source.write_text("CCO lead-1\n", encoding="utf-8")
+    assert cli.main(["search", "-i", str(source), "-d", "molport"]) == 1
+    assert capsys.readouterr().err.count("MOLPORT was a classic CHEESE Search") == 1
+    assert fake.created() == []  # the estimate already said the database is not served
 
 
 # --- review fixes: crash safety, limits, polling, exit codes --------------------
