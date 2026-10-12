@@ -1035,3 +1035,19 @@ def test_batch_id_is_url_quoted(server) -> None:
     with _client(recording) as client, pytest.raises(DeepMedChemError):
         client.optimizations.batch("opt_x", "a/b c")
     assert seen and seen[-1].endswith("/batches/a%2Fb%20c")
+
+
+@pytest.mark.parametrize(
+    ("metrics", "message"),
+    [
+        ({"x" * 65: 1.0}, "metric names must be 1-64"),
+        ({"": 1.0}, "metric names must be 1-64"),
+        ({"pose": "x" * 501}, "at most 500"),
+    ],
+)
+def test_metric_limits_match_the_backend_and_fail_before_upload(metrics, message) -> None:
+    batch = _batch(n=1)
+    with pytest.raises(ValueError, match=message):
+        normalize_scores(batch, [{"score": 1.0, **metrics}])
+    rows = normalize_scores(batch, [{"score": 1.0, "x" * 64: 2.0, "pose": "y" * 500}])
+    assert rows[0]["metrics"] == {"x" * 64: 2.0, "pose": "y" * 500}

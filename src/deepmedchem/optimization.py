@@ -56,6 +56,8 @@ ROW_STATUSES = ("valid", "failed", "timeout", "filtered", "cancelled")
 RESULT_ORDERS = ("best", "round")
 MAX_WAIT_SECONDS = 25
 MAX_METRICS = 32
+MAX_METRIC_NAME_LENGTH = 64
+MAX_METRIC_TEXT_LENGTH = 500
 MAX_ERROR_LENGTH = 500
 MAX_JSON_OBJECT_BYTES = 4096
 MAX_RESULTS_PAGE = 1000
@@ -337,7 +339,22 @@ def _metrics(metrics: Mapping[Any, Any], molecule_id: str) -> dict[str, Any]:
             f"Molecule {molecule_id!r} has {len(metrics)} metrics; "
             f"at most {MAX_METRICS} are stored."
         )
-    return {str(key): _metric_value(value, str(key), molecule_id) for key, value in metrics.items()}
+    stored: dict[str, Any] = {}
+    for key, value in metrics.items():
+        name = str(key)
+        if not 1 <= len(name) <= MAX_METRIC_NAME_LENGTH:
+            raise ValueError(
+                f"Molecule {molecule_id!r}: metric names must be 1-{MAX_METRIC_NAME_LENGTH} "
+                f"characters, got {name[:20]!r}{'...' if len(name) > 20 else ''}."
+            )
+        item = _metric_value(value, name, molecule_id)
+        if isinstance(item, str) and len(item) > MAX_METRIC_TEXT_LENGTH:
+            raise ValueError(
+                f"Molecule {molecule_id!r}: metric {name!r} has {len(item)} characters; "
+                f"text metrics may have at most {MAX_METRIC_TEXT_LENGTH}."
+            )
+        stored[name] = item
+    return stored
 
 
 def _row(molecule_id: str, value: Any) -> dict[str, Any]:
