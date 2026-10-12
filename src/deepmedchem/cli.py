@@ -1084,9 +1084,19 @@ def read_scores_csv(path: str | Path) -> dict[str, dict[str, Any]]:
 
 
 def _substitute(template: str, input_path: Path, output_path: Path) -> str:
-    return template.replace("{input}", shlex.quote(str(input_path))).replace(
-        "{output}", shlex.quote(str(output_path))
-    )
+    """Fill {input}/{output} with shell-quoted paths.
+
+    A placeholder the user already wrapped in quotes ("{input}" or '{input}') is replaced
+    together with its quotes, so the path is never quoted twice.
+    """
+    for name, path in (("input", input_path), ("output", output_path)):
+        quoted = shlex.quote(str(path))
+        template = re.sub(
+            r"([\"'])\{" + name + r"\}\1|\{" + name + r"\}",
+            lambda _match, quoted=quoted: quoted,
+            template,
+        )
+    return template
 
 
 def _score_with_command(
@@ -1275,14 +1285,21 @@ def _optimize_tell(args) -> int:
     if args.json:
         print(json.dumps(receipt.raw, indent=2))
         return 0
-    counts = ", ".join(f"{count} {status}" for status, count in sorted(receipt.counts.items()))
+    counts = ", ".join(
+        f"{count} {status}"
+        for status, count in sorted(receipt.counts.items())
+        if status != "total" and count
+    )
     if receipt.duplicate:
         print(f"Batch {batch_id} was already accepted with these scores; nothing changed.")
     else:
         print(f"Submitted {len(rows)} scores for batch {batch_id} ({counts}).")
     if receipt.optimization is not None:
         progress = receipt.optimization.progress
-        print(f"{progress.scored}/{progress.budget} molecules scored.")
+        # The receipt is issued before the engine ingests the batch, so the server's count
+        # does not include it yet.
+        scored = progress.scored + (0 if receipt.duplicate else len(rows))
+        print(f"{scored}/{progress.budget} molecules scored.")
     return 0
 
 

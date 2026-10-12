@@ -60,6 +60,7 @@ MAX_ERROR_LENGTH = 500
 MAX_JSON_OBJECT_BYTES = 4096
 MAX_RESULTS_PAGE = 1000
 MAX_LIST_PAGE = 200
+MAX_SEED = 2**31 - 1
 _NAME_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 _SAFE_FILENAME = re.compile(r"[^A-Za-z0-9._-]")
 _TRANSIENT_STATUS = frozenset({500, 502, 503, 504})
@@ -235,8 +236,12 @@ def build_specification(
     if normalized_properties:
         spec["properties"] = normalized_properties
     if seed is not None:
-        if isinstance(seed, bool) or not isinstance(seed, numbers.Integral) or int(seed) < 0:
-            raise ValueError(f"seed must be a non-negative integer, got {seed!r}")
+        if (
+            isinstance(seed, bool)
+            or not isinstance(seed, numbers.Integral)
+            or not 0 <= int(seed) <= MAX_SEED
+        ):
+            raise ValueError(f"seed must be an integer between 0 and {MAX_SEED}, got {seed!r}")
         spec["seed"] = int(seed)
     scorer_object = _json_object(scorer, "scorer")
     if scorer_object is not None:
@@ -245,6 +250,16 @@ def build_specification(
     if metadata_object is not None:
         spec["metadata"] = metadata_object
     return spec
+
+
+def _control_key(idempotency_key: str | None, default: str) -> str:
+    """Idempotency key for seeds/transition: the backend accepts 1-128 characters."""
+
+    if idempotency_key is None:
+        return default
+    if not isinstance(idempotency_key, str) or not 1 <= len(idempotency_key) <= 128:
+        raise ValueError("idempotency_key must be a string of 1-128 characters")
+    return idempotency_key
 
 
 def _create_headers(name: str | None, idempotency_key: str | None) -> dict[str, str]:
@@ -546,11 +561,21 @@ def _not_found(id_or_name: str) -> DeepMedChemError:
 
 
 def _paused_error(resource: OptimizationResource) -> DeepMedChemError:
-    reason = f" ({resource.status_reason})" if resource.status_reason else ""
+    label = resource.name or resource.id
+    reason = resource.status_reason or ""
+    if reason == "insufficient_credits":
+        action = "Top up your credits, then call resume()"
+    elif reason.startswith("control_failed"):
+        action = (
+            "A seed upload or strategy change failed; fix it and send it again with a new "
+            "idempotency key, or call resume()"
+        )
+    else:
+        action = "Call resume()"
+    shown = f" ({reason})" if reason else ""
     return DeepMedChemError(
-        f"Optimization {resource.name or resource.id} is paused{reason}. Top up your credits, "
-        f"then call resume() (CLI: `dmc optimize resume {resource.name or resource.id}`) and "
-        "ask again.",
+        f"Optimization {label} is paused{shown}. {action} "
+        f"(CLI: `dmc optimize resume {label}`) and ask again.",
         code="optimization_paused",
         status_code=409,
     )
@@ -702,7 +727,7 @@ class Optimizations:
         """Any batch the optimization has issued, pending or already submitted."""
 
         return Batch.model_validate(
-            self._client._request("GET", _path(optimization_id, f"/batches/{batch_id}"))
+            self._client._request("GET", _path(optimization_id, f"/batches/{_segment(batch_id)}"))
         )
 
     def submit(
@@ -754,9 +779,9 @@ class Optimizations:
         body = {"mode": mode, "rows": list(rows)}
         if scorer is not None:
             body["scorer"] = dict(scorer)
-        key = idempotency_key or "seeds-" + hashlib.sha256(
+        key = _control_key(idempotency_key, "seeds-" + hashlib.sha256(
             json.dumps(body, sort_keys=True, allow_nan=False).encode()
-        ).hexdigest()
+        ).hexdigest())
         return OptimizationResource.model_validate(
             self._client._request("POST", _path(optimization_id, "/seeds"), json=body,
                                         headers={"Idempotency-Key": key})
@@ -765,7 +790,7 @@ class Optimizations:
     def transition(self, optimization_id: str, strategy: str, *,
                          idempotency_key: str | None = None) -> OptimizationResource:
         """Switch after the pending batch is scored, or immediately when paused."""
-        key = idempotency_key or "transition-" + uuid.uuid4().hex
+        key = _control_key(idempotency_key, "transition-" + uuid.uuid4().hex)
         return OptimizationResource.model_validate(
             self._client._request("POST", _path(optimization_id, ":transition"),
                                         json={"strategy": strategy},
@@ -1032,7 +1057,9 @@ class AsyncOptimizations:
         """Any batch the optimization has issued, pending or already submitted."""
 
         return Batch.model_validate(
-            await self._client._request("GET", _path(optimization_id, f"/batches/{batch_id}"))
+            await self._client._request(
+                "GET", _path(optimization_id, f"/batches/{_segment(batch_id)}")
+            )
         )
 
     async def submit(
@@ -1082,9 +1109,9 @@ class AsyncOptimizations:
         body = {"mode": mode, "rows": list(rows)}
         if scorer is not None:
             body["scorer"] = dict(scorer)
-        key = idempotency_key or "seeds-" + hashlib.sha256(
+        key = _control_key(idempotency_key, "seeds-" + hashlib.sha256(
             json.dumps(body, sort_keys=True, allow_nan=False).encode()
-        ).hexdigest()
+        ).hexdigest())
         return OptimizationResource.model_validate(
             await self._client._request("POST", _path(optimization_id, "/seeds"), json=body,
                                         headers={"Idempotency-Key": key})
@@ -1093,7 +1120,7 @@ class AsyncOptimizations:
     async def transition(self, optimization_id: str, strategy: str, *,
                          idempotency_key: str | None = None) -> OptimizationResource:
         """Switch after the pending batch is scored, or immediately when paused."""
-        key = idempotency_key or "transition-" + uuid.uuid4().hex
+        key = _control_key(idempotency_key, "transition-" + uuid.uuid4().hex)
         return OptimizationResource.model_validate(
             await self._client._request("POST", _path(optimization_id, ":transition"),
                                         json={"strategy": strategy},
@@ -1473,6 +1500,14 @@ def _drive(
     journal.cleanup()
     result = optimization.results()
     final = optimization.resource
+    if final.status in {"failed", "cancelled"}:
+        stopped = f" ({final.status_reason})" if final.status_reason else ""
+        raise DeepMedChemError(
+            f"Optimization {label} ({optimization.id}) ended {final.status}{stopped} after "
+            f"{final.progress.scored}/{final.progress.budget} molecules were scored. Its results "
+            f"stay readable with client.optimizations.get({optimization.id!r}).results().",
+            code="optimization_not_active",
+        )
     reason = f" ({final.status_reason})" if final.status_reason else ""
     best_row = result.best
     best_score = best_row.score if best_row is not None else None

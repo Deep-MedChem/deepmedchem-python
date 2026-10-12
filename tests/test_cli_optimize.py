@@ -296,3 +296,47 @@ def test_read_scores_csv_parses_cells(tmp_path) -> None:
     path.write_text("id,score\na,1\na,2\n")
     with pytest.raises(ValueError, match="duplicate id"):
         cli.read_scores_csv(path)
+
+
+# --- correctness fixes (2026-10-12 review) -------------------------------------------
+
+
+@pytest.mark.parametrize("quote", ['"', "'"])
+def test_run_accepts_quoted_placeholders_in_a_path_with_spaces(
+    server, tmp_path, capsys, quote
+) -> None:
+    """`"{input}"` must not be quoted twice when the work dir needs quoting."""
+    script = tmp_path / "score.py"
+    script.write_text(SCORER)
+    command = (
+        f"{shlex.quote(sys.executable)} {shlex.quote(str(script))} "
+        f"{quote}{{input}}{quote} {quote}{{output}}{quote}"
+    )
+    work = tmp_path / "work dir with spaces"
+    code = cli.main(
+        [
+            "optimize", "run", "spaced", "-d", "enamine", "--minimize",
+            "--budget", "4", "--batch-size", "2",
+            "--score-cmd", command, "--work-dir", str(work),
+        ]
+    )
+    captured = capsys.readouterr()
+    assert code == 0, captured.err
+    assert len(server.submissions) == 2
+
+
+def test_tell_reports_progress_including_the_batch_just_accepted(
+    server, tmp_path, capsys
+) -> None:
+    _create(server, budget=4, batch_size=2)
+    batch_path = tmp_path / "b.csv"
+    assert cli.main(["optimize", "ask", "hpc", "-o", str(batch_path)]) == 0
+    capsys.readouterr()
+    with open(batch_path, newline="") as handle:
+        ids = [row["id"] for row in csv.DictReader(handle)]
+    scores = tmp_path / "s.csv"
+    scores.write_text("id,score\n" + "\n".join(f"{i},-1.0" for i in ids) + "\n")
+    assert cli.main(["optimize", "tell", "hpc", str(scores)]) == 0
+    out = capsys.readouterr().out
+    assert "2/4 molecules scored." in out
+    assert "total" not in out and "0 " not in out.split("(", 1)[1].split(")", 1)[0]
