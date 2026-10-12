@@ -366,6 +366,7 @@ def test_unserved_retired_catalogue_fails_without_a_reconnect_hint(tmp_path) -> 
         client.search_many(["CCO"], database="MOLPORT", state_file=tmp_path / "s.json")
     assert isinstance(caught.value, ValueError)
     assert "resume_search_many" not in str(caught.value)
+    assert not (tmp_path / "s.json").exists()  # no run exists, so no state is left behind
     sent = [entry[3]["selection_template"]["database"]["database_id"] for entry in fake.created()]
     assert sent == ["molport"]
 

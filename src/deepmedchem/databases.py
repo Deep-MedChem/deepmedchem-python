@@ -83,9 +83,11 @@ assert len(_ALIASES) == len(DATABASE_DETAILS), "database abbreviations must be u
 
 
 # Classic CHEESE Search catalogues (enumerated and in-stock) that the SDK reached before it
-# moved to the platform API alone. Their IDs still go to the platform API, which will serve
-# several of them under these same IDs; the set only explains a "not served" answer (each
-# alias was the casefolded ID). Drop an entry when the platform API starts serving it.
+# moved to the platform API alone. Their IDs still go to the platform API, casefolded, because
+# it will serve several of them under those IDs; the set only explains a "not served" answer,
+# so a served ID works whether or not it is listed here. Drop an entry in the change that adds
+# its DATABASE_DETAILS entry, with abbreviation = the casefolded ID, so that "MOLPORT" is still
+# sent as "molport".
 RETIRED_DATABASES = frozenset(
     database_id.casefold()
     for database_id in (
