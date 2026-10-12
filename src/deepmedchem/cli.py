@@ -323,6 +323,17 @@ def _add_filter_options(parser: argparse.ArgumentParser, *, structures: bool = T
             help="Results must not contain this SMARTS (repeatable)",
         )
     group.add_argument(
+        "--max-price",
+        metavar="USD",
+        help="Maximum catalogue price per molecule in USD (1 mg, US delivery), e.g. 200; "
+        "molecules without a price are dropped",
+    )
+    group.add_argument(
+        "--keep-unpriced",
+        action="store_true",
+        help="With --max-price, also return molecules whose price is unknown",
+    )
+    group.add_argument(
         "--explain",
         action="store_true",
         help="Print the selection document and the server's validation and estimate, "
@@ -841,6 +852,8 @@ def _cli_filters(args) -> tuple[str, Filters]:
         where=args.where,
         require=require,
         exclude=getattr(args, "exclude", None),
+        max_price=getattr(args, "max_price", None),
+        keep_unpriced=getattr(args, "keep_unpriced", False),
     )
 
 

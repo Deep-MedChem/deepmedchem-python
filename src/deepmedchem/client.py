@@ -379,20 +379,30 @@ class Client:
         where=None,
         require=None,
         exclude=None,
+        max_price: float | None = None,
+        keep_unpriced: bool = False,
     ) -> SearchResult:
         """Rank molecules of ``database`` by similarity to ``smiles``.
 
         ``subset`` (a name from ``deepmedchem.subsets.SUBSETS``, or ``database=
         "synple:amino-acids"``), ``where`` (``"mw<=450"``), ``require`` and ``exclude``
-        (SMARTS) restrict the search. Filtered searches run as one selection: the
-        server enforces every constraint on every returned molecule and returns a
+        (SMARTS) restrict the search. ``max_price`` keeps products priced at most that
+        many USD (1 mg, US delivery); unpriced products are dropped unless
+        ``keep_unpriced``. Filtered searches run as one selection: the server enforces
+        every constraint on every returned molecule and returns a
         :class:`SelectionResult`.
         """
 
         if method not in {"morgan", "shape", "esp"}:
             raise ValueError("method must be one of: 'morgan', 'shape', 'esp'")
         database, filters = search_filters(
-            database, subset=subset, where=where, require=require, exclude=exclude
+            database,
+            subset=subset,
+            where=where,
+            require=require,
+            exclude=exclude,
+            max_price=max_price,
+            keep_unpriced=keep_unpriced,
         )
         if filters:
             return self.selections.create(
@@ -564,10 +574,18 @@ class Client:
         include_synthons: bool = False,
         subset: str | list[str] | None = None,
         where=None,
+        max_price: float | None = None,
+        keep_unpriced: bool = False,
     ) -> SampleResult | SelectionResult:
-        """Draw random molecules, optionally restricted to a property subset."""
+        """Draw random molecules, optionally restricted to a property subset or price."""
 
-        database, filters = search_filters(database, subset=subset, where=where)
+        database, filters = search_filters(
+            database,
+            subset=subset,
+            where=where,
+            max_price=max_price,
+            keep_unpriced=keep_unpriced,
+        )
         if filters:
             return self.selections.create(
                 sample_selection(
@@ -827,6 +845,8 @@ class AsyncClient:
             where=kwargs.pop("where", None),
             require=kwargs.pop("require", None),
             exclude=kwargs.pop("exclude", None),
+            max_price=kwargs.pop("max_price", None),
+            keep_unpriced=kwargs.pop("keep_unpriced", False),
         )
         if filters:
             selection = similarity_selection(
@@ -891,6 +911,8 @@ class AsyncClient:
             kwargs.pop("database"),
             subset=kwargs.pop("subset", None),
             where=kwargs.pop("where", None),
+            max_price=kwargs.pop("max_price", None),
+            keep_unpriced=kwargs.pop("keep_unpriced", False),
         )
         if filters:
             selection = sample_selection(

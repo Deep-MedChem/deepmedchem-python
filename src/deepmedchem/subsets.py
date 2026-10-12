@@ -9,6 +9,7 @@ filtered on the client.
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -353,6 +354,22 @@ def _conditions(value) -> tuple[PropertyCondition, ...]:
     )
 
 
+def _price(value, keep_unpriced) -> float | None:
+    if value is None:
+        if keep_unpriced:
+            raise ValueError("keep_unpriced needs max_price")
+        return None
+    if isinstance(value, bool):
+        raise ValueError("max_price must be a number of USD")
+    try:
+        price = float(str(value).strip().lstrip("$"))
+    except ValueError:
+        raise ValueError(f"max_price must be a number of USD, got {value!r}") from None
+    if not math.isfinite(price) or price < 0:
+        raise ValueError("max_price must be a non-negative number of USD")
+    return price
+
+
 def _names(value) -> tuple[str, ...]:
     if value is None:
         return ()
@@ -367,29 +384,46 @@ class Filters:
 
     All parts are combined with AND. ``require`` patterns must each match (at least
     once, or within their counts); ``exclude`` patterns must not match at all.
+    ``max_price`` limits the catalogue price in USD for 1 mg delivered to the US;
+    products with an unknown price are dropped unless ``keep_unpriced`` is true.
     """
 
     subsets: tuple[str, ...] = ()
     where: tuple[PropertyCondition, ...] = ()
     require: tuple[Pattern, ...] = ()
     exclude: tuple[Pattern, ...] = ()
+    max_price: float | None = None
+    keep_unpriced: bool = False
 
     @property
     def _resolved(self) -> tuple[Subset, ...]:
         return tuple(get_subset(name) for name in self.subsets)
 
     @classmethod
-    def build(cls, *, subset=None, where=None, require=None, exclude=None) -> Filters:
+    def build(
+        cls,
+        *,
+        subset=None,
+        where=None,
+        require=None,
+        exclude=None,
+        max_price=None,
+        keep_unpriced=False,
+    ) -> Filters:
         names = _names(subset)
         return cls(
             subsets=names,
             where=_conditions(where),
             require=_patterns(require),
             exclude=_patterns(exclude),
+            max_price=_price(max_price, keep_unpriced),
+            keep_unpriced=bool(keep_unpriced),
         )
 
     def __bool__(self) -> bool:
-        return bool(self.subsets or self.where or self.require or self.exclude)
+        return bool(
+            self.subsets or self.where or self.require or self.exclude or self.max_price is not None
+        )
 
     @property
     def structural(self) -> bool:
@@ -421,6 +455,8 @@ class Filters:
             selection = selection.exclude_structure(
                 pattern.smarts, format=pattern.format, id=f"exclude-{index}"
             )
+        if self.max_price is not None:
+            selection = selection.max_price(self.max_price, keep_unpriced=self.keep_unpriced)
         return selection
 
     def describe(self) -> list[str]:
@@ -428,6 +464,12 @@ class Filters:
         lines += [describe_condition(condition) for condition in self.where]
         lines += [f"contains {_count_text(p)}{p.smarts}" for p in self.require]
         lines += [f"does not contain {p.smarts}" for p in self.exclude]
+        if self.max_price is not None:
+            unpriced = "kept" if self.keep_unpriced else "excluded"
+            lines.append(
+                f"price <= ${_number(self.max_price)} (1 mg, US delivery); "
+                f"unpriced products {unpriced}"
+            )
         return lines
 
 
@@ -459,13 +501,25 @@ MAX_FILTERED_LIMIT = 200
 
 
 def search_filters(
-    database: str, *, subset=None, where=None, require=None, exclude=None
+    database: str,
+    *,
+    subset=None,
+    where=None,
+    require=None,
+    exclude=None,
+    max_price=None,
+    keep_unpriced=False,
 ) -> tuple[str, Filters]:
     """Resolve ``DATABASE:SUBSET`` and keyword filters into a database and filters."""
 
     database, named = split_database(database)
     filters = Filters.build(
-        subset=merge_subsets(named, subset), where=where, require=require, exclude=exclude
+        subset=merge_subsets(named, subset),
+        where=where,
+        require=require,
+        exclude=exclude,
+        max_price=max_price,
+        keep_unpriced=keep_unpriced,
     )
     return database, filters
 
@@ -517,7 +571,7 @@ def sample_selection(
     seed: int | None = None,
     include_synthons: bool = False,
 ):
-    """A random sample restricted by property filters."""
+    """A random sample restricted by property and price filters."""
 
     from .selection import Selection
 
