@@ -11,18 +11,21 @@ default 45.0) as keyword arguments.
 ```python
 import deepmedchem as dmc
 
-dmc.search(smiles, *, database, method="morgan", limit=20, shortlist_multiplier=10,
-           include_synthons=False) -> SearchResult
+dmc.search(smiles, *, database, method="morgan", limit=20, include_synthons=False,
+           subset=None, where=None, require=None, exclude=None) -> SearchResult
 dmc.substructure(query, *, database, format="smarts", limit=100, timeout_seconds=30,
                  include_synthons=False) -> SubstructureResult
-dmc.sample(*, database, count=100, seed=None, include_synthons=False) -> SampleResult
+dmc.sample(*, database, count=100, seed=None, include_synthons=False,
+           subset=None, where=None) -> SampleResult
 dmc.catalog() -> dict            # {"libraries": [{"database_id", "name", "product_count", "pricing", ...}], ...}
 ```
 
 - `method` must be `"morgan"`, `"shape"`, or `"esp"`; non-Morgan methods call the CHEESE
   3D endpoint.
-- `shortlist_multiplier` widens the server-side candidate pool before re-ranking; leave the
-  default unless recall is a problem.
+- `subset` (registry name or list, see `deepmedchem.SUBSETS`), `where` (`"mw<=450"` or a
+  list), `require` and `exclude` (SMARTS) restrict the search; the result is then a
+  `SelectionResult` whose hits all satisfy the filters, at most 200 per call. `sample`
+  accepts property subsets and `where` only.
 - `include_synthons=True` adds building-block information to each hit when the database
   supports it.
 
@@ -41,10 +44,10 @@ Methods on `Client` (all mirrored as coroutines on `AsyncClient`):
 | Method | Notes |
 | --- | --- |
 | `catalog()` | Public catalog document. |
-| `search(smiles, *, database, method="morgan", limit=20, shortlist_multiplier=10, include_synthons=False)` | Dispatches to `search_cheese` for `shape`/`esp`. |
-| `search_cheese(smiles, *, database, scorer, limit=20, shortlist_multiplier=10, include_synthons=False)` | `scorer` is `"shape"` or `"esp"`. |
+| `search(smiles, *, database, method="morgan", limit=20, include_synthons=False, subset=None, where=None, require=None, exclude=None)` | Dispatches to `search_cheese` for `shape`/`esp`; any filter sends one selection instead. |
+| `search_cheese(smiles, *, database, scorer, limit=20, include_synthons=False)` | `scorer` is `"shape"` or `"esp"`. |
 | `search_substructure(query, *, query_format="smarts", database, limit=100, timeout_seconds=30, include_synthons=False)` | Exact matches. |
-| `sample(*, database, count=100, seed=None, include_synthons=False)` | Random molecules. |
+| `sample(*, database, count=100, seed=None, include_synthons=False, subset=None, where=None)` | Random molecules, optionally from a property subset. |
 | `selections.validate(sel)`, `selections.estimate(sel)`, `selections.create(sel)` | Selection documents, see below. |
 | `runs.estimate(run)`, `runs.create(run, *, idempotency_key)`, `runs.retrieve(id)`, `runs.events(id, after=0)`, `runs.watch(id, after=0, poll_interval=0.5)`, `runs.wait(id, timeout=None, poll_interval=0.5)`, `runs.iter_results(id, order="completion")`, `runs.cancel(id)` | Durable runs. |
 | `close()` | Also via `with Client() as c:`. |
@@ -118,7 +121,16 @@ with Client() as client:
         result = client.selections.create(sel)         # SelectionResult, a SearchResult with id/status
 ```
 
-`where` takes exactly one of `gt`, `gte`, `lt`, `lte`, or `range=(lo, hi)`. Property ids,
+`where` takes exactly one of `gt`, `gte`, `lt`, `lte`, or `range=(lo, hi)`; short names
+(`where("mw", lte=450)`) and text (`where("tpsa=40..90")`) fill in the server property ID and
+units. `subset("amino-acids")` adds a registry subset (`deepmedchem.SUBSETS`);
+`require_structure(smarts, min_count=1, max_count=None)`, `exclude_structure(smarts)` and
+`require_any_structure([...], minimum=1)` add SMARTS constraints with inline queries.
+
+`search(..., subset=, where=, require=, exclude=)` and `sample(..., subset=, where=)` on the
+module, `Client` and `AsyncClient` build such a selection for you and return a
+`SelectionResult`. `database="synple:amino-acids"` is the same as `subset="amino-acids"`.
+`require` items are SMARTS strings, `(smarts, min, max)` tuples or `deepmedchem.Pattern`. Property ids,
 presets, pattern ids, and metrics are validated server-side; the catalog lists what a release
 supports. When `estimate.execution_tier` is not synchronous, submit the selection as a run.
 

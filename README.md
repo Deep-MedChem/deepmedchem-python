@@ -44,6 +44,7 @@ dmc databases --detailed             # full IDs, BioSolveIT mappings, availabili
 dmc search "CC(=O)Oc1ccccc1C(=O)O" -d enamine -m shape -n 10
 dmc search "CC(=O)Oc1ccccc1C(=O)O" -d enamine -o aspirin.csv
 dmc substructure "[N;R0][N;R0]C(=O)" -d enamine -n 10 --timeout-seconds 45 -o hydrazides.sdf
+dmc search "CC(=O)Oc1ccccc1C(=O)O" -d synple --subset amino-acids
 dmc sample -d freedom -n 100 --seed 7 -o sample.smi
 dmc order aspirin.csv --get-quote
 dmc optimize run my-run -d enamine --minimize --score-cmd './dock.sh {input} {output}'
@@ -240,6 +241,76 @@ as metrics. For manual control use `client.optimizations.create(...)` with `opt.
 Worked examples (RDKit, your own ML model, GNINA docking) are in
 [`examples/optimization`](examples/optimization/README.md).
 
+## Filters and virtual subsets
+
+A similarity search can be restricted to a *virtual subset*: a definition rather than a
+stored catalogue, so it works on every DeepMedChem chemical space. No enumerated
+amino-acid version of Synple exists, yet this returns only amino acids:
+
+```bash
+dmc search "CC(C)C[C@H](NC(=O)c1ccccc1)C(=O)O" -d synple --subset amino-acids
+dmc search "CC(C)C[C@H](NC(=O)c1ccccc1)C(=O)O" -d synple:amino-acids        # same search
+dmc search "CC(=O)Oc1ccccc1C(=O)O" -d enamine --subset ro5 --where "tpsa=40..90"
+dmc search "CC(=O)Oc1ccccc1C(=O)O" -d enamine --require "c1ccncc1" --exclude "[N+](=O)[O-]"
+dmc search "CC(=O)Oc1ccccc1C(=O)O" -d enamine --require-count 1-2 "[NX3;H2]"
+dmc search "CC(=O)Oc1ccccc1C(=O)O" -d synple:amino-acids --explain           # no credit used
+dmc sample -d enamine --subset druglike -n 100
+dmc subsets                                                               # the registry
+```
+
+`--subset`, `--where`, `--require`, `--require-count` and `--exclude` can be repeated and
+are combined with AND. `--where` takes `mw`, `logp`, `hbd`, `hba`, `rotb`, `tpsa`, `fsp3`
+and `arom` (or the `rdkit.*` property IDs) as `mw<=450`, `logp<4`, `tpsa=40..90` or
+`1<=hbd<=3`. `--explain` prints the selection document with the server's validation and
+execution estimate, and runs nothing.
+
+| subset | definition |
+|---|---|
+| `amino-acids` | alpha-amino-acid residue, carboxyl free or esterified; N free, alkylated, acylated, carbamate-protected, sulfonylated or in a ring |
+| `amino-acid-building-blocks` | alpha-amino acid with N free, alkylated or carbamate-protected (Boc, Fmoc, Cbz) |
+| `beta-amino-acids` | beta-amino-acid residue, carboxyl free or esterified |
+| `carboxylic-acids`, `primary-amines`, `acrylamides` | the named group |
+| `covalent-warheads` | any of acrylamide, chloroacetamide, vinyl sulfonamide, sulfonyl fluoride, propiolamide |
+| `ro5` | Lipinski: MW <= 500 Da, cLogP <= 5, HBD <= 5, HBA <= 10 (server preset `lipinski-ro5/v1`) |
+| `druglike` | MW <= 500, cLogP -10..5, HBA <= 10, HBD <= 5, RotB <= 10, TPSA <= 140, Fsp3 0.1..0.8, 1..5 aromatic rings |
+| `beyond-ro5` | MW > 500 Da |
+| `ro3` | MW <= 300, cLogP <= 3, HBD <= 3, HBA <= 3, RotB <= 3 |
+
+`amino-acids` has the scope of the Mcule amino-acid catalogues: it matches 98-100% of
+each residue file of MCULE-AA (2026-08-01) except glycine and alanine (about 90%), whose
+remaining entries attach the residue through an aromatic ring nitrogen. Matching ignores
+stereochemistry, so natural and unnatural (D) amino acids are not told apart.
+`dmc subsets --json` prints every SMARTS.
+
+In Python the same filters are keyword arguments of `search` and `sample`:
+
+```python
+import deepmedchem as dmc
+
+hits = dmc.search(query, database="synple", subset="amino-acids", limit=50)
+hits = dmc.search(query, database="enamine:ro5", where=["mw<=450"], require=["c1ccncc1"])
+hits = dmc.search(query, database="enamine", require=[("[NX3;H2]", 1, 2)])  # 1-2 matches
+picks = dmc.sample(database="enamine", subset="druglike", count=100, seed=7)
+```
+
+A filtered search is one `molecule-selection/1` document: a similarity objective plus
+the filters as constraints, sent to `POST /api/v2/selections` and returned as a
+`SelectionResult`. `Selection.subset()`, `.require_structure()`, `.exclude_structure()`,
+`.require_any_structure()` and `.where("mw<=450")` build the same constraints by hand.
+The server checks every constraint on every assembled product, so each returned
+molecule satisfies all filters; nothing is filtered on the client. Engines that support
+it anchor the synthon search on synthons able to carry a required pattern instead of
+filtering nearest neighbours. If fewer molecules than requested pass the filters among
+the candidates examined, the result is shorter and carries a `partial_results` warning,
+which the CLI prints.
+
+Limits: a filtered search returns at most 200 hits. Sampling accepts property filters
+only, because the API applies structure constraints to similarity searches alone.
+Batch search (`--input`) and substructure search do not take filters yet. The API has
+no price constraint, and does not report how many molecules a subset contains. With
+RDKit installed (`pip install "deepmedchem[rdkit]"`), SMARTS are checked locally before
+any request.
+
 ## SMILES and SMARTS substructure search
 
 Enamine substructure search is enabled in production on release `2026-09-06.2`.
@@ -303,8 +374,8 @@ the installed SDK version separately.
 the API.
 
 Exact RDKit constraints, fast predicted-property acquisition, and hard assembled-product predicted
-ranges are available through `Selection`. The simple `search`, `sample`, CLI, and export helpers
-keep their ordinary interfaces.
+ranges are available through `Selection`. The simple `search` and `sample` helpers and the CLI
+accept the common filters directly; see *Filters and virtual subsets*.
 
 ```python
 from deepmedchem import Client, Selection

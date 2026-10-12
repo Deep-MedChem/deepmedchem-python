@@ -7,7 +7,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any, overload
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class APIModel(BaseModel):
@@ -273,6 +273,13 @@ class SelectionEstimate(APIModel):
     reusable_run_request: dict[str, Any] | None = None
 
 
+_SELECTION_METHODS = {
+    "rdkit.ecfp4_tanimoto": "morgan",
+    "cheese.shape": "shape",
+    "cheese.electrostatic": "esp",
+}
+
+
 class SelectionResult(SearchResult):
     id: str
     object: str
@@ -280,6 +287,32 @@ class SelectionResult(SearchResult):
     selection_hash: str
     normalized_selection: dict[str, Any]
     acquisition: PredictedPropertyAcquisitionResult | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _fill_search_fields(cls, value: Any) -> Any:
+        """Selections name the database and metric in the document and the hits."""
+
+        if not isinstance(value, dict):
+            return value
+        value = dict(value)
+        if not value.get("database_id"):
+            database = (value.get("normalized_selection") or {}).get("database") or {}
+            value["database_id"] = database.get("database_id")
+        if not value.get("metric"):
+            metrics = {row.get("metric") for row in value.get("results") or [] if row.get("metric")}
+            if len(metrics) == 1:
+                value["metric"] = metrics.pop()
+        return value
+
+    @property
+    def method(self) -> str | None:
+        strategy = (self.normalized_selection.get("strategy") or {}).get("type")
+        if strategy == "sample":
+            return "sample"
+        objectives = self.normalized_selection.get("objectives") or []
+        metric = objectives[0].get("metric_id") if objectives else None
+        return _SELECTION_METHODS.get(metric, self.scorer)
 
 
 class RunProgress(APIModel):
