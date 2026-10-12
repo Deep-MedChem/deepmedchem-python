@@ -1,11 +1,12 @@
 import asyncio
 import json
+import re
 
 import httpx
 import pytest
 
 from deepmedchem import AsyncClient, Client, Run, Selection, __version__
-from deepmedchem.client import DeepMedChemError
+from deepmedchem.client import DeepMedChemError, RetiredDatabaseError
 from deepmedchem.models import SampleResult, SearchResult, SubstructureResult
 
 
@@ -480,52 +481,162 @@ def test_error_does_not_expose_api_key() -> None:
         client.close()
 
 
-# --- Classic CHEESE Search catalogues are no longer reachable --------------------
+# --- Retired classic CHEESE catalogues: the platform API decides ------------------
 
 
-def _no_request(request: httpx.Request):  # pragma: no cover - must not be reached
-    raise AssertionError(f"no request expected, got {request.method} {request.url}")
+_SYNC_PATHS = {"/api/v2/search", "/api/v2/search_cheese", "/api/v2/search_substructure"}
+
+
+def _platform(served=("enamine-real-v5a",), error=None):
+    """A fake platform API that answers like v2 for databases it does not serve."""
+
+    seen = []
+
+    def handler(request: httpx.Request):
+        body = json.loads(request.read() or b"null")
+        path = request.url.path
+        sent = re.search(r'"database(?:_id)?": "([^"]*)"', json.dumps(body))
+        database_id = sent.group(1) if sent else None
+        seen.append((path, database_id))
+        if error is not None:
+            return httpx.Response(400, json={"error": error})
+        if database_id not in served:
+            if path in _SYNC_PATHS | {"/api/v2/sample"}:
+                return httpx.Response(
+                    400,
+                    json={
+                        "error": {
+                            "code": "unavailable_library",
+                            "message": f"library not loaded: {database_id}",
+                        }
+                    },
+                )
+            return httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "code": "capability_unavailable",
+                        "message": "The selected database is not available.",
+                        "field": "database.database_id",
+                    }
+                },
+            )
+        return httpx.Response(200, json={"results": [{"smiles": "CCO", "score": 1.0}]})
+
+    return seen, httpx.MockTransport(handler)
+
+
+def _client(transport) -> Client:
+    return Client(api_key="ck_test", api_url="https://api.example.test", transport=transport)
 
 
 @pytest.mark.parametrize("database", ["mcule-in-stock", "MOLPORT", "enamine-real", "ZINC15"])
-def test_retired_cheese_databases_fail_before_any_request(database) -> None:
-    with Client(
-        api_key="ck_test",
-        api_url="https://api.example.test",
-        transport=httpx.MockTransport(_no_request),
-    ) as client:
-        for call in (
-            lambda: client.search("CCO", database=database),
-            lambda: client.search("CCO", database=database, method="shape"),
-            lambda: client.search_cheese("CCO", database=database, scorer="esp"),
-            lambda: client.search_substructure("C(=O)N", database=database),
-            lambda: client.sample(database=database),
-            lambda: client.search_many(["CCO"], database=database),
-            lambda: Selection.from_database(database),
-        ):
-            with pytest.raises(ValueError, match="classic CHEESE Search catalogue") as error:
+def test_unserved_retired_databases_are_explained_after_the_platform_answers(database) -> None:
+    seen, transport = _platform()
+    selection = Selection.from_database(database).sample(seed=1).limit(1)
+    calls = (
+        lambda: client.search("CCO", database=database),
+        lambda: client.search("CCO", database=database, method="shape"),
+        lambda: client.search_cheese("CCO", database=database, scorer="esp"),
+        lambda: client.search_substructure("C(=O)N", database=database),
+        lambda: client.sample(database=database),
+        lambda: client.selections.validate(selection),
+        lambda: client.selections.create(selection),
+        lambda: client.runs.estimate(Run.selection(selection)),
+        lambda: client.runs.create(Run.selection(selection), idempotency_key="k"),
+        lambda: client.search_many(["CCO"], database=database),
+    )
+    with _client(transport) as client:
+        for call in calls:
+            with pytest.raises(RetiredDatabaseError) as error:
                 call()
-            assert database.upper() in str(error.value)
+            assert isinstance(error.value, ValueError)
+            assert error.value.code == "retired_database"
+            assert error.value.status_code == 400
+            assert str(error.value).startswith(
+                f"{database.upper()} was a classic CHEESE Search catalogue"
+            )
             assert "dmc databases" in str(error.value)
+    # Every call reached the platform once, with the ID it would serve the catalogue under.
+    assert [database_id for _, database_id in seen] == [database.casefold()] * len(calls)
 
 
-def test_async_retired_cheese_databases_fail_before_any_request() -> None:
+def test_async_unserved_retired_databases_are_explained() -> None:
+    seen, transport = _platform()
+
     async def run():
         async with AsyncClient(
-            api_key="ck_test",
-            api_url="https://api.example.test",
-            transport=httpx.MockTransport(_no_request),
+            api_key="ck_test", api_url="https://api.example.test", transport=transport
         ) as client:
             for call in (
-                lambda: client.search("CCO", database="molport"),
+                lambda: client.search("CCO", database="MOLPORT"),
                 lambda: client.search_cheese("CCO", database="molport", scorer="shape"),
                 lambda: client.search_substructure("C(=O)N", database="molport"),
                 lambda: client.sample(database="molport"),
+                lambda: client.selections.create(Selection.from_database("molport").sample()),
             ):
-                with pytest.raises(ValueError, match="MOLPORT was a classic CHEESE"):
+                with pytest.raises(RetiredDatabaseError, match="MOLPORT was a classic CHEESE"):
                     await call()
 
     asyncio.run(run())
+    assert {database_id for _, database_id in seen} == {"molport"}
+
+
+def test_retired_database_works_once_the_platform_serves_it() -> None:
+    seen, transport = _platform(served=("molport",))
+    with _client(transport) as client:
+        assert client.search("CCO", database="MOLPORT").smiles == ["CCO"]
+        assert len(client.sample(database="Molport")) == 1
+    assert [database_id for _, database_id in seen] == ["molport", "molport"]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        # A served database that lacks one capability names the request field, not the database.
+        {
+            "code": "capability_unavailable",
+            "message": "shape search is not available for molport",
+            "field": "scorer",
+            "details": {"capability": "search_cheese"},
+        },
+        {"code": "unsupported_capability", "message": "sampling is not supported"},
+        {"code": "invalid_schema", "message": "limit must be at most 200", "field": "limit"},
+    ],
+)
+def test_other_errors_about_retired_databases_are_not_rewritten(error) -> None:
+    _, transport = _platform(error=error)
+    with _client(transport) as client:
+        with pytest.raises(DeepMedChemError) as caught:
+            client.search("CCO", database="molport", method="shape")
+    assert not isinstance(caught.value, RetiredDatabaseError)
+    assert (caught.value.code, str(caught.value)) == (error["code"], error["message"])
+
+
+def test_optimization_refusal_for_a_retired_database_is_not_rewritten() -> None:
+    error = {
+        "code": "capability_unavailable",
+        "message": "molport is not offered for optimizations",
+        "field": "database",
+    }
+    _, transport = _platform(error=error)
+    with _client(transport) as client:
+        with pytest.raises(DeepMedChemError) as caught:
+            client.optimizations.create(
+                database="molport", direction="maximize", budget=10, batch_size=5
+            )
+    assert not isinstance(caught.value, RetiredDatabaseError)
+    assert str(caught.value) == "molport is not offered for optimizations"
+
+
+def test_unserved_private_database_keeps_the_platform_message() -> None:
+    _, transport = _platform()
+    with _client(transport) as client:
+        with pytest.raises(DeepMedChemError) as caught:
+            client.search("CCO", database="Private-Space")
+    assert not isinstance(caught.value, RetiredDatabaseError)
+    assert caught.value.code == "unavailable_library"
+    assert str(caught.value) == "library not loaded: Private-Space"
 
 
 def test_unknown_and_private_databases_pass_through_to_the_platform_api() -> None:

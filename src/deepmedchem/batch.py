@@ -469,7 +469,7 @@ def _with_state(error, state: dict[str, Any], state_file=None, note: str | None 
 def _create(client: Client, state: dict[str, Any], state_file=None) -> dict[str, Any]:
     """Create (or, with the same idempotency key, re-attach to) the run in ``state``."""
 
-    from .client import DeepMedChemError
+    from .client import DeepMedChemError, RetiredDatabaseError
 
     queries = normalize_queries([tuple(pair) for pair in state["queries"]])
     run = build_run(
@@ -477,6 +477,8 @@ def _create(client: Client, state: dict[str, Any], state_file=None) -> dict[str,
     )
     try:
         created = client.runs.create(run, idempotency_key=state["idempotency_key"])
+    except RetiredDatabaseError:
+        raise  # nothing to reconnect to: the platform API does not serve this database
     except DeepMedChemError as error:
         note = None
         if error.code == "tenant_run_quota_exceeded":

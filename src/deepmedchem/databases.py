@@ -83,8 +83,9 @@ assert len(_ALIASES) == len(DATABASE_DETAILS), "database abbreviations must be u
 
 
 # Classic CHEESE Search catalogues (enumerated and in-stock) that the SDK reached before it
-# moved to the platform API alone. Listed only to explain why they fail (each alias was the
-# casefolded ID); drop an entry when the platform API starts serving that catalogue.
+# moved to the platform API alone. Their IDs still go to the platform API, which will serve
+# several of them under these same IDs; the set only explains a "not served" answer (each
+# alias was the casefolded ID). Drop an entry when the platform API starts serving it.
 RETIRED_DATABASES = frozenset(
     database_id.casefold()
     for database_id in (
@@ -119,12 +120,21 @@ def expand_database_alias(database: str) -> str:
 
 
 def resolve_database(database: str) -> str:
-    """Return the platform database ID for ``database``, rejecting retired CHEESE catalogues."""
-    database_id = expand_database_alias(database)
-    if database_id.casefold() in RETIRED_DATABASES:
-        raise ValueError(
-            f"{database_id.upper()} was a classic CHEESE Search catalogue, which the "
-            "DeepMedChem Python SDK no longer reaches: it uses only the platform API. "
-            "Run `dmc databases` to list the chemical spaces you can search."
-        )
-    return database_id
+    """Return the platform database ID for ``database``; no ID is rejected locally.
+
+    Retired CHEESE IDs are sent casefolded, the form the platform API serves them under.
+    """
+    if database.casefold() in RETIRED_DATABASES:
+        return database.casefold()
+    return expand_database_alias(database)
+
+
+def retired_database_message(database_id: str) -> str | None:
+    """Explain why the platform API does not serve ``database_id``, if it is a retired ID."""
+    if database_id.casefold() not in RETIRED_DATABASES:
+        return None
+    return (
+        f"{database_id.upper()} was a classic CHEESE Search catalogue, and the platform API, "
+        "the only one the DeepMedChem Python SDK uses, does not serve it. "
+        "Run `dmc databases` to list the chemical spaces you can search."
+    )

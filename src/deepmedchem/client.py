@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
 from collections.abc import AsyncIterator, Iterator
@@ -16,7 +17,7 @@ from .config import (
     resolve_api_key,
     resolve_profile,
 )
-from .databases import resolve_database
+from .databases import resolve_database, retired_database_message
 from .models import (
     Page,
     RunEvent,
@@ -57,6 +58,47 @@ class DeepMedChemError(RuntimeError):
         self.details = details
 
 
+class RetiredDatabaseError(DeepMedChemError, ValueError):
+    """The platform API does not serve a database that classic CHEESE Search used to."""
+
+
+def _sent_database_ids(value: Any) -> Iterator[str]:
+    """Yield every ``database_id`` in a request body (search, selection or run template)."""
+
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key == "database_id" and isinstance(item, str):
+                yield item
+            else:
+                yield from _sent_database_ids(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _sent_database_ids(item)
+
+
+def _retired_database_message(response: httpx.Response, code: str, field: Any) -> str | None:
+    """Explain a "not served" answer about a retired classic CHEESE catalogue, else ``None``.
+
+    "Not served" is ``unavailable_library``, or ``capability_unavailable`` on the database
+    field (selections and runs, until they move to ``unavailable_library``). An operation
+    that a served database does not support names another field and is never rewritten.
+    """
+
+    if code != "unavailable_library" and not (
+        code == "capability_unavailable" and field == "database.database_id"
+    ):
+        return None
+    try:
+        sent = json.loads(response.request.content or b"null")
+    except (RuntimeError, ValueError):
+        return None
+    for database_id in _sent_database_ids(sent):
+        message = retired_database_message(database_id)
+        if message:
+            return message
+    return None
+
+
 def _credentials(
     api_key: str | None,
     credential_provider: CredentialSource | None = None,
@@ -81,9 +123,15 @@ def _raise_api_error(response: httpx.Response) -> None:
     error = payload.get("error") or payload.get("detail") or {}
     if not isinstance(error, dict):
         error = {"message": str(error)}
-    raise DeepMedChemError(
-        str(error.get("message") or f"API returned {response.status_code}"),
-        code=str(error.get("code") or "api_error"),
+    code = str(error.get("code") or "api_error")
+    message = str(error.get("message") or f"API returned {response.status_code}")
+    error_class = DeepMedChemError
+    retired = _retired_database_message(response, code, error.get("field"))
+    if retired:
+        error_class, code, message = RetiredDatabaseError, "retired_database", retired
+    raise error_class(
+        message,
+        code=code,
         status_code=response.status_code,
         request_id=error.get("request_id") or response.headers.get("x-request-id"),
         retryable=bool(error.get("retryable", response.status_code in {429, 503, 504})),
