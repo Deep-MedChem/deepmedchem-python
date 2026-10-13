@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0b2 (2026-10-13)
 
 ### Added
 
