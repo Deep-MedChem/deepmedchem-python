@@ -140,6 +140,21 @@ def _raise_api_error(response: httpx.Response) -> None:
     )
 
 
+def _usage_unavailable(error: DeepMedChemError) -> DeepMedChemError:
+    """Explain a 404 from a platform deployment that predates GET /api/v2/usage."""
+
+    if error.status_code != 404:
+        return error
+    return DeepMedChemError(
+        "This DeepMedChem API server does not provide account usage (GET "
+        f"{USAGE_PATH} returned 404). It predates the usage endpoint; the CHEESE web app "
+        "shows the daily credit balance.",
+        code="usage_unavailable",
+        status_code=404,
+        request_id=error.request_id,
+    )
+
+
 def _retry_delay(response: httpx.Response | None, attempt: int, backoff: float) -> float:
     if response is not None:
         retry_after = response.headers.get("retry-after")
@@ -365,7 +380,11 @@ class Client:
     def usage(self) -> Usage:
         """Return the account plan and today's CHEESE Credit balance; costs no credits."""
 
-        return Usage.model_validate(self._request("GET", USAGE_PATH))
+        try:
+            payload = self._request("GET", USAGE_PATH)
+        except DeepMedChemError as error:
+            raise _usage_unavailable(error) from error
+        return Usage.model_validate(payload)
 
     def search(
         self,
@@ -815,7 +834,11 @@ class AsyncClient:
     async def usage(self) -> Usage:
         """Return the account plan and today's CHEESE Credit balance; costs no credits."""
 
-        return Usage.model_validate(await self._request("GET", USAGE_PATH))
+        try:
+            payload = await self._request("GET", USAGE_PATH)
+        except DeepMedChemError as error:
+            raise _usage_unavailable(error) from error
+        return Usage.model_validate(payload)
 
     async def search(self, smiles: str, **kwargs) -> SearchResult:
         method = kwargs.pop("method", "morgan")
