@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0b1 (2026-10-13)
 
 ### Breaking changes
 
@@ -42,3 +42,22 @@ more.
 
 `dmc order` still recognises the vendor contacts for CSVs exported from the CHEESE web UI, so
 existing exports of these catalogues can still be turned into quote requests.
+
+### New features
+
+- **Virtual subsets and SMARTS filters.** `dmc search` and `dmc sample` (and `search`/`sample`
+  in Python) take `--subset NAME` (or `-d DATABASE:SUBSET`), `--where`, `--require`,
+  `--require-count`, `--exclude` and `--explain`. Filters become one molecule selection sent to
+  `/api/v2/selections`, so the server checks every result. `dmc subsets` lists the built-in
+  subsets: amino acids, building blocks, warheads, ro5, ro3 and more.
+- **Navigator optimization (beta).** `client.optimizations` and `dmc.optimize()` / `dmc optimize`
+  drive resumable ask/tell optimizations of your own score over a chemical space, on accounts
+  where the platform enables them.
+- **Many query molecules in one run.** `Client.search_many()` runs each query as an item of one
+  durable batch run and returns per-query hits in input order.
+- **HTML export.** `SearchResult.to_html()` and `-o hits.html` save a self-contained page with
+  2D structures.
+
+### Fixes
+
+- Browser login on the `dev` profile uses the dev CHEESE web app.
