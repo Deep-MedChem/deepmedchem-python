@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0b1 (2026-10-13)
+## Unreleased
 
 ### Added
 
@@ -11,6 +11,8 @@
   filtered on the client. Unpriced molecules are dropped unless `keep_unpriced=True` /
   `--keep-unpriced`. Needs a platform release whose catalog lists `max_price` under
   `pricing.constraints`.
+
+## 0.4.0b1 (2026-10-13)
 
 ### Breaking changes
 
