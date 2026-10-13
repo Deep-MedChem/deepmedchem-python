@@ -12,11 +12,12 @@ default 45.0) as keyword arguments.
 import deepmedchem as dmc
 
 dmc.search(smiles, *, database, method="morgan", limit=20, include_synthons=False,
-           subset=None, where=None, require=None, exclude=None) -> SearchResult
+           subset=None, where=None, require=None, exclude=None,
+           max_price=None, keep_unpriced=False) -> SearchResult
 dmc.substructure(query, *, database, format="smarts", limit=100, timeout_seconds=30,
                  include_synthons=False) -> SubstructureResult
 dmc.sample(*, database, count=100, seed=None, include_synthons=False,
-           subset=None, where=None) -> SampleResult
+           subset=None, where=None, max_price=None, keep_unpriced=False) -> SampleResult
 dmc.catalog() -> dict            # {"libraries": [{"database_id", "name", "product_count", "pricing", ...}], ...}
 dmc.usage() -> Usage
 ```
@@ -26,7 +27,11 @@ dmc.usage() -> Usage
 - `subset` (registry name or list, see `deepmedchem.SUBSETS`), `where` (`"mw<=450"` or a
   list), `require` and `exclude` (SMARTS) restrict the search; the result is then a
   `SelectionResult` whose hits all satisfy the filters, at most 200 per call. `sample`
-  accepts property subsets and `where` only.
+  accepts property subsets, `where` and `max_price` only.
+- `max_price` (USD for 1 mg delivered to the US, inclusive) keeps hits whose `price` is at
+  most that amount; the server applies it inside the search. Unpriced molecules are dropped
+  unless `keep_unpriced=True`. Databases without prices raise `capability_unavailable` with
+  `field="constraints.price"`.
 - `include_synthons=True` adds building-block information to each hit when the database
   supports it.
 
@@ -46,10 +51,10 @@ Methods on `Client` (all mirrored as coroutines on `AsyncClient`):
 | --- | --- |
 | `catalog()` | Public catalog document. |
 | `usage()` | `Usage` from `GET /api/v2/usage`; free. |
-| `search(smiles, *, database, method="morgan", limit=20, include_synthons=False, subset=None, where=None, require=None, exclude=None)` | Dispatches to `search_cheese` for `shape`/`esp`; any filter sends one selection instead. |
+| `search(smiles, *, database, method="morgan", limit=20, include_synthons=False, subset=None, where=None, require=None, exclude=None, max_price=None, keep_unpriced=False)` | Dispatches to `search_cheese` for `shape`/`esp`; any filter sends one selection instead. |
 | `search_cheese(smiles, *, database, scorer, limit=20, include_synthons=False)` | `scorer` is `"shape"` or `"esp"`. |
 | `search_substructure(query, *, query_format="smarts", database, limit=100, timeout_seconds=30, include_synthons=False)` | Exact matches. |
-| `sample(*, database, count=100, seed=None, include_synthons=False, subset=None, where=None)` | Random molecules, optionally from a property subset. |
+| `sample(*, database, count=100, seed=None, include_synthons=False, subset=None, where=None, max_price=None, keep_unpriced=False)` | Random molecules, optionally from a property subset or below a price. |
 | `selections.validate(sel)`, `selections.estimate(sel)`, `selections.create(sel)` | Selection documents, see below. |
 | `runs.estimate(run)`, `runs.create(run, *, idempotency_key)`, `runs.retrieve(id)`, `runs.events(id, after=0)`, `runs.watch(id, after=0, poll_interval=0.5)`, `runs.wait(id, timeout=None, poll_interval=0.5)`, `runs.iter_results(id, order="completion")`, `runs.cancel(id)` | Durable runs. |
 | `close()` | Also via `with Client() as c:`. |
@@ -132,8 +137,11 @@ with Client() as client:
 units. `subset("amino-acids")` adds a registry subset (`deepmedchem.SUBSETS`);
 `require_structure(smarts, min_count=1, max_count=None)`, `exclude_structure(smarts)` and
 `require_any_structure([...], minimum=1)` add SMARTS constraints with inline queries.
+`max_price(usd, keep_unpriced=False)` sets `constraints.price` (`{"max", "currency": "USD",
+"amount_mg": 1, "ship_to": "US", "missing": "reject" | "keep"}`).
 
-`search(..., subset=, where=, require=, exclude=)` and `sample(..., subset=, where=)` on the
+`search(..., subset=, where=, require=, exclude=, max_price=)` and
+`sample(..., subset=, where=, max_price=)` on the
 module, `Client` and `AsyncClient` build such a selection for you and return a
 `SelectionResult`. `database="synple:amino-acids"` is the same as `subset="amino-acids"`.
 `require` items are SMARTS strings, `(smarts, min, max)` tuples or `deepmedchem.Pattern`. Property ids,

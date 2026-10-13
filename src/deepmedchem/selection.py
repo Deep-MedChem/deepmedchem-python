@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from copy import deepcopy
 from typing import Any, Literal
 
@@ -440,6 +441,29 @@ class Selection:
                     "missing": "reject",
                 }
             )
+
+        return self._changed(update)
+
+    def max_price(self, usd: float, *, keep_unpriced: bool = False) -> Selection:
+        """Keep only products priced at most ``usd`` (whole USD, 1 mg, US delivery).
+
+        The server applies the limit while it searches and prices every returned
+        product exactly. Products with an unknown price are dropped unless
+        ``keep_unpriced`` is true; they are then returned with ``price=None``.
+        """
+
+        value = float(usd)
+        if not math.isfinite(value) or value < 0:
+            raise ValueError("max_price must be a non-negative number of USD")
+
+        def update(payload):
+            payload["constraints"]["price"] = {
+                "max": int(value) if value.is_integer() else value,
+                "currency": "USD",
+                "amount_mg": 1,
+                "ship_to": "US",
+                "missing": "keep" if keep_unpriced else "reject",
+            }
 
         return self._changed(update)
 

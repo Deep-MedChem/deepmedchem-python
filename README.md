@@ -254,6 +254,7 @@ dmc search "CC(C)C[C@H](NC(=O)c1ccccc1)C(=O)O" -d synple:amino-acids        # sa
 dmc search "CC(=O)Oc1ccccc1C(=O)O" -d enamine --subset ro5 --where "tpsa=40..90"
 dmc search "CC(=O)Oc1ccccc1C(=O)O" -d enamine --require "c1ccncc1" --exclude "[N+](=O)[O-]"
 dmc search "CC(=O)Oc1ccccc1C(=O)O" -d enamine --require-count 1-2 "[NX3;H2]"
+dmc search "CC(=O)Oc1ccccc1C(=O)O" -d enamine --max-price 200                # USD per 1 mg
 dmc search "CC(=O)Oc1ccccc1C(=O)O" -d synple:amino-acids --explain           # no credit used
 dmc sample -d enamine --subset druglike -n 100
 dmc subsets                                                               # the registry
@@ -262,8 +263,10 @@ dmc subsets                                                               # the 
 `--subset`, `--where`, `--require`, `--require-count` and `--exclude` can be repeated and
 are combined with AND. `--where` takes `mw`, `logp`, `hbd`, `hba`, `rotb`, `tpsa`, `fsp3`
 and `arom` (or the `rdkit.*` property IDs) as `mw<=450`, `logp<4`, `tpsa=40..90` or
-`1<=hbd<=3`. `--explain` prints the selection document with the server's validation and
-execution estimate, and runs nothing.
+`1<=hbd<=3`. `--max-price USD` keeps molecules whose catalogue price (whole USD, 1 mg, US
+delivery, the `price` column) is at most that amount; molecules without a price are dropped
+unless `--keep-unpriced` is given. `--explain` prints the selection document with the
+server's validation and execution estimate, and runs nothing.
 
 | subset | definition |
 |---|---|
@@ -292,12 +295,14 @@ hits = dmc.search(query, database="synple", subset="amino-acids", limit=50)
 hits = dmc.search(query, database="enamine:ro5", where=["mw<=450"], require=["c1ccncc1"])
 hits = dmc.search(query, database="enamine", require=[("[NX3;H2]", 1, 2)])  # 1-2 matches
 picks = dmc.sample(database="enamine", subset="druglike", count=100, seed=7)
+cheap = dmc.search(query, database="enamine", max_price=200)  # price <= $200 per 1 mg
 ```
 
 A filtered search is one `molecule-selection/1` document: a similarity objective plus
 the filters as constraints, sent to `POST /api/v2/selections` and returned as a
 `SelectionResult`. `Selection.subset()`, `.require_structure()`, `.exclude_structure()`,
-`.require_any_structure()` and `.where("mw<=450")` build the same constraints by hand.
+`.require_any_structure()`, `.where("mw<=450")` and `.max_price(200)` build the same
+constraints by hand.
 The server checks every constraint on every assembled product, so each returned
 molecule satisfies all filters; nothing is filtered on the client. Engines that support
 it anchor the synthon search on synthons able to carry a required pattern instead of
@@ -307,8 +312,16 @@ which the CLI prints.
 
 Limits: a filtered search returns at most 200 hits. Sampling accepts property filters
 only, because the API applies structure constraints to similarity searches alone.
-Batch search (`--input`) and substructure search do not take filters yet. The API has
-no price constraint, and does not report how many molecules a subset contains. With
+Batch search (`--input`) and substructure search do not take filters yet. The API does
+not report how many molecules a subset contains.
+
+A price limit is enforced inside the synthon search, not by dropping expensive hits from an
+unfiltered list: the server skips building-block combinations priced above the limit before
+it ranks them, then prices every returned molecule again. It works for similarity search
+and sampling on databases whose catalog entry lists `max_price` under `pricing.constraints`
+(`dmc databases --json`); elsewhere the server answers `capability_unavailable` for
+`constraints.price`. A limit below the cheapest price of a database returns no molecules
+and a `price_unattainable` warning. Prices are planning estimates, not quotes. With
 RDKit installed (`pip install "deepmedchem[rdkit]"`), SMARTS are checked locally before
 any request.
 

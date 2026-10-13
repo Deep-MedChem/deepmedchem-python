@@ -49,6 +49,8 @@ Ranked similarity search for one query molecule.
 | `--require SMARTS` | Every hit contains the pattern. Repeatable. |
 | `--require-count N[-M] SMARTS` | Every hit contains the pattern N times, N-M times, or at least N times (`2-`). |
 | `--exclude SMARTS` | No hit contains the pattern. Repeatable. |
+| `--max-price USD` | Every hit's estimated price (whole USD, 1 mg, US delivery) is at most USD. Applied by the server during the search; unpriced molecules are dropped. |
+| `--keep-unpriced` | With `--max-price`, also return molecules without a price (`price` empty). |
 | `--explain` | Print the selection document, the server's validation and its execution estimate; runs nothing and costs nothing. |
 
 All filters combine with AND and turn the search into one `molecule-selection/1` request
@@ -79,7 +81,7 @@ Random molecules from a space, useful for baselines and property distributions.
 | --- | --- |
 | `-n, --count N` | Number of molecules (default 100). |
 | `--seed S` | Reproducible sampling. |
-| `--subset NAME`, `--where EXPR`, `--explain` | Property subsets and filters as for `search` (structure subsets are not available for sampling). |
+| `--subset NAME`, `--where EXPR`, `--max-price USD`, `--keep-unpriced`, `--explain` | Property subsets, price and filters as for `search` (structure subsets are not available for sampling). |
 | `-o, --output FILE`, `--format` | As for `search`. |
 
 ### Output

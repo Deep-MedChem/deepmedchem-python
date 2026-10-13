@@ -189,15 +189,23 @@ dmc optimize status [NAME] | results NAME --top 50 -o best.csv | cancel NAME | r
   none. Binding quotes come from the vendor via `dmc order --get-quote`.
 - **Ordering never sends anything.** `dmc order` and `prepare_order` only write `email.txt`
   and a price-free `molecules.csv` per vendor and open a local mail draft.
-- **Filters are server constraints, not post-filters.** `subset`, `where`, `require` and
-  `exclude` turn the search into one selection; the server checks every returned molecule.
+- **Filters are server constraints, not post-filters.** `subset`, `where`, `require`,
+  `exclude` and `max_price` turn the search into one selection; the server checks every
+  returned molecule.
   Never imitate a filter by searching unfiltered and dropping hits yourself: that silently
   loses recall. If you must post-process hits, say it applies only to the returned hits.
   Fewer hits than requested come with a `partial_results` warning; report it rather than
   re-querying. Filtered searches return at most 200 hits; sampling takes property subsets
-  only (`ro5`, `druglike`, `beyond-ro5`, `ro3`, `--where`). There is no price filter.
+  and price only (`ro5`, `druglike`, `beyond-ro5`, `ro3`, `--where`, `--max-price`).
   Use the subset names from `dmc subsets`; matching ignores stereochemistry, so D/L or
   natural/unnatural amino acids cannot be separated.
+- **Price limits.** `max_price=200` / `--max-price 200` keeps molecules whose estimated price
+  (whole USD, 1 mg, US delivery) is at most $200; the server applies it during the search, so
+  never emulate it by dropping expensive hits from an unfiltered search. Unpriced molecules
+  are dropped unless `keep_unpriced=True` / `--keep-unpriced`. A `capability_unavailable`
+  error on `constraints.price` means that database publishes no prices; a
+  `price_unattainable` warning means the limit is below its cheapest price. Prices remain
+  estimates: quote with `dmc order --get-quote` before promising a cost.
 - **Predicted ADMET is not a measurement.** `acquire_predicted_property` only reranks and trims
   a similarity shortlist; its values are `experimental-acquisition-only` predictions. Never
   describe them as measured, safe, or as meeting an ADMET threshold. Only `where` and

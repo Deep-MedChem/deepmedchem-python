@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Price limits.** `search(..., max_price=200)`, `sample(..., max_price=200)` (module, `Client`,
+  `AsyncClient`), `Selection.max_price()` and `dmc search/sample --max-price 200` keep molecules
+  whose estimated price (whole USD, 1 mg, US delivery) is at most the limit. The server applies
+  the limit inside the synthon search and prices every returned molecule again; nothing is
+  filtered on the client. Unpriced molecules are dropped unless `keep_unpriced=True` /
+  `--keep-unpriced`. Needs a platform release whose catalog lists `max_price` under
+  `pricing.constraints`.
+
 ## 0.4.0b1 (2026-10-13)
 
 ### Breaking changes
