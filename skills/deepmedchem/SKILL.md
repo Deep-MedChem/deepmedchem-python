@@ -5,16 +5,20 @@ description: >-
   VAST and others, billions to trillions of molecules) through the DeepMedChem platform with
   the `deepmedchem` Python package and its `dmc` CLI. Use when a task involves finding
   purchasable analogs or similar molecules for a SMILES (ECFP4/Morgan, 3D shape, or
-  electrostatic similarity), exact SMILES/SMARTS substructure search, random sampling of a
+  electrostatic similarity), similarity restricted to a subset (amino acids, carboxylic
+  acids, covalent warheads, Rule-of-5 or drug-like property windows, or any SMARTS the user
+  requires or excludes), exact SMILES/SMARTS substructure search, random sampling of a
   chemical space, exporting hits to CSV/SDF/SMILES, checking CHEESE Credits, building
-  molecule-selection/1 documents or durable runs, or preparing vendor quote and order
-  requests. Also use when the user mentions DeepMedChem, CHEESE, `dmc login`,
+  molecule-selection/1 documents or durable runs, preparing vendor quote and order
+  requests, or optimizing a user's own score (docking such as GNINA or Glide, an ML model, an
+  RDKit property) over a chemical space with Navigator ask/tell (`dmc.optimize`,
+  `dmc optimize run`). Also use when the user mentions DeepMedChem, CHEESE, `dmc login`,
   `import deepmedchem`, or `DEEPMEDCHEM_API_KEY`.
 license: MIT
 compatibility: Requires Python 3.9+, `pip install deepmedchem`, and network access to api.deepmedchem.com with a CHEESE API key.
 metadata:
   author: Deep MedChem
-  version: "1.0"
+  version: "1.2"
   homepage: https://github.com/Deep-MedChem/deepmedchem-python
 ---
 
@@ -49,6 +53,8 @@ dmc status --verify                # confirms the profile and that the API accep
 | Which databases exist, their size, order contact | `dmc databases` (`--json` for ids) | `dmc.catalog()` |
 | Nearest neighbours by 2D fingerprint (default) | `dmc search SMILES -d DB -n N` | `dmc.search(smiles, database=DB, limit=N)` |
 | 3D shape or electrostatic analogs | `dmc search SMILES -d DB -m shape` / `-m esp` | `method="shape"` / `method="esp"` |
+| Analogs inside a subset (amino acids, ro5, ...) | `dmc search SMILES -d DB --subset NAME` or `-d DB:NAME` | `dmc.search(smiles, database=DB, subset=NAME)` |
+| Analogs with property limits or required/excluded SMARTS | `--where "mw<=450" --require SMARTS --exclude SMARTS` | `where=[...]`, `require=[...]`, `exclude=[...]` |
 | Exact substructure, SMARTS query (default) | `dmc substructure QUERY -d DB` | `dmc.substructure(query, database=DB)` |
 | Exact substructure from a concrete SMILES | `dmc substructure SMILES -f smiles -d DB` | `format="smiles"` |
 | Random molecules from a space | `dmc sample -d DB -n N --seed S` | `dmc.sample(database=DB, count=N, seed=S)` |
@@ -56,6 +62,7 @@ dmc status --verify                # confirms the profile and that the API accep
 | Multi-constraint or multi-query work | see references | `Selection`, `Run`, `Client.runs` |
 | Exact RDKit property filters, experimental ADMET acquisition | see references | `Selection.where`, `.require_preset`, `.acquire_predicted_property` |
 | Ask vendors for quotes or orders | `dmc order results.csv --get-quote` | `prepare_order(...)` |
+| Optimize the user's own score (docking, ML model, property) | `dmc optimize run NAME -d DB --minimize --score-cmd 'CMD {input} {output}'` | `dmc.optimize(score, direction=..., database=DB, name=...)` |
 
 Database ids are strings such as `enamine-real-v5a` or `freedom-space-5`. Do not guess them:
 list them with `dmc databases --json` or `dmc.catalog()["libraries"]` and use `database_id`.
@@ -69,6 +76,10 @@ dmc substructure "[N;R0][N;R0]C(=O)" -d enamine-real-v5a -n 50 -o hydrazides.sdf
 dmc substructure "CNC(=O)N1CCC1" -f smiles -d enamine-real-v5a -n 20
 dmc sample -d freedom-space-5 -n 100 --seed 7 -o sample.smi
 dmc search "c1ccncc1" -d enamine-real-v5a --json > raw.json              # full API payload
+dmc search "N[C@@H](Cc1ccccc1)C(=O)O" -d synple --subset amino-acids -n 20  # virtual subset
+dmc search "CC(=O)Oc1ccccc1C(=O)O" -d enamine:ro5 --where "tpsa<=90" --exclude "[N+](=O)[O-]"
+dmc search "CC(=O)Oc1ccccc1C(=O)O" -d synple:amino-acids --explain       # document only, no credit
+dmc subsets                                                               # names and definitions
 dmc order hits.csv --get-quote --no-open                                  # email.txt + molecules.csv per vendor
 ```
 
@@ -90,7 +101,10 @@ hits.to_csv("hits.csv")                    # or .to_sdf(), .to_file(path), .to_p
 
 subs = dmc.substructure("[N;R0]C(=O)[N;R0]", database="enamine-real-v5a", limit=100, timeout_seconds=60)
 rand = dmc.sample(database="freedom-space-5", count=50, seed=1)
-print(dmc.usage())                         # plan, limit, used, remaining, reset_at
+aa = dmc.search("N[C@@H](Cc1ccccc1)C(=O)O", database="synple", subset="amino-acids", limit=20)
+ro5 = dmc.search(query, database="enamine", subset="ro5", where=["mw<=450"], require=["c1ccncc1"])
+lead = dmc.sample(database="enamine", subset="druglike", count=100)    # property subsets only
+print(dmc.usage())                         # plan, limit, used, remaining, reset_at (free)
 ```
 
 Module-level functions open and close a client per call. For many calls, reuse one client:
@@ -105,10 +119,63 @@ with Client() as client:                   # api_key=..., profile=..., timeout=4
 
 `deepmedchem.aio` and `AsyncClient` provide the same operations with `await`.
 
+## Optimization with the user's own scorer (Navigator ask/tell)
+
+Navigator proposes a batch of molecules; the user's scorer scores it locally; the scores go back
+and steer the next batch until `budget` molecules are scored. The SDK contains no scorer: write
+the scoring function (or shell command) yourself.
+
+```python
+import deepmedchem as dmc
+
+def score(smiles: list[str]) -> list:          # one value per SMILES, in order
+    ...                                         # number = valid; None/NaN = failed;
+                                                # {"score": x, **metrics} = valid + stored metrics
+result = dmc.optimize(score, direction="minimize", database="enamine",
+                      budget=1000, batch_size=100, name="kif11-gnina",
+                      scorer={"name": "gnina", "version": "1.3.2", "target": "kif11"})
+result.top(10); result.best; result.to_csv("results.csv")    # Observation: id, smiles, score, status, round, metrics
+```
+
+Manual control and the CLI:
+
+```python
+with dmc.Client() as client:
+    opt = client.optimizations.create(database="enamine", direction="maximize",
+                                      budget=500, batch_size=50, name="my-model")
+    while (batch := opt.ask()) is not None:    # long-polls; None when finished
+        opt.tell(batch, my_model(batch.smiles))   # list aligned with batch.smiles, or {id: score}
+    opt.results().top(20)
+```
+
+```bash
+dmc optimize run NAME -d enamine --minimize --budget 2000 --batch-size 200 \
+    --score-cmd './dock.sh {input} {output}'   # {input}: id,smiles CSV -> {output}: id,score[,status,error,metric...]
+dmc optimize ask NAME -o batch.csv             # HPC: exit 0 written, 3 not ready, 4 finished
+dmc optimize tell NAME scores.csv
+dmc optimize status [NAME] | results NAME --top 50 -o best.csv | cancel NAME | resume NAME
+```
+
+- **`direction` is required** (`"minimize"` for docking scores, usually `"maximize"` for model
+  predictions). Scores are never negated; do not negate them yourself.
+- **`name` is the resume key.** Re-running the same `dmc.optimize(...)` or `dmc optimize run`
+  continues the optimization; scores computed but not uploaded are re-sent from a local journal.
+  The same name with a different specification is a 409 `idempotency_conflict`.
+- **Report failures, never drop them.** Every proposed id needs exactly one row; the SDK fills
+  ids a scorer did not return as `failed`. If the scorer raises, nothing is submitted.
+- One scalar is optimized. Put other numbers in metrics; combine objectives in the scorer.
+- `filters="druglike"` and `properties={"MolWt": (None, 500)}` restrict the space;
+  `strategy` picks a Navigator preset (`gamma_diversity_screening` default). Allowed databases,
+  strategies, properties and limits are in `dmc.catalog()["optimization"]`.
+- `scorer={...}` is pinned at creation; a later submission with a different scorer is refused
+  (`scorer_changed`). `paused` (`optimization_paused`, usually `insufficient_credits`) needs
+  `opt.resume()` / `dmc optimize resume NAME`.
+- Long docking loops belong in `dmc optimize run` or a script, not in an interactive agent turn.
+
 ## Rules that keep results correct and cheap
 
 - **One credit per call.** Every successful synchronous search, substructure, or sample costs
-  one CHEESE Credit from a shared daily balance. Check `dmc usage` before loops and batch work
+  one CHEESE Credit from a shared daily balance. Check `dmc usage` (free) before loops and batch work
   into durable runs instead of thousands of single calls.
 - **10 second synchronous budget.** Slow SMARTS (recursive, many wildcards) can time out; raise
   `timeout_seconds` on substructure, simplify the pattern, or move to a run.
@@ -122,13 +189,28 @@ with Client() as client:                   # api_key=..., profile=..., timeout=4
   none. Binding quotes come from the vendor via `dmc order --get-quote`.
 - **Ordering never sends anything.** `dmc order` and `prepare_order` only write `email.txt`
   and a price-free `molecules.csv` per vendor and open a local mail draft.
+- **Filters are server constraints, not post-filters.** `subset`, `where`, `require` and
+  `exclude` turn the search into one selection; the server checks every returned molecule.
+  Never imitate a filter by searching unfiltered and dropping hits yourself: that silently
+  loses recall. If you must post-process hits, say it applies only to the returned hits.
+  Fewer hits than requested come with a `partial_results` warning; report it rather than
+  re-querying. Filtered searches return at most 200 hits; sampling takes property subsets
+  only (`ro5`, `druglike`, `beyond-ro5`, `ro3`, `--where`). There is no price filter.
+  Use the subset names from `dmc subsets`; matching ignores stereochemistry, so D/L or
+  natural/unnatural amino acids cannot be separated.
 - **Predicted ADMET is not a measurement.** `acquire_predicted_property` only reranks and trims
   a similarity shortlist; its values are `experimental-acquisition-only` predictions. Never
   describe them as measured, safe, or as meeting an ADMET threshold. Only `where` and
   `require_preset` enforce a literal threshold, and only on exact assembled-product RDKit values.
 - **Do not invent endpoints** such as batch search URLs or pricing APIs. The public v2
   operations are `search`, `search_cheese`, `search_substructure`, `sample`, `catalog`,
-  `selections`, and `runs`, all reached through this package.
+  `selections`, `runs`, and `optimizations`, all reached through this package. The
+  optimization endpoints are exactly: `POST /api/v2/optimizations`, `GET /api/v2/optimizations`,
+  `GET /api/v2/optimizations/{id}`, `GET /api/v2/optimizations/{id}/batch?wait=0..25`,
+  `GET /api/v2/optimizations/{id}/batches/{batch_id}`,
+  `POST /api/v2/optimizations/{id}/batches/{batch_id}:submit`,
+  `GET /api/v2/optimizations/{id}/results`, `POST /api/v2/optimizations/{id}:cancel` and
+  `POST /api/v2/optimizations/{id}:resume`.
 - **Retries.** `DeepMedChemError` exposes `code`, `status_code`, `request_id`, and
   `retryable`. HTTP 429/503/504 are retried automatically twice; report `request_id` when
   escalating an error.
@@ -139,10 +221,14 @@ with Client() as client:                   # api_key=..., profile=..., timeout=4
 | --- | --- |
 | `missing_api_key` | `dmc login`, or export `DEEPMEDCHEM_API_KEY`; check `dmc status`. |
 | HTTP 401 / 403 | Key revoked or wrong profile; `dmc login --profile default` again. |
-| HTTP 429 or `remaining: 0` | Daily credits exhausted; `dmc usage` shows the reset time. |
+| HTTP 429 / `credit_limit_exceeded` | Daily credits exhausted; `dmc usage` shows the reset time. |
 | Substructure timeout | Increase `--timeout-seconds`, simplify the SMARTS, or lower `-n`. |
-| Unknown database | Copy the exact `database_id` from `dmc databases --json`. |
+| Unknown database | Copy the exact `database_id` from `dmc databases --json`. Enumerated and in-stock catalogues (Mcule, Molport, ZINC15, ENAMINE-REAL, ...) are not reachable from the SDK; do not retry them. |
 | SDF export fails | `pip install "deepmedchem[sdf]"` (needs RDKit). |
+| `optimization_not_enabled` (403) | Optimization is in an allowlisted beta; ask DeepMedChem for access. |
+| `idempotency_conflict` on create | The name is taken by a different specification; choose a new `name`. |
+| `optimization_paused` | Top up credits, then `dmc optimize resume NAME` and run again. |
+| `invalid_scores` (422) | One row per proposed id; `error.details` lists missing/unknown/duplicate/invalid ids. |
 | No keyring on a server | `DEEPMEDCHEM_CREDENTIAL_STORE=file` or use the env var. |
 
 ## Links

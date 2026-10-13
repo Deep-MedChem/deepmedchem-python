@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator, Mapping, Sequence
+from pathlib import Path
 from typing import Any, overload
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class APIModel(BaseModel):
@@ -198,6 +199,37 @@ class SearchResult(APIModel, Sequence[str]):
 
         return write_result(self, path, format=format)
 
+    def to_html(
+        self,
+        path: str | os.PathLike[str] | None = None,
+        *,
+        limit: int = 100,
+        show: bool | None = None,
+    ) -> Path:
+        """Save the hits as a standalone HTML table with 2D structures (requires RDKit).
+
+        Without ``path`` the file is saved in the current directory as
+        ``deepmedchem-<database>-<method>-<UTC timestamp>.html``. Only the first
+        ``limit`` molecules are drawn; the page says when more were returned. In a
+        Jupyter notebook the table is also shown in the cell unless ``show=False``.
+        Returns the path of the saved file.
+        """
+
+        from .html_export import (
+            default_html_path,
+            html_document,
+            in_notebook,
+            render_html_fragment,
+            show_in_notebook,
+        )
+
+        fragment, _ = render_html_fragment(self, limit=limit)
+        target = Path(path) if path is not None else default_html_path(self)
+        target.write_text(html_document(self, fragment), encoding="utf-8")
+        if show if show is not None else in_notebook():
+            show_in_notebook(fragment)
+        return target
+
     def to_pandas(self):
         try:
             import pandas as pd
@@ -225,23 +257,12 @@ class SampleResult(SearchResult):
         return "sample"
 
 
-class UsagePromotion(APIModel):
-    """A temporary multiplier applied to the daily credit allowance."""
-
-    id: str | None = None
-    label: str | None = None
-    multiplier: float | None = None
-    base_limit: int | None = Field(default=None, alias="baseLimit")
-    starts_at: str | None = Field(default=None, alias="startsAt")
-    ends_at: str | None = Field(default=None, alias="endsAt")
-
-    model_config = ConfigDict(extra="allow", populate_by_name=True)
-
-
 class Usage(APIModel):
-    """Daily CHEESE Credit usage for the account that owns the API key."""
+    """Today's CHEESE Credit balance for the account that owns the API key.
 
-    model_config = ConfigDict(extra="allow", populate_by_name=True)
+    The balance is shared by every key and client of the account (CHEESE web,
+    classic API and the platform API) and resets at midnight UTC.
+    """
 
     plan: str | None = None
     limit: int | None = None
@@ -249,14 +270,14 @@ class Usage(APIModel):
     remaining: int | None = None
     unlimited: bool = False
     window: str | None = "day"
-    reset_at: str | None = Field(default=None, alias="resetAt")
-    seconds_to_reset: int | None = Field(default=None, alias="secondsToReset")
-    promo: UsagePromotion | None = None
-    user_id: str | None = Field(default=None, alias="userId")
+    usage_day: str | None = None
+    reset_at: str | None = None
+    seconds_to_reset: int | None = None
+    user_id: str | None = None
 
     @property
     def tier(self) -> str | None:
-        """Alias for ``plan``: free, registered, private, premium, ..."""
+        """Alias for ``plan``: registered, private, premium, ..."""
 
         return self.plan
 
@@ -281,6 +302,13 @@ class SelectionEstimate(APIModel):
     reusable_run_request: dict[str, Any] | None = None
 
 
+_SELECTION_METHODS = {
+    "rdkit.ecfp4_tanimoto": "morgan",
+    "cheese.shape": "shape",
+    "cheese.electrostatic": "esp",
+}
+
+
 class SelectionResult(SearchResult):
     id: str
     object: str
@@ -288,6 +316,32 @@ class SelectionResult(SearchResult):
     selection_hash: str
     normalized_selection: dict[str, Any]
     acquisition: PredictedPropertyAcquisitionResult | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _fill_search_fields(cls, value: Any) -> Any:
+        """Selections name the database and metric in the document and the hits."""
+
+        if not isinstance(value, dict):
+            return value
+        value = dict(value)
+        if not value.get("database_id"):
+            database = (value.get("normalized_selection") or {}).get("database") or {}
+            value["database_id"] = database.get("database_id")
+        if not value.get("metric"):
+            metrics = {row.get("metric") for row in value.get("results") or [] if row.get("metric")}
+            if len(metrics) == 1:
+                value["metric"] = metrics.pop()
+        return value
+
+    @property
+    def method(self) -> str | None:
+        strategy = (self.normalized_selection.get("strategy") or {}).get("type")
+        if strategy == "sample":
+            return "sample"
+        objectives = self.normalized_selection.get("objectives") or []
+        metric = objectives[0].get("metric_id") if objectives else None
+        return _SELECTION_METHODS.get(metric, self.scorer)
 
 
 class RunProgress(APIModel):
@@ -343,3 +397,242 @@ class RunEvent(APIModel):
 class Page(APIModel):
     data: list[dict[str, Any]] = Field(default_factory=list)
     next_cursor: str | None = None
+
+
+# --- Optimizations (ask/tell) ---------------------------------------------------
+
+OPTIMIZATION_TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
+
+
+class Molecule(APIModel):
+    """One proposed molecule: the id to report its score under, and its SMILES."""
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    id: str
+    smiles: str
+
+
+class Batch(APIModel, Sequence[Molecule]):
+    """The molecules Navigator wants scored next, in the order to score them."""
+
+    id: str
+    round: int = 0
+    molecules: list[Molecule] = Field(default_factory=list)
+
+    @property
+    def smiles(self) -> list[str]:
+        return [molecule.smiles for molecule in self.molecules]
+
+    @property
+    def ids(self) -> list[str]:
+        return [molecule.id for molecule in self.molecules]
+
+    def __len__(self) -> int:
+        return len(self.molecules)
+
+    def __iter__(self) -> Iterator[Molecule]:  # type: ignore[override]
+        return iter(self.molecules)
+
+    @overload
+    def __getitem__(self, index: int) -> Molecule: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> list[Molecule]: ...
+
+    def __getitem__(self, index: int | slice) -> Molecule | list[Molecule]:
+        return self.molecules[index]
+
+    def __repr__(self) -> str:
+        return f"Batch(id={self.id!r}, round={self.round}, {len(self)} molecules)"
+
+    __str__ = __repr__
+
+    def to_records(self) -> list[dict[str, Any]]:
+        return [{"id": molecule.id, "smiles": molecule.smiles} for molecule in self.molecules]
+
+    def to_csv(self, path: str | os.PathLike[str]) -> int:
+        """Write ``id,smiles`` rows to ``path`` and return the number of molecules written."""
+
+        import csv
+
+        with open(path, "w", newline="", encoding="utf-8") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(["id", "smiles"])
+            for molecule in self.molecules:
+                writer.writerow([molecule.id, molecule.smiles])
+        return len(self.molecules)
+
+
+class Observation(APIModel):
+    """One scored molecule: its score, status, the round it was proposed in, and metrics."""
+
+    id: str
+    smiles: str | None = None
+    score: float | None = None
+    status: str = "valid"
+    round: int | None = None
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    error: str | None = None
+
+    @field_validator("metrics", mode="before")
+    @classmethod
+    def _null_metrics(cls, value: Any) -> Any:
+        return {} if value is None else value
+
+    @property
+    def valid(self) -> bool:
+        return self.status == "valid" and self.score is not None
+
+    def __repr__(self) -> str:
+        score = "None" if self.score is None else f"{self.score:.4g}"
+        return (
+            f"Observation(score={score}, status={self.status!r}, round={self.round}, "
+            f"smiles={self.smiles!r}, id={self.id!r})"
+        )
+
+    __str__ = __repr__
+
+
+class OptimizationProgress(APIModel):
+    budget: int = 0
+    proposed: int = 0
+    scored: int = 0
+    valid: int = 0
+    failed: int = 0
+
+
+class OptimizationResource(APIModel):
+    """The server-side state of one optimization (``/api/v2/optimizations/{id}``)."""
+
+    id: str
+    object: str = "optimization"
+    name: str | None = None
+    status: str
+    status_reason: str | None = None
+    specification: dict[str, Any] = Field(default_factory=dict)
+    specification_hash: str | None = None
+    round: int = 0
+    pending_batch_id: str | None = None
+    progress: OptimizationProgress = Field(default_factory=OptimizationProgress)
+    best: Observation | None = None
+    engine: dict[str, Any] = Field(default_factory=dict)
+    created_at: str | None = None
+    updated_at: str | None = None
+    links: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("specification", "progress", "engine", "links", mode="before")
+    @classmethod
+    def _null_as_empty(cls, value: Any) -> Any:
+        # The server sends null for parts that do not exist yet (no engine before the
+        # first proposal); an empty value keeps attribute access uniform for callers.
+        return {} if value is None else value
+
+    @property
+    def terminal(self) -> bool:
+        return self.status in OPTIMIZATION_TERMINAL_STATUSES
+
+    @property
+    def direction(self) -> str | None:
+        objective = self.specification.get("objective") or {}
+        direction = objective.get("direction") if isinstance(objective, dict) else None
+        return str(direction) if direction else None
+
+
+class SubmitReceipt(APIModel):
+    """The answer to a score submission. ``duplicate`` means it was already accepted."""
+
+    accepted: bool
+    duplicate: bool = False
+    batch_id: str | None = None
+    counts: dict[str, int] = Field(default_factory=dict)
+    optimization: OptimizationResource | None = None
+
+    @field_validator("counts", mode="before")
+    @classmethod
+    def _null_counts(cls, value: Any) -> Any:
+        return {} if value is None else value
+
+
+class OptimizationResult(APIModel, Sequence[Observation]):
+    """Every observation of an optimization, with helpers for the best molecules."""
+
+    observations: list[Observation] = Field(default_factory=list)
+    optimization: OptimizationResource | None = None
+
+    @property
+    def direction(self) -> str | None:
+        return self.optimization.direction if self.optimization is not None else None
+
+    def top(self, n: int = 10) -> list[Observation]:
+        """The ``n`` best valid observations, best first, according to the direction."""
+
+        valid = [observation for observation in self.observations if observation.valid]
+        if self.direction in {"minimize", "maximize"}:
+            valid.sort(key=lambda row: row.score, reverse=self.direction == "maximize")
+        return valid[: max(int(n), 0)]
+
+    @property
+    def best(self) -> Observation | None:
+        top = self.top(1)
+        return top[0] if top else None
+
+    def __len__(self) -> int:
+        return len(self.observations)
+
+    def __iter__(self) -> Iterator[Observation]:  # type: ignore[override]
+        return iter(self.observations)
+
+    @overload
+    def __getitem__(self, index: int) -> Observation: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> list[Observation]: ...
+
+    def __getitem__(self, index: int | slice) -> Observation | list[Observation]:
+        return self.observations[index]
+
+    def __repr__(self) -> str:
+        best = self.best
+        summary = f", best={best.score:.4g}" if best is not None and best.score is not None else ""
+        name = self.optimization.id if self.optimization is not None else None
+        return f"OptimizationResult({len(self)} observations{summary}, optimization={name!r})"
+
+    __str__ = __repr__
+
+    def to_records(self) -> list[dict[str, Any]]:
+        """Flat rows: ``id, smiles, score, status, round, error`` followed by the metrics."""
+
+        base = ("id", "smiles", "score", "status", "round", "error")
+        records = []
+        for observation in self.observations:
+            record: dict[str, Any] = {key: getattr(observation, key) for key in base}
+            for key, value in observation.metrics.items():
+                record[f"metric_{key}" if key in record else key] = value
+            records.append(record)
+        return records
+
+    def to_csv(self, path: str | os.PathLike[str]) -> int:
+        """Write every observation to a CSV file and return the number of rows written."""
+
+        import csv
+
+        records = self.to_records()
+        columns: list[str] = ["id", "smiles", "score", "status", "round", "error"]
+        for record in records:
+            columns.extend(key for key in record if key not in columns)
+        with open(path, "w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(records)
+        return len(records)
+
+    def to_pandas(self):
+        try:
+            import pandas as pd
+        except ImportError as error:
+            raise ImportError(
+                "OptimizationResult.to_pandas() requires pandas. Install it with "
+                "`python -m pip install pandas`."
+            ) from error
+        return pd.DataFrame.from_records(self.to_records())

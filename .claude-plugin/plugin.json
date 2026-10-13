@@ -1,7 +1,7 @@
 {
   "name": "deepmedchem",
   "displayName": "DeepMedChem",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Search make-on-demand chemical spaces (Enamine REAL, Freedom Space, ChemInfinita and more) with the deepmedchem Python package and dmc CLI: similarity, substructure, sampling, exports, credits, selections, runs, and vendor quotes.",
   "author": {
     "name": "Deep MedChem",

@@ -11,19 +11,22 @@ default 45.0) as keyword arguments.
 ```python
 import deepmedchem as dmc
 
-dmc.search(smiles, *, database, method="morgan", limit=20, shortlist_multiplier=10,
-           include_synthons=False) -> SearchResult
+dmc.search(smiles, *, database, method="morgan", limit=20, include_synthons=False,
+           subset=None, where=None, require=None, exclude=None) -> SearchResult
 dmc.substructure(query, *, database, format="smarts", limit=100, timeout_seconds=30,
                  include_synthons=False) -> SubstructureResult
-dmc.sample(*, database, count=100, seed=None, include_synthons=False) -> SampleResult
+dmc.sample(*, database, count=100, seed=None, include_synthons=False,
+           subset=None, where=None) -> SampleResult
 dmc.catalog() -> dict            # {"libraries": [{"database_id", "name", "product_count", "pricing", ...}], ...}
 dmc.usage() -> Usage
 ```
 
 - `method` must be `"morgan"`, `"shape"`, or `"esp"`; non-Morgan methods call the CHEESE
   3D endpoint.
-- `shortlist_multiplier` widens the server-side candidate pool before re-ranking; leave the
-  default unless recall is a problem.
+- `subset` (registry name or list, see `deepmedchem.SUBSETS`), `where` (`"mw<=450"` or a
+  list), `require` and `exclude` (SMARTS) restrict the search; the result is then a
+  `SelectionResult` whose hits all satisfy the filters, at most 200 per call. `sample`
+  accepts property subsets and `where` only.
 - `include_synthons=True` adds building-block information to each hit when the database
   supports it.
 
@@ -34,7 +37,7 @@ from deepmedchem import Client, AsyncClient
 
 Client(api_key=None, *, api_url=None, profile=None, timeout=45.0, transport=None,
        credential_provider=None, application="deepmedchem-python", application_version=None,
-       max_retries=2, retry_backoff=0.25, account_url=None)
+       max_retries=2, retry_backoff=0.25)
 ```
 
 Methods on `Client` (all mirrored as coroutines on `AsyncClient`):
@@ -42,11 +45,11 @@ Methods on `Client` (all mirrored as coroutines on `AsyncClient`):
 | Method | Notes |
 | --- | --- |
 | `catalog()` | Public catalog document. |
-| `usage()` | `Usage` from the account service. |
-| `search(smiles, *, database, method="morgan", limit=20, shortlist_multiplier=10, include_synthons=False)` | Dispatches to `search_cheese` for `shape`/`esp`. |
-| `search_cheese(smiles, *, database, scorer, limit=20, shortlist_multiplier=10, include_synthons=False)` | `scorer` is `"shape"` or `"esp"`. |
+| `usage()` | `Usage` from `GET /api/v2/usage`; free. |
+| `search(smiles, *, database, method="morgan", limit=20, include_synthons=False, subset=None, where=None, require=None, exclude=None)` | Dispatches to `search_cheese` for `shape`/`esp`; any filter sends one selection instead. |
+| `search_cheese(smiles, *, database, scorer, limit=20, include_synthons=False)` | `scorer` is `"shape"` or `"esp"`. |
 | `search_substructure(query, *, query_format="smarts", database, limit=100, timeout_seconds=30, include_synthons=False)` | Exact matches. |
-| `sample(*, database, count=100, seed=None, include_synthons=False)` | Random molecules. |
+| `sample(*, database, count=100, seed=None, include_synthons=False, subset=None, where=None)` | Random molecules, optionally from a property subset. |
 | `selections.validate(sel)`, `selections.estimate(sel)`, `selections.create(sel)` | Selection documents, see below. |
 | `runs.estimate(run)`, `runs.create(run, *, idempotency_key)`, `runs.retrieve(id)`, `runs.events(id, after=0)`, `runs.watch(id, after=0, poll_interval=0.5)`, `runs.wait(id, timeout=None, poll_interval=0.5)`, `runs.iter_results(id, order="completion")`, `runs.cancel(id)` | Durable runs. |
 | `close()` | Also via `with Client() as c:`. |
@@ -78,8 +81,9 @@ result.to_pandas()   # DataFrame, requires pandas
 `Hit.price` is an `int | None` estimate in whole US dollars. `SampleResult` adds
 `sampling_method`, `sampling_version`, `seed`.
 
-`Usage` fields: `plan`, `limit`, `used`, `remaining`, `unlimited`, `window`, `reset_at`,
-`seconds_to_reset`, `promo` (`label`, `multiplier`, `base_limit`, `ends_at`), `user_id`.
+`Usage` fields: `plan` (alias `tier`), `limit`, `used`, `remaining`, `unlimited`, `window`,
+`usage_day`, `reset_at`, `seconds_to_reset`, `user_id`. `limit`/`remaining` are `None` for
+unmetered service keys.
 
 ## Export helpers
 
@@ -123,7 +127,16 @@ with Client() as client:
         result = client.selections.create(sel)         # SelectionResult, a SearchResult with id/status
 ```
 
-`where` takes exactly one of `gt`, `gte`, `lt`, `lte`, or `range=(lo, hi)`. Property ids,
+`where` takes exactly one of `gt`, `gte`, `lt`, `lte`, or `range=(lo, hi)`; short names
+(`where("mw", lte=450)`) and text (`where("tpsa=40..90")`) fill in the server property ID and
+units. `subset("amino-acids")` adds a registry subset (`deepmedchem.SUBSETS`);
+`require_structure(smarts, min_count=1, max_count=None)`, `exclude_structure(smarts)` and
+`require_any_structure([...], minimum=1)` add SMARTS constraints with inline queries.
+
+`search(..., subset=, where=, require=, exclude=)` and `sample(..., subset=, where=)` on the
+module, `Client` and `AsyncClient` build such a selection for you and return a
+`SelectionResult`. `database="synple:amino-acids"` is the same as `subset="amino-acids"`.
+`require` items are SMARTS strings, `(smarts, min, max)` tuples or `deepmedchem.Pattern`. Property ids,
 presets, pattern ids, and metrics are validated server-side; the catalog lists what a release
 supports. When `estimate.execution_tier` is not synchronous, submit the selection as a run.
 
@@ -200,6 +213,66 @@ with Client() as client:
 `succeeded`, `failed`, `cancelled`), `last_event_sequence`, `terminal`. `client.runs.cancel(id)`
 stops a run.
 
+## Optimizations (Navigator ask/tell)
+
+```python
+import deepmedchem as dmc
+
+dmc.optimize(score, *, direction, database="enamine", budget=1000, batch_size=100, name=None,
+             strategy=None, filters=None, properties=None, seed=None, scorer=None,
+             metadata=None, progress=True, client=None) -> OptimizationResult
+dmc.normalize_scores(batch, scores) -> list[dict]     # the submission rows tell()/optimize() send
+```
+
+- `score(list[str]) -> sequence` of the same length; each value is a number (valid), `None`/NaN
+  (failed), or `{"score": x, "status"?, "error"?, **metrics}`. NumPy scalars work; bool and
+  strings are rejected. A mapping `{id: value}` is also accepted by `tell`/`normalize_scores`;
+  missing ids become `failed` with `error="not returned by scorer"`.
+- `direction`: `"minimize"` or `"maximize"`, required. `filters`: `None` or `"druglike"`.
+  `properties`: `{"MolWt": (None, 500)}` or `{"MolWt": {"min": 200, "max": 500}}`.
+  `database` accepts aliases (`enamine`, `freedom`, `cheminfinita`).
+- `name` is the idempotency/resume key; without it the SDK sends a random `Idempotency-Key` and
+  prints the id. Progress goes to stderr. Unsubmitted scores are journaled under
+  `platformdirs.user_cache_dir("deepmedchem")/optimizations/<id>/<batch>.json`
+  (`DEEPMEDCHEM_CACHE_DIR` overrides).
+- On create, a `completed` optimization returns its results; `cancelled`/`failed` raises
+  `DeepMedChemError(code="optimization_not_active")`.
+
+`client.optimizations` (`AsyncClient.optimizations` has the same methods as coroutines):
+
+| Method | Request |
+| --- | --- |
+| `create(*, database, direction, budget, batch_size, name=None, strategy=None, filters=None, properties=None, seed=None, scorer=None, metadata=None, objective_name=None, units=None, idempotency_key=None) -> Optimization` | `POST /api/v2/optimizations` |
+| `get(id_or_name) -> Optimization` | `opt_…` → `GET …/{id}`, else `GET …?name=` |
+| `list(*, status=None, name=None, limit=None) -> list[OptimizationResource]` | `GET /api/v2/optimizations` (follows cursors) |
+| `retrieve(id) -> OptimizationResource` | `GET …/{id}` |
+| `next_batch(id, *, wait=0) -> (OptimizationResource, Batch \| None)` | one `GET …/{id}/batch?wait=` (0–25 s) |
+| `batch(id, batch_id) -> Batch` | `GET …/{id}/batches/{batch_id}`: any issued batch, also after submission |
+| `submit(id, batch_id, rows, *, scorer=None) -> SubmitReceipt` | `POST …/{id}/batches/{batch_id}:submit` (rows already normalized) |
+| `results_page(id, *, order="best", limit=100, cursor=None) -> (list[Observation], next_cursor)` | `GET …/{id}/results` |
+| `cancel(id)`, `resume(id) -> OptimizationResource` | `POST …/{id}:cancel`, `POST …/{id}:resume` |
+
+`Optimization` / `AsyncOptimization` handles: `id`, `name`, `status`, `resource`, `refresh()`,
+`ask(*, timeout=None) -> Batch | None` (long-polls, honours `Retry-After`, `None` when finished,
+raises `optimization_paused` or `client_timeout`), `tell(batch_or_id, scores, *, scorer=None) ->
+SubmitReceipt`, `results(*, order="best", limit=None) -> OptimizationResult`, `cancel()`,
+`resume()`.
+
+Models: `Batch` (`id`, `round`, `molecules`, `.smiles`, `.ids`, `len`, iteration,
+`to_records()`, `to_csv(path)`), `Molecule` (`id`, `smiles`), `Observation` (`id`, `smiles`,
+`score`, `status`, `round`, `metrics`, `error`), `OptimizationResult` (a sequence of
+observations; `top(n=10)` valid only, best first; `best`; `optimization`; `to_records()`,
+`to_csv()`, `to_pandas()`), `OptimizationResource` (`status`, `status_reason`, `round`,
+`pending_batch_id`, `progress`, `best`, `specification`, `terminal`, `direction`),
+`SubmitReceipt` (`accepted`, `duplicate`, `batch_id`, `counts`, `optimization`).
+
+Statuses: `initializing`, `proposing`, `awaiting_scores` (a batch is pending), `ingesting`,
+`paused`, and terminal `completed` (`budget_exhausted`, `space_exhausted`, ...), `failed`,
+`cancelled`. Error codes include `idempotency_conflict`, `capability_unavailable`,
+`optimization_not_enabled`, `tenant_optimization_quota_exceeded`, `credit_limit_exceeded`,
+`invalid_scores`, `submission_conflict`, `batch_not_pending`, `optimization_not_active`,
+`scorer_changed`, `optimization_not_paused`.
+
 ## Ordering helpers
 
 ```python
@@ -218,12 +291,12 @@ argument. Only database id, a `-DMCH` reference id, and SMILES reach the vendor 
 
 ## Errors and configuration
 
-- `DeepMedChemError(message, code, status_code, request_id, retryable)` is raised for API and
-  credential failures; `DMCError` is an alias. `CredentialError` covers keyring problems.
+- `DeepMedChemError(message, code, status_code, request_id, retryable, field, details)` is
+  raised for API and credential failures; `DMCError` is an alias. `CredentialError` covers keyring problems.
 - Credentials resolve from the `api_key` argument, `DEEPMEDCHEM_API_KEY`, a custom
   `CredentialProvider`, the profile's OS-keyring entry, then `credentials.json`.
 - Config lives in `config.toml` under the platform user config directory
-  (`~/.config/deepmedchem/` on Linux). Profiles hold `api_url`, `web_url`, `account_url`;
-  `DEEPMEDCHEM_API_URL`, `DEEPMEDCHEM_ACCOUNT_URL`, and `DEEPMEDCHEM_PROFILE` override them.
+  (`~/.config/deepmedchem/` on Linux). Profiles hold `api_url` and `web_url`;
+  `DEEPMEDCHEM_API_URL`, `DEEPMEDCHEM_WEB_URL`, and `DEEPMEDCHEM_PROFILE` override them.
 - Every request sends `X-DMC-Client`, `X-DMC-Client-Version`, and `X-DMC-SDK-Version`; set
   `application` and `application_version` on the client when embedding the SDK in a product.

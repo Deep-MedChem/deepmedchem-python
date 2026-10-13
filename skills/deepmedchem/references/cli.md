@@ -21,7 +21,7 @@ Global behaviour:
 | `dmc login [--profile P] [--no-browser] [--token-stdin] [--timeout S]` | Device login. Prints an approval code and URL, opens a browser when a display exists, waits for approval, stores the key. `--token-stdin` reads an existing key from stdin instead. |
 | `dmc status [--verify] [--json]` | Shows the active profile, API URL, and credential store. `--verify` makes one request to confirm the key is accepted. |
 | `dmc logout [--profile P]` | Removes the locally stored key for the profile. |
-| `dmc usage [--json]` | Plan, daily CHEESE Credit limit, used, remaining, reset time, and any active promotion. |
+| `dmc usage [--json]` | Plan, daily CHEESE Credit limit, used, remaining and reset time. Free. |
 
 ## Discovery
 
@@ -39,11 +39,26 @@ Ranked similarity search for one query molecule.
 
 | Flag | Meaning |
 | --- | --- |
-| `-d, --database ID` | Required database id. |
+| `-d, --database ID` | Required database id. `ID:SUBSET[,SUBSET]` also applies named subsets. |
 | `-m, --method {morgan,shape,esp}` | `morgan` (default) is ECFP4 Tanimoto; `shape` and `esp` are CHEESE 3D shape and electrostatic similarity. |
-| `-n, --limit N` | Number of hits (default 20). |
+| `-n, --limit N` | Number of hits (default 20; at most 200 with filters). |
 | `-o, --output FILE` | Save hits; format inferred from `.csv`, `.sdf`, `.smi`, `.json`. |
 | `--format {csv,sdf,smi,json}` | Output format when it cannot be inferred. |
+| `--subset NAME` | Named virtual subset from `dmc subsets` (`amino-acids`, `ro5`, `druglike`, ...). Repeatable. |
+| `--where EXPR` | Exact RDKit property filter on `mw`, `logp`, `hbd`, `hba`, `rotb`, `tpsa`, `fsp3`, `arom`: `mw<=450`, `logp<4`, `tpsa=40..90`, `1<=hbd<=3`. Repeatable. |
+| `--require SMARTS` | Every hit contains the pattern. Repeatable. |
+| `--require-count N[-M] SMARTS` | Every hit contains the pattern N times, N-M times, or at least N times (`2-`). |
+| `--exclude SMARTS` | No hit contains the pattern. Repeatable. |
+| `--explain` | Print the selection document, the server's validation and its execution estimate; runs nothing and costs nothing. |
+
+All filters combine with AND and turn the search into one `molecule-selection/1` request
+(`POST /api/v2/selections`); the server checks every hit against every filter. A shorter
+result than `-n` comes with a printed `partial_results` note. Filters do not combine with
+`--input` batch search yet.
+
+### `dmc subsets [--json]`
+
+Lists the named virtual subsets. `--json` prints each SMARTS and property condition.
 
 ### `dmc substructure QUERY -d DATABASE [options]`
 
@@ -64,6 +79,7 @@ Random molecules from a space, useful for baselines and property distributions.
 | --- | --- |
 | `-n, --count N` | Number of molecules (default 100). |
 | `--seed S` | Reproducible sampling. |
+| `--subset NAME`, `--where EXPR`, `--explain` | Property subsets and filters as for `search` (structure subsets are not available for sampling). |
 | `-o, --output FILE`, `--format` | As for `search`. |
 
 ### Output
@@ -96,6 +112,23 @@ an order.
 For each vendor the command writes `email.txt` (the draft) and `molecules.csv` containing only
 database id, a `-DMCH` reference id, and SMILES. Scores, properties, and SDK price estimates are
 deliberately left out. DeepMedChem is CCed so the vendor can attribute the request.
+
+## Optimization (Navigator ask/tell)
+
+| Command | Purpose |
+| --- | --- |
+| `dmc optimize run NAME -d DB (--minimize\|--maximize) [--budget N] [--batch-size N] --score-cmd 'CMD {input} {output}' [--strategy S] [--druglike] [--property NAME=MIN:MAX] [--seed N] [--scorer JSON] [--objective-name L] [--units U] [--work-dir DIR] [--quiet]` | Creates (or resumes) NAME and scores every batch with the command until the budget is spent. Re-run the same command to resume. |
+| `dmc optimize ask NAME [-o batch.csv] [--wait SECONDS]` | Writes the pending batch as `id,smiles`. Exit 0 written, 3 nothing ready within `--wait` (default 300), 4 finished. |
+| `dmc optimize tell NAME scores.csv [--batch BATCH_ID] [--scorer JSON]` | Submits scores for the pending batch (or `--batch`). Ids missing from the CSV are submitted as failed. |
+| `dmc optimize status [NAME]` / `dmc optimize list [--status S]` | One optimization's state, or a table of all of them. |
+| `dmc optimize results NAME [--top N] [--order best\|round] [-o FILE]` | Scored molecules, best first; `-o` writes CSV. |
+| `dmc optimize cancel NAME` / `dmc optimize resume NAME` | Cancel; resume a `paused` optimization. |
+
+`--score-cmd` runs through the shell with `{input}` and `{output}` replaced by quoted paths.
+`{input}` is a CSV with `id,smiles`. The command must write `{output}`, a CSV with `id` and
+`score` columns and optionally `status` (`valid`, `failed`, `timeout`, `filtered`, `cancelled`),
+`error`, and any other columns, which are stored as metrics. An empty, `nan` or unparseable score
+is a failure. A non-zero exit aborts without submitting; the batch stays pending.
 
 ## Typical session
 

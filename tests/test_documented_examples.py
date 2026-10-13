@@ -4,9 +4,11 @@ import runpy
 from pathlib import Path
 
 import httpx
+from fake_optimizations import FakeOptimizationServer
 
 import deepmedchem
 import deepmedchem.facade
+import deepmedchem.optimization
 
 EXAMPLES = Path(__file__).parents[1] / "examples" / "docs"
 
@@ -114,17 +116,26 @@ def _handler(request):
     return httpx.Response(404, json={"error": {"message": f"unstubbed route: {path}"}})
 
 
-def test_every_published_sdk_example_executes(monkeypatch):
+def test_every_published_sdk_example_executes(monkeypatch, tmp_path):
     real_client = deepmedchem.Client
+    optimizations = FakeOptimizationServer()
+
+    def router(request):
+        if request.url.path.startswith("/api/v2/optimizations"):
+            return optimizations(request)
+        return _handler(request)
 
     def docs_client(*args, **kwargs):
-        kwargs["transport"] = httpx.MockTransport(_handler)
+        kwargs["transport"] = httpx.MockTransport(router)
         kwargs.setdefault("api_url", "https://docs-contract.invalid")
         return real_client(*args, **kwargs)
 
     monkeypatch.setenv("DMC_API_KEY", "docs-contract-key")
+    monkeypatch.setenv("DEEPMEDCHEM_API_KEY", "docs-contract-key")
+    monkeypatch.setenv("DEEPMEDCHEM_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.setattr(deepmedchem, "Client", docs_client)
     monkeypatch.setattr(deepmedchem.facade, "Client", docs_client)
+    monkeypatch.setattr(deepmedchem.optimization, "Client", docs_client)
 
     executed = []
     for path in sorted(EXAMPLES.glob("*.py")):
@@ -133,8 +144,18 @@ def test_every_published_sdk_example_executes(monkeypatch):
 
     assert executed == [
         "durable_runs.py",
+        "optimize.py",
         "property_filtered_sampling.py",
         "python_quickstart.py",
         "selection_builder.py",
         "substructure_search.py",
     ]
+    rounds = [
+        submission["batch_id"]
+        for submission in optimizations.submissions
+        if submission["batch_id"].startswith("opt_test0001")
+    ]
+    assert len(rounds) == 3
+    assert all(
+        state["resource"]["status"] == "completed" for state in optimizations.optimizations.values()
+    )

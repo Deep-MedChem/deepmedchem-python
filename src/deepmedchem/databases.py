@@ -65,198 +65,6 @@ DATABASE_DETAILS: dict[str, dict[str, str]] = {
         "success": "85%+",
         "url": "https://aifchem.com/",
     },
-    "MCULE-IN-STOCK": {
-        "served_by": "cheese",
-        "abbreviation": "mcule-in-stock",
-        "biosolveit": "—",
-        "type": "In-Stock",
-        "availability": "Immediate",
-        "success": "100%",
-        "url": "https://mcule.com/",
-    },
-    "MCULE-FULL": {
-        "served_by": "cheese",
-        "abbreviation": "mcule-full",
-        "biosolveit": "—",
-        "type": "In-Stock",
-        "availability": "Immediate",
-        "success": "100%",
-        "url": "https://mcule.com/",
-    },
-    # Mcule amino-acid sets for peptide synthesis (cheese issue #437).
-    "MCULE-AA": {
-        "served_by": "cheese",
-        "abbreviation": "mcule-aa",
-        "biosolveit": "—",
-        "type": "Amino acids",
-        "availability": "Vendor-dependent",
-        "success": "N/A",
-        "url": "https://mcule.com/",
-    },
-    "MCULE-AA-IN-STOCK": {
-        "served_by": "cheese",
-        "abbreviation": "mcule-aa-in-stock",
-        "biosolveit": "—",
-        "type": "Amino acids (in stock)",
-        "availability": "Immediate",
-        "success": "100%",
-        "url": "https://mcule.com/",
-    },
-    "MCULE-UNNATURAL-AA": {
-        "served_by": "cheese",
-        "abbreviation": "mcule-unnatural-aa",
-        "biosolveit": "—",
-        "type": "Unnatural amino acids",
-        "availability": "Vendor-dependent",
-        "success": "N/A",
-        "url": "https://mcule.com/",
-    },
-    "MCULE-UNNATURAL-AA-IN-STOCK": {
-        "served_by": "cheese",
-        "abbreviation": "mcule-unnatural-aa-in-stock",
-        "biosolveit": "—",
-        "type": "Unnatural amino acids (in stock)",
-        "availability": "Immediate",
-        "success": "100%",
-        "url": "https://mcule.com/",
-    },
-    "MOLPORT": {
-        "served_by": "cheese",
-        "abbreviation": "molport",
-        "biosolveit": "—",
-        "type": "In-Stock",
-        "availability": "Immediate",
-        "success": "100%",
-        "url": "https://molport.com/",
-    },
-    "CHEMSPACE-SCREENING": {
-        "served_by": "cheese",
-        "abbreviation": "chemspace-screening",
-        "biosolveit": "—",
-        "type": "In-Stock",
-        "availability": "Immediate",
-        "success": "100%",
-        "url": "https://chem-space.com/",
-    },
-    "ZINC15": {
-        "served_by": "cheese",
-        "abbreviation": "zinc15",
-        "biosolveit": "—",
-        "type": "Other",
-        "availability": "No availability info",
-        "success": "N/A",
-        "url": "https://zinc15.docking.org/",
-    },
-    # Enumerated make-on-demand catalogues served by classic CHEESE Search.
-    "ENAMINE-REAL": {
-        "served_by": "cheese",
-        "abbreviation": "enamine-real",
-        "biosolveit": "—",
-        "type": "Make-On-Demand (enumerated)",
-        "availability": "3–4 weeks",
-        "success": ">80%",
-        "url": "https://enamine.net/compound-collections/real-compounds",
-    },
-    "ENAMINE-AA": {
-        "served_by": "cheese",
-        "abbreviation": "enamine-aa",
-        "biosolveit": "—",
-        "type": "Make-On-Demand (enumerated)",
-        "availability": "3–4 weeks",
-        "success": ">80%",
-        "url": "https://enamine.net/",
-    },
-    "CHEMSPACE-5B-RO5": {
-        "served_by": "cheese",
-        "abbreviation": "chemspace-5b-ro5",
-        "biosolveit": "—",
-        "type": "Make-On-Demand (enumerated)",
-        "availability": "5–6 weeks",
-        "success": ">80%",
-        "url": "https://chem-space.com/",
-    },
-    "CHEMSPACE-5B-BEYOND-RO5": {
-        "served_by": "cheese",
-        "abbreviation": "chemspace-5b-beyond-ro5",
-        "biosolveit": "—",
-        "type": "Make-On-Demand (enumerated)",
-        "availability": "5–6 weeks",
-        "success": ">80%",
-        "url": "https://chem-space.com/",
-    },
-    "CHEMSPACE-5B-FREEDOM": {
-        "served_by": "cheese",
-        "abbreviation": "chemspace-5b-freedom",
-        "biosolveit": "—",
-        "type": "Make-On-Demand (enumerated)",
-        "availability": "5–6 weeks",
-        "success": ">80%",
-        "url": "https://chem-space.com/freedom-space",
-    },
-    # eXplore 5.4B: the full enumerated eXplore catalogue (cheese 2026-09-30).
-    "EXPLORE-5P4B": {
-        "served_by": "cheese",
-        "abbreviation": "explore-5p4b",
-        "biosolveit": "—",
-        "type": "Make-On-Demand (enumerated)",
-        "availability": "3–4 weeks",
-        "success": ">85%",
-        "url": "https://www.emolecules.com/products/explore",
-    },
-    "EXPLORE-DIVERSE": {
-        "served_by": "cheese",
-        "abbreviation": "explore-diverse",
-        "biosolveit": "—",
-        "type": "Make-On-Demand (enumerated)",
-        "availability": "3–4 weeks",
-        "success": ">85%",
-        "url": "https://www.emolecules.com/products/explore",
-    },
-    "EXPLORE-ENUMERATED": {
-        "served_by": "cheese",
-        "abbreviation": "explore-enumerated",
-        "biosolveit": "—",
-        "type": "Make-On-Demand (enumerated)",
-        "availability": "3–4 weeks",
-        "success": ">85%",
-        "url": "https://www.emolecules.com/products/explore",
-    },
-    "SYNPLE-4B": {
-        "served_by": "cheese",
-        "abbreviation": "synple-4b",
-        "biosolveit": "—",
-        "type": "Make-On-Demand (enumerated)",
-        "availability": "3–4 weeks",
-        "success": ">85%",
-        "url": "https://www.emolecules.com/products/explore",
-    },
-    "XTALPI": {
-        "served_by": "cheese",
-        "abbreviation": "xtalpi",
-        "biosolveit": "—",
-        "type": "Make-On-Demand (enumerated)",
-        "availability": "2–4 weeks",
-        "success": "85%+",
-        "url": "https://aifchem.com/",
-    },
-    "CHEMRIYA": {
-        "served_by": "cheese",
-        "abbreviation": "chemriya",
-        "biosolveit": "—",
-        "type": "Make-On-Demand (enumerated)",
-        "availability": "Ask vendor",
-        "success": "N/A",
-        "url": "https://www.otavachemicals.com/",
-    },
-    "MOLECULE-ONE": {
-        "served_by": "cheese",
-        "abbreviation": "molecule-one",
-        "biosolveit": "—",
-        "type": "Make-On-Demand (enumerated)",
-        "availability": "2–6 weeks",
-        "success": ">85%",
-        "url": "https://molecule.one/",
-    },
 }
 
 # Preferred presentation order; unknown/private catalog entries follow these spaces.
@@ -268,48 +76,67 @@ DATABASE_DISPLAY_ORDER = (
     "vast-2026-h2",
     "cheminfinita-2026-02",
     "d2b-spacem1",
-    # Classic CHEESE catalogues follow the platform spaces.
-    "ENAMINE-REAL",
-    "CHEMSPACE-5B-RO5",
-    "CHEMSPACE-5B-BEYOND-RO5",
-    "CHEMSPACE-5B-FREEDOM",
-    "EXPLORE-ENUMERATED",
-    "EXPLORE-DIVERSE",
-    "EXPLORE-5P4B",
-    "SYNPLE-4B",
-    "XTALPI",
-    "MOLECULE-ONE",
-    "CHEMRIYA",
-    "ENAMINE-AA",
-    "MCULE-IN-STOCK",
-    "MCULE-FULL",
-    "MCULE-AA",
-    "MCULE-AA-IN-STOCK",
-    "MCULE-UNNATURAL-AA",
-    "MCULE-UNNATURAL-AA-IN-STOCK",
-    "MOLPORT",
-    "CHEMSPACE-SCREENING",
-    "ZINC15",
-)
-
-# Databases served by classic CHEESE Search (api.cheese.deepmedchem.com) rather than
-# the platform API. The client routes similarity search for these to /molsearch;
-# substructure search, sampling, selections and runs are platform-only.
-CLASSIC_DATABASES = frozenset(
-    database_id
-    for database_id, info in DATABASE_DETAILS.items()
-    if info.get("served_by") == "cheese"
 )
 
 _ALIASES = {info["abbreviation"]: database_id for database_id, info in DATABASE_DETAILS.items()}
 assert len(_ALIASES) == len(DATABASE_DETAILS), "database abbreviations must be unique"
 
 
-def is_classic_database(database_id: str) -> bool:
-    """True when ``database_id`` (a full ID, not an alias) is served by classic CHEESE."""
-    return database_id in CLASSIC_DATABASES
+# Classic CHEESE Search catalogues (enumerated and in-stock) that the SDK reached before it
+# moved to the platform API alone. Their IDs still go to the platform API, casefolded, because
+# it will serve several of them under those IDs; the set only explains a "not served" answer,
+# so a served ID works whether or not it is listed here. Drop an entry in the change that adds
+# its DATABASE_DETAILS entry, with abbreviation = the casefolded ID, so that "MOLPORT" is still
+# sent as "molport".
+RETIRED_DATABASES = frozenset(
+    database_id.casefold()
+    for database_id in (
+        "ENAMINE-REAL",
+        "ENAMINE-AA",
+        "CHEMSPACE-5B-RO5",
+        "CHEMSPACE-5B-BEYOND-RO5",
+        "CHEMSPACE-5B-FREEDOM",
+        "EXPLORE-ENUMERATED",
+        "EXPLORE-DIVERSE",
+        "EXPLORE-5P4B",
+        "SYNPLE-4B",
+        "XTALPI",
+        "MOLECULE-ONE",
+        "CHEMRIYA",
+        "MCULE-IN-STOCK",
+        "MCULE-FULL",
+        "MCULE-AA",
+        "MCULE-AA-IN-STOCK",
+        "MCULE-UNNATURAL-AA",
+        "MCULE-UNNATURAL-AA-IN-STOCK",
+        "MOLPORT",
+        "CHEMSPACE-SCREENING",
+        "ZINC15",
+    )
+)
+
+
+def expand_database_alias(database: str) -> str:
+    """Expand a known shorthand; preserve full IDs and private/unknown IDs verbatim."""
+    return _ALIASES.get(database.casefold(), database)
 
 
 def resolve_database(database: str) -> str:
-    """Expand a known shorthand; preserve full IDs and private/unknown IDs verbatim."""
-    return _ALIASES.get(database.casefold(), database)
+    """Return the platform database ID for ``database``; no ID is rejected locally.
+
+    Retired CHEESE IDs are sent casefolded, the form the platform API serves them under.
+    """
+    if database.casefold() in RETIRED_DATABASES:
+        return database.casefold()
+    return expand_database_alias(database)
+
+
+def retired_database_message(database_id: str) -> str | None:
+    """Explain why the platform API does not serve ``database_id``, if it is a retired ID."""
+    if database_id.casefold() not in RETIRED_DATABASES:
+        return None
+    return (
+        f"{database_id.upper()} was a classic CHEESE Search catalogue, and the platform API, "
+        "the only one the DeepMedChem Python SDK uses, does not serve it. "
+        "Run `dmc databases` to list the chemical spaces you can search."
+    )

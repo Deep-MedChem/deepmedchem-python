@@ -10,8 +10,6 @@ def _handler(request: httpx.Request) -> httpx.Response:
     body = json.loads(request.content or b"{}")
     if request.url.path == "/api/v2/catalog":
         return httpx.Response(200, json={"spaces": []})
-    if request.url.path == "/available_databases_full":
-        return httpx.Response(200, json={})
     return httpx.Response(
         200,
         json={
@@ -35,6 +33,25 @@ def test_module_level_operations_use_scientific_surface() -> None:
     assert result.method == "shape"
     assert result.prices == [163]
     assert dmc.catalog(**options) == {"spaces": []}
+
+
+def test_module_level_usage_uses_the_platform_api() -> None:
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        return httpx.Response(
+            200, json={"plan": "private", "limit": 100, "used": 3, "remaining": 97}
+        )
+
+    options = {
+        "api_key": "token",
+        "api_url": "https://example.test",
+        "transport": httpx.MockTransport(handler),
+    }
+    assert dmc.usage(**options).remaining == 97
+    assert asyncio.run(dmc.aio.usage(**options)).plan == "private"
+    assert seen == ["/api/v2/usage", "/api/v2/usage"]
 
 
 def test_prices_are_read_from_the_search_response_without_an_extra_request() -> None:

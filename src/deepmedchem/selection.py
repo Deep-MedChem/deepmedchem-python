@@ -204,22 +204,191 @@ class Selection:
 
         return self._changed(update)
 
+    def _structures(self, payload) -> dict[str, Any]:
+        structures = payload["constraints"].setdefault("structures", {})
+        structures.setdefault("all", [])
+        structures.setdefault("any", {"minimum": 0, "conditions": []})
+        structures.setdefault("none", [])
+        return structures
+
+    @staticmethod
+    def _structure_id(structures: dict[str, Any], wanted: str) -> str:
+        used = {
+            item.get("id")
+            for item in (
+                *structures["all"],
+                *structures["any"]["conditions"],
+                *structures["none"],
+            )
+        }
+        candidate, index = wanted, 2
+        while candidate in used:
+            candidate, index = f"{wanted}-{index}", index + 1
+        return candidate
+
+    @staticmethod
+    def _structure_condition(
+        query: str, *, format: str, condition_id: str, min_count: int, max_count: int | None
+    ) -> dict[str, Any]:
+        if format not in {"smarts", "smiles"}:
+            raise ValueError("format must be 'smarts' or 'smiles'")
+        if min_count < 0 or (max_count is not None and max_count < min_count):
+            raise ValueError("structure counts need 0 <= min_count <= max_count")
+        count: dict[str, int] = {"min": min_count}
+        if max_count is not None:
+            count["max"] = max_count
+        return {
+            "type": "structure",
+            "id": condition_id,
+            "relation": "contains",
+            "query": {"format": format, "value": query},
+            "count": count,
+        }
+
+    def require_structure(
+        self,
+        query: str,
+        *,
+        min_count: int = 1,
+        max_count: int | None = None,
+        format: str = "smarts",
+        id: str = "require",
+    ) -> Selection:
+        """Every result must contain ``query`` between ``min_count`` and ``max_count`` times."""
+
+        def update(payload):
+            structures = self._structures(payload)
+            structures["all"].append(
+                self._structure_condition(
+                    query,
+                    format=format,
+                    condition_id=self._structure_id(structures, id),
+                    min_count=min_count,
+                    max_count=max_count,
+                )
+            )
+
+        return self._changed(update)
+
+    def exclude_structure(
+        self, query: str, *, format: str = "smarts", id: str = "exclude"
+    ) -> Selection:
+        """No result may contain ``query``."""
+
+        def update(payload):
+            structures = self._structures(payload)
+            structures["none"].append(
+                self._structure_condition(
+                    query,
+                    format=format,
+                    condition_id=self._structure_id(structures, id),
+                    min_count=1,
+                    max_count=None,
+                )
+            )
+
+        return self._changed(update)
+
+    def require_any_structure(
+        self,
+        queries: list[str],
+        *,
+        minimum: int = 1,
+        format: str = "smarts",
+        id: str = "any",
+    ) -> Selection:
+        """Every result must contain at least ``minimum`` of ``queries``."""
+
+        if not queries or not 1 <= minimum <= len(queries):
+            raise ValueError("require_any_structure needs 1 <= minimum <= len(queries)")
+
+        def update(payload):
+            structures = self._structures(payload)
+            group = structures["any"]
+            if group["conditions"]:
+                raise ValueError("a selection has one require-any group")
+            for query in queries:
+                group["conditions"].append(
+                    self._structure_condition(
+                        query,
+                        format=format,
+                        condition_id=self._structure_id(structures, id),
+                        min_count=1,
+                        max_count=None,
+                    )
+                )
+            group["minimum"] = minimum
+
+        return self._changed(update)
+
+    def subset(self, name: str) -> Selection:
+        """Restrict results to a named virtual subset, see ``deepmedchem.subsets``."""
+
+        from .subsets import get_subset
+
+        subset = get_subset(name)
+        selection = self
+        for preset in subset.presets:
+            selection = selection.require_preset(preset)
+        for condition in subset.properties:
+            selection = selection.where(condition)
+        for pattern in subset.require:
+            selection = selection.require_structure(
+                pattern.smarts,
+                min_count=pattern.min_count,
+                max_count=pattern.max_count,
+                format=pattern.format,
+                id=subset.name,
+            )
+        if subset.require_any:
+            selection = selection.require_any_structure(
+                [pattern.smarts for pattern in subset.require_any], id=subset.name
+            )
+        for pattern in subset.exclude:
+            selection = selection.exclude_structure(
+                pattern.smarts, format=pattern.format, id=f"{subset.name}-exclude"
+            )
+        return selection
+
     def where(
         self,
-        property_id: str,
+        property_id,
         *,
-        units: str,
+        units: str | None = None,
         fidelity: str = "exact_product",
         missing: str = "reject",
         **operator_value: Any,
     ) -> Selection:
+        """Add an exact RDKit property condition.
+
+        ``property_id`` is a server ID (``rdkit.mol_wt``) or a short name (``mw``), in
+        which case ``units`` may be omitted. A text filter such as ``"mw<=450"`` or a
+        :class:`deepmedchem.subsets.PropertyCondition` may be passed on its own.
+        """
+
+        from .subsets import PropertyCondition, parse_condition, property_definition
+
+        if not isinstance(property_id, PropertyCondition) and not operator_value:
+            property_id = parse_condition(str(property_id))
+        if isinstance(property_id, PropertyCondition):
+            if operator_value or units is not None:
+                raise ValueError("pass either a condition or property_id with an operator")
+            condition = property_id
+            return self.where(
+                condition.property_id,
+                fidelity=fidelity,
+                missing=missing,
+                **condition.to_where(),
+            )
+        if units is None:
+            property_id, units = property_definition(property_id)
         allowed = {"gt", "gte", "lt", "lte", "range"}
         supplied = allowed & set(operator_value)
         if len(supplied) != 1 or set(operator_value) - allowed:
             raise ValueError("provide exactly one of gt, gte, lt, lte, or range")
         operator = supplied.pop()
         value = operator_value[operator]
-        if operator == "range" and isinstance(value, list | tuple):
+        if operator == "range" and isinstance(value, (list, tuple)):
             if len(value) != 2:
                 raise ValueError("range requires two endpoints")
             value = {"lower": value[0], "upper": value[1]}
@@ -254,7 +423,7 @@ class Selection:
             raise ValueError("provide exactly one of gt, gte, lt, lte, or range")
         operator = supplied.pop()
         value = operator_value[operator]
-        if operator == "range" and isinstance(value, list | tuple):
+        if operator == "range" and isinstance(value, (list, tuple)):
             if len(value) != 2:
                 raise ValueError("range requires two endpoints")
             value = {"lower": value[0], "upper": value[1]}

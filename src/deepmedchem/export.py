@@ -1,7 +1,8 @@
-"""Write molecular results to CSV, SDF, SMILES, or JSON files without extra dependencies.
+"""Write molecular results to CSV, SDF, SMILES, JSON, or HTML files.
 
-SDF output is the one exception: it needs RDKit to build a molecule block, so
-``write_sdf`` imports it lazily and explains how to install it when missing.
+CSV, SMILES and JSON need no extra dependencies. SDF and HTML need RDKit (to
+build molecule blocks and to draw structures), so they import it lazily and
+explain how to install it when missing.
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ COMMON_COLUMNS: tuple[str, ...] = (
     "reaction_id",
     "metric",
 )
-FORMATS: tuple[str, ...] = ("csv", "sdf", "smi", "json")
+FORMATS: tuple[str, ...] = ("csv", "sdf", "smi", "json", "html")
 _EXTENSIONS = {
     ".csv": "csv",
     ".sdf": "sdf",
@@ -37,6 +38,8 @@ _EXTENSIONS = {
     ".smiles": "smi",
     ".txt": "smi",
     ".json": "json",
+    ".html": "html",
+    ".htm": "html",
 }
 
 
@@ -109,16 +112,37 @@ def write_json(result: SearchResult, path: str | os.PathLike[str]) -> int:
     return len(result)
 
 
-def write_sdf(result: SearchResult, path: str | os.PathLike[str]) -> int:
+def _require_sdf_rdkit():
     try:
         from rdkit import Chem
         from rdkit.Chem import AllChem
     except ImportError as error:
         raise ImportError(
             "Writing SDF files requires RDKit. Install it with "
-            "`python -m pip install rdkit` (or `pip install 'deepmedchem[sdf]'`), "
+            "`python -m pip install rdkit` (or `pip install 'deepmedchem[rdkit]'`), "
             "or export CSV, SMILES, or JSON instead."
         ) from error
+    return Chem, AllChem
+
+
+def check_export_dependencies(format: str) -> None:
+    """Raise ImportError now if writing ``format`` will need a missing optional package.
+
+    The CLI calls this before it sends a search, so a missing RDKit does not cost a
+    credit and leave the user without a file.
+    """
+
+    selected = format.lower()
+    if selected == "sdf":
+        _require_sdf_rdkit()
+    elif selected == "html":
+        from .html_export import _require_rdkit
+
+        _require_rdkit()
+
+
+def write_sdf(result: SearchResult, path: str | os.PathLike[str]) -> int:
+    Chem, AllChem = _require_sdf_rdkit()
 
     written = 0
     with Chem.SDWriter(str(path)) as writer:
@@ -137,16 +161,27 @@ def write_sdf(result: SearchResult, path: str | os.PathLike[str]) -> int:
     return written
 
 
+def write_html(result: SearchResult, path: str | os.PathLike[str], **options: Any) -> int:
+    from .html_export import write_html as write_html_table
+
+    return write_html_table(result, path, **options)
+
+
 _WRITERS = {
     "csv": write_csv,
     "sdf": write_sdf,
     "smi": write_smi,
     "json": write_json,
+    "html": write_html,
 }
 
 
 def write_result(
-    result: SearchResult, path: str | os.PathLike[str], *, format: str | None = None
+    result: SearchResult,
+    path: str | os.PathLike[str],
+    *,
+    format: str | None = None,
+    html_limit: int | None = None,
 ) -> int:
     """Write ``result`` to ``path`` and return the number of molecules written."""
 
@@ -157,4 +192,6 @@ def write_result(
         raise ValueError(
             f"Unsupported export format {selected!r}; expected one of {', '.join(FORMATS)}."
         ) from error
+    if selected == "html" and html_limit is not None:
+        return writer(result, path, limit=html_limit)
     return writer(result, path)

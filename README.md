@@ -10,7 +10,7 @@
 The official, chemistry-thin Python client for the DeepMedChem hosted chemical-space platform.
 It contains no RDKit, models, databases, or proprietary search implementation.
 
-> **Beta:** `deepmedchem` 0.3 is available for early use. APIs may still change before the
+> **Beta:** `deepmedchem` 0.4 is available for early use. APIs may still change before the
 > stable release.
 
 ## Installation
@@ -45,8 +45,11 @@ dmc usage                            # account plan and CHEESE Credits remaining
 dmc search "CC(=O)Oc1ccccc1C(=O)O" -d enamine -m shape -n 10
 dmc search "CC(=O)Oc1ccccc1C(=O)O" -d enamine -o aspirin.csv
 dmc substructure "[N;R0][N;R0]C(=O)" -d enamine -n 10 --timeout-seconds 45 -o hydrazides.sdf
+dmc search "CC(=O)Oc1ccccc1C(=O)O" -d synple --subset amino-acids
 dmc sample -d freedom -n 100 --seed 7 -o sample.smi
 dmc order aspirin.csv --get-quote
+dmc optimize run my-run -d enamine --minimize --score-cmd './dock.sh {input} {output}'
+dmc optimize status                  # your optimizations; also ask, tell, results, cancel
 ```
 
 `databases` lists every searchable space with its size, whether per-compound price estimates
@@ -119,32 +122,6 @@ with Client() as client:
     matches = client.search_substructure("C(=O)N", database="enamine", limit=20)
 ```
 
-## Enumerated and in-stock catalogues
-
-Classic CHEESE Search serves the enumerated make-on-demand libraries and the in-stock
-catalogues (Enamine REAL, the Chemspace 5B sets, XtalPi, Synple, Chemriya, Molecule.one,
-eXplore, Mcule, Molport, Chemspace screening, ZINC15). The SDK reaches them with the same API
-key: `search` routes those databases to CHEESE Search's synchronous `/molsearch`, and
-`catalog()` / `dmc databases` list them next to the platform spaces.
-
-```python
-from deepmedchem import Client
-
-with Client() as client:
-    hits = client.search("CC(=O)Oc1ccccc1C(=O)O", database="molport", method="shape", limit=50)
-    hits.to_csv("molport_hits.csv")
-```
-
-```bash
-dmc search "CC(=O)Oc1ccccc1C(=O)O" -d mcule-in-stock -n 20
-```
-
-Limits on these catalogues: `limit` is 1–100 per call (CHEESE Search answers larger requests only
-through its job API), results carry `similarity` scores but no price estimates, and
-`search_substructure`, `sample`, selections and runs raise `DeepMedChemError(code="unsupported_operation")`.
-Use the [CHEESE UI](https://cheese.deepmedchem.com/) for those workflows. If CHEESE Search is
-unreachable, `catalog()` returns the platform spaces alone and emits a `RuntimeWarning`.
-
 ## DeepMedChem All Chemical Spaces
 
 Snapshot: September 11, 2026. Use the abbreviation in `database="enamine"` or `dmc search ... -d enamine`.
@@ -159,28 +136,10 @@ Full database IDs remain supported. Abbreviations resolve to the releases listed
 | `cheminfinita` | Make-On-Demand | 794.2B | 5–8 weeks | 55–85% | - | sales@otavachemicals.com | [🔗](https://www.otavachemicals.com/) |
 | `spacem1` | Make-On-Demand | 1.5B | 2–6 weeks | >85% | - | hello@molecule.one | [🔗](https://molecule.one/) |
 | `vast` | Make-On-Demand | 6.8B | 2–4 weeks | 85%+ | yes | VAST@XtalPi.com | [🔗](https://aifchem.com/) |
-| `enamine-real` | Make-On-Demand (enumerated)[^cheese-search] | 9.56B | 3–4 weeks | >80% | - | libraries@enamine.net | [🔗](https://enamine.net/compound-collections/real-compounds) |
-| `chemspace-5b-ro5` | Make-On-Demand (enumerated)[^cheese-search] | 5.0B | 5–6 weeks | >80% | - | sales@chem-space.com | [🔗](https://chem-space.com/) |
-| `chemspace-5b-beyond-ro5` | Make-On-Demand (enumerated)[^cheese-search] | 5.0B | 5–6 weeks | >80% | - | sales@chem-space.com | [🔗](https://chem-space.com/) |
-| `chemspace-5b-freedom` | Make-On-Demand (enumerated)[^cheese-search] | 5.0B | 5–6 weeks | >80% | - | sales@chem-space.com | [🔗](https://chem-space.com/freedom-space) |
-| `xtalpi` | Make-On-Demand (enumerated)[^cheese-search] | 4.7B | 2–4 weeks | 85%+ | - | VAST@XtalPi.com | [🔗](https://aifchem.com/) |
-| `synple-4b` | Make-On-Demand (enumerated)[^cheese-search] | 3.9B | 3–4 weeks | >85% | - | sales@emolecules.com | [🔗](https://www.emolecules.com/products/explore) |
-| `chemriya` | Make-On-Demand (enumerated)[^cheese-search] | 1.4B | Ask vendor | N/A | - | info@chemriya.com | [🔗](https://www.otavachemicals.com/) |
-| `molecule-one` | Make-On-Demand (enumerated)[^cheese-search] | 68.0M | 2–6 weeks | >85% | - | hello@molecule.one | [🔗](https://molecule.one/) |
-| `explore-enumerated` | Make-On-Demand (enumerated)[^cheese-search] | 54.8M | 3–4 weeks | >85% | - | sales@emolecules.com | [🔗](https://www.emolecules.com/products/explore) |
-| `explore-diverse` | Make-On-Demand (enumerated)[^cheese-search] | 11.4M | 3–4 weeks | >85% | - | sales@emolecules.com | [🔗](https://www.emolecules.com/products/explore) |
-| `enamine-aa` | Make-On-Demand (enumerated)[^cheese-search] | 373.8K | 3–4 weeks | >80% | - | info@enamine.net | [🔗](https://enamine.net/) |
-| `mcule-in-stock` | In-Stock[^cheese-search] | 7.2M | Immediate | 100% | yes | order@mcule.com | [🔗](https://mcule.com/) |
-| `mcule-full`[^cheese-search] | In-Stock | 140.4M | Immediate | 100% | yes | order@mcule.com | [🔗](https://mcule.com/) |
-| `molport`[^cheese-search] | In-Stock | 5.9M | Immediate | 100% | yes | sales@molport.com | [🔗](https://molport.com/) |
-| `chemspace-screening`[^cheese-search] | In-Stock | 7.5M | Immediate | 100% | yes | sales@chem-space.com | [🔗](https://chem-space.com/) |
-| `zinc15`[^cheese-search] | Other | 697.1M | No availability info | N/A | unknown | N/A | [🔗](https://zinc15.docking.org/) |
 
-[^python-availability]: All rows are searchable from this package. Make-On-Demand spaces use the platform API with its full feature set. Rows marked [^cheese-search] are served by CHEESE Search; see *Enumerated and in-stock catalogues* below for what the SDK supports there.
+[^python-availability]: All rows are Make-On-Demand spaces served by the platform API with its full feature set: similarity, substructure search, sampling, selections and runs.
 
-[^cheese-search]: Served by CHEESE Search (`api.cheese.deepmedchem.com`) rather than the platform API: similarity search only (`morgan`, `shape`, `esp`), at most 100 hits per call, no per-compound price estimates, no substructure search, sampling, selections or runs. Sizes from the live catalogue on September 24, 2026.
-
-[^price-estimates]: Prices are planning estimates per compound, before any discounts are applied, and generally assume a low number of molecules ordered and price per 1 mg. For instance VAST H2 2026 uses 1 mg per compound in a 50-compound order. Other databases similarly assume small orders; the exact basis varies by vendor. Request a final quote for your actual quantity and order size. Counts and price support for Make-On-Demand spaces come from the live API catalog. In-Stock rows use immediate availability and 100% success as stock-catalog conventions; confirm fulfillment with the vendor. MCULE-FULL includes the full purchasable catalog.
+[^price-estimates]: Prices are planning estimates per compound, before any discounts are applied, and generally assume a low number of molecules ordered and price per 1 mg. For instance VAST H2 2026 uses 1 mg per compound in a 50-compound order. Other databases similarly assume small orders; the exact basis varies by vendor. Request a final quote for your actual quantity and order size. Counts and price support come from the live API catalog.
 
 ## Migrating from BioSolveIT InfiniSee
 
@@ -222,16 +181,6 @@ message asks the vendor to confirm final pricing, availability, lead time, and o
 processing. Use `--to ADDRESS` for a private database without a configured procurement contact,
 and `--database ID` for older CSV files that do not carry a database column.
 
-Account-specific usage snapshot from September 6, 2026:
-
-```text
-$ dmc usage
-plan:      premium
-credits:   9,992 of 10,000 remaining today (8 used)
-resets:    2026-09-07T00:00:00+00:00 (in 10h 59m)
-promo:     10x September promo (10x, base 1,000/day, until 2026-10-01)
-```
-
 ## Quickstart
 
 ```python
@@ -264,6 +213,105 @@ the original search response, so both `hit.price` and the aligned `result.prices
 available without another API request. Databases without price estimates return `None`; run
 `dmc databases` for the current list and the vendor address to request a binding quote.
 
+## Optimize with your own scorer
+
+Navigator proposes molecules from a chemical space, your function scores them locally (docking,
+an ML model, an RDKit property), and the scores steer the next proposals until the budget is
+spent. Only SMILES and numbers cross the network.
+
+```python
+import deepmedchem as dmc
+from rdkit import Chem
+from rdkit.Chem import QED
+
+def score(smiles):  # one value per SMILES, None for a molecule you cannot score
+    return [QED.qed(m) if (m := Chem.MolFromSmiles(s)) else None for s in smiles]
+
+result = dmc.optimize(score, direction="maximize", database="enamine",
+                      budget=500, batch_size=50, name="qed-demo")
+print(result.top(10))
+result.to_csv("qed_demo.csv")
+```
+
+`direction` is required and scores are never negated. `name=` makes the call resumable: re-run it
+after Ctrl-C or a crash and it continues, re-sending scores that were computed but not uploaded.
+A scorer may return dicts such as `{"score": -9.1, "cnn_score": 0.82}`; the extra keys are stored
+as metrics. For manual control use `client.optimizations.create(...)` with `opt.ask()` and
+`opt.tell(batch, scores)`; for shell scorers and HPC queues use
+`dmc optimize run NAME --score-cmd 'CMD {input} {output}'` or `dmc optimize ask`/`tell`.
+Worked examples (RDKit, your own ML model, GNINA docking) are in
+[`examples/optimization`](examples/optimization/README.md).
+
+## Filters and virtual subsets
+
+A similarity search can be restricted to a *virtual subset*: a definition rather than a
+stored catalogue, so it works on every DeepMedChem chemical space. No enumerated
+amino-acid version of Synple exists, yet this returns only amino acids:
+
+```bash
+dmc search "CC(C)C[C@H](NC(=O)c1ccccc1)C(=O)O" -d synple --subset amino-acids
+dmc search "CC(C)C[C@H](NC(=O)c1ccccc1)C(=O)O" -d synple:amino-acids        # same search
+dmc search "CC(=O)Oc1ccccc1C(=O)O" -d enamine --subset ro5 --where "tpsa=40..90"
+dmc search "CC(=O)Oc1ccccc1C(=O)O" -d enamine --require "c1ccncc1" --exclude "[N+](=O)[O-]"
+dmc search "CC(=O)Oc1ccccc1C(=O)O" -d enamine --require-count 1-2 "[NX3;H2]"
+dmc search "CC(=O)Oc1ccccc1C(=O)O" -d synple:amino-acids --explain           # no credit used
+dmc sample -d enamine --subset druglike -n 100
+dmc subsets                                                               # the registry
+```
+
+`--subset`, `--where`, `--require`, `--require-count` and `--exclude` can be repeated and
+are combined with AND. `--where` takes `mw`, `logp`, `hbd`, `hba`, `rotb`, `tpsa`, `fsp3`
+and `arom` (or the `rdkit.*` property IDs) as `mw<=450`, `logp<4`, `tpsa=40..90` or
+`1<=hbd<=3`. `--explain` prints the selection document with the server's validation and
+execution estimate, and runs nothing.
+
+| subset | definition |
+|---|---|
+| `amino-acids` | alpha-amino-acid residue, carboxyl free or esterified; N free, alkylated, acylated, carbamate-protected, sulfonylated or in a ring |
+| `amino-acid-building-blocks` | alpha-amino acid with N free, alkylated or carbamate-protected (Boc, Fmoc, Cbz) |
+| `beta-amino-acids` | beta-amino-acid residue, carboxyl free or esterified |
+| `carboxylic-acids`, `primary-amines`, `acrylamides` | the named group |
+| `covalent-warheads` | any of acrylamide, chloroacetamide, vinyl sulfonamide, sulfonyl fluoride, propiolamide |
+| `ro5` | Lipinski: MW <= 500 Da, cLogP <= 5, HBD <= 5, HBA <= 10 (server preset `lipinski-ro5/v1`) |
+| `druglike` | MW <= 500, cLogP -10..5, HBA <= 10, HBD <= 5, RotB <= 10, TPSA <= 140, Fsp3 0.1..0.8, 1..5 aromatic rings |
+| `beyond-ro5` | MW > 500 Da |
+| `ro3` | MW <= 300, cLogP <= 3, HBD <= 3, HBA <= 3, RotB <= 3 |
+
+`amino-acids` has the scope of the Mcule amino-acid catalogues: it matches 98-100% of
+each residue file of MCULE-AA (2026-08-01) except glycine and alanine (about 90%), whose
+remaining entries attach the residue through an aromatic ring nitrogen. Matching ignores
+stereochemistry, so natural and unnatural (D) amino acids are not told apart.
+`dmc subsets --json` prints every SMARTS.
+
+In Python the same filters are keyword arguments of `search` and `sample`:
+
+```python
+import deepmedchem as dmc
+
+hits = dmc.search(query, database="synple", subset="amino-acids", limit=50)
+hits = dmc.search(query, database="enamine:ro5", where=["mw<=450"], require=["c1ccncc1"])
+hits = dmc.search(query, database="enamine", require=[("[NX3;H2]", 1, 2)])  # 1-2 matches
+picks = dmc.sample(database="enamine", subset="druglike", count=100, seed=7)
+```
+
+A filtered search is one `molecule-selection/1` document: a similarity objective plus
+the filters as constraints, sent to `POST /api/v2/selections` and returned as a
+`SelectionResult`. `Selection.subset()`, `.require_structure()`, `.exclude_structure()`,
+`.require_any_structure()` and `.where("mw<=450")` build the same constraints by hand.
+The server checks every constraint on every assembled product, so each returned
+molecule satisfies all filters; nothing is filtered on the client. Engines that support
+it anchor the synthon search on synthons able to carry a required pattern instead of
+filtering nearest neighbours. If fewer molecules than requested pass the filters among
+the candidates examined, the result is shorter and carries a `partial_results` warning,
+which the CLI prints.
+
+Limits: a filtered search returns at most 200 hits. Sampling accepts property filters
+only, because the API applies structure constraints to similarity searches alone.
+Batch search (`--input`) and substructure search do not take filters yet. The API has
+no price constraint, and does not report how many molecules a subset contains. With
+RDKit installed (`pip install "deepmedchem[rdkit]"`), SMARTS are checked locally before
+any request.
+
 ## SMILES and SMARTS substructure search
 
 Enamine substructure search is enabled in production on release `2026-09-06.2`.
@@ -292,9 +340,9 @@ returned matches do not imply an exhaustive search of every possible product.
 
 Any result writes itself with `result.to_csv(path)`, `result.to_sdf(path)`, or
 `result.to_file(path)` (format inferred from the suffix). `dmc.usage()` and `Client.usage()` return
-the account plan and the daily CHEESE Credit balance (`plan`, `limit`, `used`, `remaining`,
-`reset_at`, and an optional `promo`); the balance is served by the account service configured as
-the profile's `account_url`.
+the account plan and today's CHEESE Credit balance (`plan`, `limit`, `used`, `remaining`,
+`unlimited`, `reset_at`, `seconds_to_reset`) from `GET /api/v2/usage`. The balance is shared by all
+of the account's keys and the CHEESE web app, resets at midnight UTC, and reading it is free.
 
 Module-level `search`, `substructure`, `sample`, `catalog`, and `usage` operations create and close
 a small internal client. The explicit `Client` remains available for connection reuse and advanced
@@ -313,7 +361,10 @@ Credentials resolve from an explicit `api_key`, `DEEPMEDCHEM_API_KEY`, compatibi
 variables, a custom credential provider, the selected profile's OS-keyring entry, or the
 `credentials.json` fallback file. Set `DEEPMEDCHEM_CREDENTIAL_STORE=file` or `=keyring` to force one
 store. Use `dmc login --profile dev` for the development service; profiles never share
-credentials.
+credentials. Dev login opens `https://cheese-dev.deepmedchem.com`, reusing your session
+in that browser. If an older `config.toml` explicitly sets `[profiles.dev].web_url` to
+`https://cheese-new-dev.deepmedchem.com`, change it to `https://cheese-dev.deepmedchem.com`.
+Explicit profile URL overrides are preserved.
 
 Every request identifies its source with `X-DMC-Client`, `X-DMC-Client-Version`, and
 `X-DMC-SDK-Version`. The default values attribute direct SDK use to `deepmedchem-python`; an
@@ -327,8 +378,8 @@ the installed SDK version separately.
 the API.
 
 Exact RDKit constraints, fast predicted-property acquisition, and hard assembled-product predicted
-ranges are available through `Selection`. The simple `search`, `sample`, CLI, and export helpers
-keep their ordinary interfaces.
+ranges are available through `Selection`. The simple `search` and `sample` helpers and the CLI
+accept the common filters directly; see *Filters and virtual subsets*.
 
 ```python
 from deepmedchem import Client, Selection
@@ -474,3 +525,27 @@ For interactive RDKit visualization of similarity and SMARTS substructure querie
 - [Documentation](https://docs.deepmedchem.com/) and [Python quickstart](https://docs.deepmedchem.com/docs/guides/python/quickstart)
 - [Python package on PyPI](https://pypi.org/project/deepmedchem/)
 - [Python SDK on GitHub](https://github.com/Deep-MedChem/deepmedchem-python)
+
+
+### Seeded optimization and analog harvesting
+
+`client.optimizations.create(..., hit_threshold=-7, start_paused=True)` initializes without
+proposing. After status becomes `paused`, use `run.add_seeds(rows, mode="synthon")` with measured
+scores and Navigator product IDs, or `mode="external"` with SMILES and scores. SMILES-only seeds
+train the surrogate; in-space product seeds also initialize analog search. Neither spends the
+scoring budget. If a scorer was pinned, pass the same `scorer` metadata with seeds.
+
+After the seed operation finishes, `run.resume()` starts proposals. During an ask/tell loop,
+`run.transition("analog_harvest_accurate", idempotency_key="harvest-1")` queues a switch after
+scoring the current batch. `analog_harvest_fast` is also supported. Poll `run.refresh()` and inspect
+`resource.raw["pending_operation"]`; controls apply asynchronously and do not replace pending
+molecules. Invalid seeds pause the run with a reason and preserve its checkpoint.
+
+`dmc optimize seeds NAME seeds.json --mode synthon --idempotency-key seeds-1` and
+`dmc optimize transition NAME analog_harvest_fast --idempotency-key harvest-1` expose the same
+operations. `dmc optimize run` and `dmc.optimize()` accept a hit threshold (`--hit-threshold` /
+`hit_threshold`). See [the seed example](examples/optimization/05_seed_and_harvest.py).
+
+Custom `properties={"MolWt": (None, 350)}` windows are checked on assembled products by the
+upgraded worker, including when combined with `filters="druglike"`. Check the catalog's
+optimization property capabilities before requesting them.

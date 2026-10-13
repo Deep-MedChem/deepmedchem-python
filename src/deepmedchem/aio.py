@@ -27,14 +27,14 @@ async def sample(*, database: str, **kwargs) -> SampleResult:
         return await client.sample(database=database, **kwargs)
 
 
-async def usage(**kwargs) -> Usage:
-    async with AsyncClient(**_connection_options(kwargs)) as client:
-        return await client.usage()
-
-
 async def catalog(**kwargs) -> dict[str, Any]:
     async with AsyncClient(**_connection_options(kwargs)) as client:
         return await client.catalog()
+
+
+async def usage(**kwargs) -> Usage:
+    async with AsyncClient(**_connection_options(kwargs)) as client:
+        return await client.usage()
 
 
 def _connection_options(kwargs: dict[str, Any]) -> dict[str, Any]:
