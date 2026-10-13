@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0b1 (2026-10-13)
 
 ### Added
 
@@ -42,7 +42,8 @@ more.
   `unlimited`, `window`, `usage_day`, `reset_at`, `seconds_to_reset`, `user_id`. The camelCase
   aliases (`resetAt`, `secondsToReset`, `userId`) and the `promo` block (`UsagePromotion`) are
   gone, and `dmc usage --json` prints the platform response. `limit` and `remaining` are `None`
-  for unmetered service keys. `dmc status --verify` still checks the key but no longer prints
+  for unmetered service keys. A server that predates the endpoint (404) raises
+  `DeepMedChemError` with code `usage_unavailable`. `dmc status --verify` still checks the key but no longer prints
   `plan` or `credits_*`; use `dmc usage`.
 - **`account_url` removed.** The `account_url` client argument, the profile field and the
   `DEEPMEDCHEM_ACCOUNT_URL` environment variable are gone, and `dmc status` no longer prints
@@ -51,3 +52,22 @@ more.
 
 `dmc order` still recognises the vendor contacts for CSVs exported from the CHEESE web UI, so
 existing exports of these catalogues can still be turned into quote requests.
+
+### New features
+
+- **Virtual subsets and SMARTS filters.** `dmc search` and `dmc sample` (and `search`/`sample`
+  in Python) take `--subset NAME` (or `-d DATABASE:SUBSET`), `--where`, `--require`,
+  `--require-count`, `--exclude` and `--explain`. Filters become one molecule selection sent to
+  `/api/v2/selections`, so the server checks every result. `dmc subsets` lists the built-in
+  subsets: amino acids, building blocks, warheads, ro5, ro3 and more.
+- **Navigator optimization (beta).** `client.optimizations` and `dmc.optimize()` / `dmc optimize`
+  drive resumable ask/tell optimizations of your own score over a chemical space, on accounts
+  where the platform enables them.
+- **Many query molecules in one run.** `Client.search_many()` runs each query as an item of one
+  durable batch run and returns per-query hits in input order.
+- **HTML export.** `SearchResult.to_html()` and `-o hits.html` save a self-contained page with
+  2D structures.
+
+### Fixes
+
+- Browser login on the `dev` profile uses the dev CHEESE web app.
