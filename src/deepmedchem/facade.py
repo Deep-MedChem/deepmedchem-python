@@ -39,6 +39,8 @@ def search(
     where=None,
     require=None,
     exclude=None,
+    max_price: float | None = None,
+    keep_unpriced: bool = False,
     api_key: str | None = None,
     api_url: str | None = None,
     profile: str | None = None,
@@ -48,8 +50,9 @@ def search(
 ) -> SearchResult:
     """Run one ranked similarity search and close its internal transport.
 
-    ``subset``, ``where``, ``require`` and ``exclude`` restrict the search (see
-    :meth:`Client.search`); the server enforces them on every returned molecule.
+    ``subset``, ``where``, ``require``, ``exclude`` and ``max_price`` restrict the
+    search (see :meth:`Client.search`); the server enforces them on every returned
+    molecule.
     """
 
     with Client(
@@ -72,6 +75,8 @@ def search(
             where=where,
             require=require,
             exclude=exclude,
+            max_price=max_price,
+            keep_unpriced=keep_unpriced,
         )
 
 
@@ -120,6 +125,8 @@ def sample(
     include_synthons: bool = False,
     subset: str | list[str] | None = None,
     where=None,
+    max_price: float | None = None,
+    keep_unpriced: bool = False,
     api_key: str | None = None,
     api_url: str | None = None,
     profile: str | None = None,
@@ -127,7 +134,7 @@ def sample(
     timeout: float = 45.0,
     transport: Any = None,
 ) -> SampleResult | SelectionResult:
-    """Sample one chemical space, optionally a property subset, and close the transport."""
+    """Sample one chemical space, optionally a property subset or price, and close it."""
 
     with Client(
         **_client_options(
@@ -146,6 +153,8 @@ def sample(
             include_synthons=include_synthons,
             subset=subset,
             where=where,
+            max_price=max_price,
+            keep_unpriced=keep_unpriced,
         )
 
 
