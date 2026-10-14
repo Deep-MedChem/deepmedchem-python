@@ -296,3 +296,23 @@ def test_read_scores_csv_parses_cells(tmp_path) -> None:
     path.write_text("id,score\na,1\na,2\n")
     with pytest.raises(ValueError, match="duplicate id"):
         cli.read_scores_csv(path)
+
+
+# --- correctness fixes (2026-10-12 review) -------------------------------------------
+
+
+def test_tell_reports_progress_including_the_batch_just_accepted(
+    server, tmp_path, capsys
+) -> None:
+    _create(server, budget=4, batch_size=2)
+    batch_path = tmp_path / "b.csv"
+    assert cli.main(["optimize", "ask", "hpc", "-o", str(batch_path)]) == 0
+    capsys.readouterr()
+    with open(batch_path, newline="") as handle:
+        ids = [row["id"] for row in csv.DictReader(handle)]
+    scores = tmp_path / "s.csv"
+    scores.write_text("id,score\n" + "\n".join(f"{i},-1.0" for i in ids) + "\n")
+    assert cli.main(["optimize", "tell", "hpc", str(scores)]) == 0
+    out = capsys.readouterr().out
+    assert "2/4 molecules scored." in out
+    assert "total" not in out and "0 " not in out.split("(", 1)[1].split(")", 1)[0]

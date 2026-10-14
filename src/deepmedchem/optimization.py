@@ -56,6 +56,8 @@ ROW_STATUSES = ("valid", "failed", "timeout", "filtered", "cancelled")
 RESULT_ORDERS = ("best", "round")
 MAX_WAIT_SECONDS = 25
 MAX_METRICS = 32
+MAX_METRIC_NAME_LENGTH = 64
+MAX_METRIC_TEXT_LENGTH = 500
 MAX_ERROR_LENGTH = 500
 MAX_JSON_OBJECT_BYTES = 4096
 MAX_RESULTS_PAGE = 1000
@@ -322,7 +324,22 @@ def _metrics(metrics: Mapping[Any, Any], molecule_id: str) -> dict[str, Any]:
             f"Molecule {molecule_id!r} has {len(metrics)} metrics; "
             f"at most {MAX_METRICS} are stored."
         )
-    return {str(key): _metric_value(value, str(key), molecule_id) for key, value in metrics.items()}
+    stored: dict[str, Any] = {}
+    for key, value in metrics.items():
+        name = str(key)
+        if not 1 <= len(name) <= MAX_METRIC_NAME_LENGTH:
+            raise ValueError(
+                f"Molecule {molecule_id!r}: metric names must be 1-{MAX_METRIC_NAME_LENGTH} "
+                f"characters, got {name[:20]!r}{'...' if len(name) > 20 else ''}."
+            )
+        item = _metric_value(value, name, molecule_id)
+        if isinstance(item, str) and len(item) > MAX_METRIC_TEXT_LENGTH:
+            raise ValueError(
+                f"Molecule {molecule_id!r}: metric {name!r} has {len(item)} characters; "
+                f"text metrics may have at most {MAX_METRIC_TEXT_LENGTH}."
+            )
+        stored[name] = item
+    return stored
 
 
 def _row(molecule_id: str, value: Any) -> dict[str, Any]:
@@ -546,11 +563,20 @@ def _not_found(id_or_name: str) -> DeepMedChemError:
 
 
 def _paused_error(resource: OptimizationResource) -> DeepMedChemError:
-    reason = f" ({resource.status_reason})" if resource.status_reason else ""
+    label = resource.name or resource.id
+    reason = resource.status_reason or ""
+    if reason == "insufficient_credits":
+        action = "Top up your credits, then call resume()"
+    elif reason.startswith("control_failed"):
+        action = (
+            "A seed upload or strategy change failed; fix it and send it again, or call resume()"
+        )
+    else:
+        action = "Call resume()"
+    shown = f" ({reason})" if reason else ""
     return DeepMedChemError(
-        f"Optimization {resource.name or resource.id} is paused{reason}. Top up your credits, "
-        f"then call resume() (CLI: `dmc optimize resume {resource.name or resource.id}`) and "
-        "ask again.",
+        f"Optimization {label} is paused{shown}. {action} "
+        f"(CLI: `dmc optimize resume {label}`) and ask again.",
         code="optimization_paused",
         status_code=409,
     )
@@ -702,7 +728,7 @@ class Optimizations:
         """Any batch the optimization has issued, pending or already submitted."""
 
         return Batch.model_validate(
-            self._client._request("GET", _path(optimization_id, f"/batches/{batch_id}"))
+            self._client._request("GET", _path(optimization_id, f"/batches/{_segment(batch_id)}"))
         )
 
     def submit(
@@ -1032,7 +1058,9 @@ class AsyncOptimizations:
         """Any batch the optimization has issued, pending or already submitted."""
 
         return Batch.model_validate(
-            await self._client._request("GET", _path(optimization_id, f"/batches/{batch_id}"))
+            await self._client._request(
+                "GET", _path(optimization_id, f"/batches/{_segment(batch_id)}")
+            )
         )
 
     async def submit(
@@ -1473,6 +1501,14 @@ def _drive(
     journal.cleanup()
     result = optimization.results()
     final = optimization.resource
+    if final.status in {"failed", "cancelled"}:
+        stopped = f" ({final.status_reason})" if final.status_reason else ""
+        raise DeepMedChemError(
+            f"Optimization {label} ({optimization.id}) ended {final.status}{stopped} after "
+            f"{final.progress.scored}/{final.progress.budget} molecules were scored. Its results "
+            f"stay readable with client.optimizations.get({optimization.id!r}).results().",
+            code="optimization_not_active",
+        )
     reason = f" ({final.status_reason})" if final.status_reason else ""
     best_row = result.best
     best_score = best_row.score if best_row is not None else None

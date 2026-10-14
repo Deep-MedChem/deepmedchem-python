@@ -1474,14 +1474,21 @@ def _optimize_tell(args) -> int:
     if args.json:
         print(json.dumps(receipt.raw, indent=2))
         return 0
-    counts = ", ".join(f"{count} {status}" for status, count in sorted(receipt.counts.items()))
+    counts = ", ".join(
+        f"{count} {status}"
+        for status, count in sorted(receipt.counts.items())
+        if status != "total" and count
+    )
     if receipt.duplicate:
         print(f"Batch {batch_id} was already accepted with these scores; nothing changed.")
     else:
         print(f"Submitted {len(rows)} scores for batch {batch_id} ({counts}).")
     if receipt.optimization is not None:
         progress = receipt.optimization.progress
-        print(f"{progress.scored}/{progress.budget} molecules scored.")
+        # The receipt is issued before the engine ingests the batch, so the server's count
+        # does not include it yet.
+        scored = progress.scored + (0 if receipt.duplicate else len(rows))
+        print(f"{scored}/{progress.budget} molecules scored.")
     return 0
 
 

@@ -36,6 +36,14 @@ def server():
     return FakeOptimizationServer()
 
 
+def _counts(**nonzero):
+    """The backend's receipt counts: every score status, zero-filled, plus ``total``."""
+    counts = dict.fromkeys(("valid", "failed", "timeout", "filtered", "cancelled"), 0)
+    counts.update(nonzero)
+    counts["total"] = sum(nonzero.values())
+    return counts
+
+
 def _client(handler, **kwargs):
     return Client(
         api_key="token",
@@ -389,10 +397,11 @@ def test_tell_normalizes_and_submits_one_row_per_molecule(server) -> None:
         )
     assert isinstance(receipt, SubmitReceipt)
     assert (
-        receipt.accepted and not receipt.duplicate and receipt.counts == {"valid": 2, "failed": 1}
+        receipt.accepted and not receipt.duplicate and receipt.counts == _counts(valid=2, failed=1)
     )
     assert again.duplicate
-    assert opt.resource.round == 1
+    # The receipt is issued before the worker ingests: the run is ingesting, round unchanged.
+    assert opt.resource.status == "ingesting" and opt.resource.round == 0
     submitted = server.submissions[0]
     assert submitted["scorer"] == scorer
     assert submitted["scores"] == [
@@ -427,7 +436,7 @@ def test_tell_with_mapping_and_batch_id(server) -> None:
         "error": "not returned by scorer",
     }
     assert rows[1]["score"] == -7.0
-    assert receipt.counts == {"failed": 1, "valid": 1}
+    assert receipt.counts == _counts(failed=1, valid=1)
     assert duplicate.duplicate
 
 
@@ -821,7 +830,7 @@ def test_async_client_mirrors_every_operation(sleeps) -> None:
     )
     assert json.loads(server.requests[0].content)["database"] == "freedom-space-5"
     assert [resource.id for resource in listed] == [opt.id]
-    assert receipt.counts == {"valid": 2} and raw.counts == {"valid": 1, "failed": 1}
+    assert receipt.counts == _counts(valid=2) and raw.counts == _counts(valid=1, failed=1)
     assert len(page) == 1 and cursor == "1"
     assert result.best.score == -3.0 and len(result) == 4
     assert retrieved.status == refreshed.status == "completed"
@@ -862,7 +871,7 @@ def test_async_tell_by_batch_id_with_mapping() -> None:
             return first
 
     receipt = asyncio.run(scenario())
-    assert receipt.counts == {"valid": 1, "failed": 1}
+    assert receipt.counts == _counts(valid=1, failed=1)
     assert math.isclose(server.submissions[0]["scores"][0]["score"], 1.0)
 
 
@@ -934,3 +943,86 @@ def test_control_requests_preserve_identity_and_hit_threshold(server, asynchrono
     assert json.loads(controls[0].content)["mode"] == "external"
     assert controls[2].headers["idempotency-key"] == "switch-once"
     assert json.loads(controls[2].content) == {"strategy": "analog_harvest_fast"}
+
+
+# --- correctness fixes (2026-10-12 review) -------------------------------------------
+
+
+def test_optimize_raises_when_the_run_fails_mid_loop(server) -> None:
+    """A run that ends failed must not be reported as a normal result."""
+
+    def failing_after_first_submit(request):
+        response = server(request)
+        if request.url.path.endswith(":submit") and len(server.submissions) == 1:
+            server.fail("opt_test0001")
+        return response
+
+    with _client(failing_after_first_submit) as client, pytest.raises(DeepMedChemError) as error:
+        dmc.optimize(_toy, direction="maximize", budget=8, batch_size=2, name="f", client=client)
+    assert error.value.code == "optimization_not_active"
+    assert "ended failed (engine_crashed)" in str(error.value)
+    assert len(server.submissions) == 1
+
+
+def test_optimize_raises_when_the_run_is_cancelled_between_rounds(server) -> None:
+    """A cancel between rounds (another terminal, the UI) must not look like success."""
+
+    def cancelling_after_first_submit(request):
+        response = server(request)
+        if request.url.path.endswith(":submit") and len(server.submissions) == 1:
+            server.cancel(server.optimizations["opt_test0001"])
+        return response
+
+    with _client(cancelling_after_first_submit) as client, pytest.raises(
+        DeepMedChemError
+    ) as error:
+        dmc.optimize(_toy, direction="maximize", budget=8, batch_size=2, name="c", client=client)
+    assert error.value.code == "optimization_not_active"
+    assert "ended cancelled" in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("reason", "expected", "not_expected"),
+    [
+        ("insufficient_credits", "Top up your credits", None),
+        ("user_requested", "Call resume()", "credits"),
+        ("control_failed: engine error", "send it again", "credits"),
+    ],
+)
+def test_paused_message_matches_the_reason(reason, expected, not_expected) -> None:
+    resource = OptimizationResource.model_validate(
+        {"id": "opt_1", "name": "run", "status": "paused", "status_reason": reason}
+    )
+    message = str(optimization_module._paused_error(resource))
+    assert expected in message
+    if not_expected:
+        assert not_expected not in message
+
+
+def test_batch_id_is_url_quoted(server) -> None:
+    seen = []
+
+    def recording(request):
+        seen.append(request.url.raw_path.decode())
+        return httpx.Response(404, json={"error": {"code": "batch_not_found", "message": "x",
+                                                    "retryable": False, "request_id": "r"}})
+
+    with _client(recording) as client, pytest.raises(DeepMedChemError):
+        client.optimizations.batch("opt_x", "a/b c")
+    assert seen and seen[-1].endswith("/batches/a%2Fb%20c")
+
+
+@pytest.mark.parametrize(
+    ("metrics", "message"),
+    [
+        ({"x" * 65: 1.0}, "metric names must be 1-64"),
+        ({"": 1.0}, "metric names must be 1-64"),
+        ({"pose": "x" * 501}, "at most 500"),
+    ],
+)
+def test_metric_limits_match_the_backend_and_fail_before_upload(metrics, message) -> None:
+    batch = _batch(n=1)
+    with pytest.raises(ValueError, match=message):
+        normalize_scores(batch, [{"score": 1.0, **metrics}])
+    rows = normalize_scores(batch, [{"score": 1.0, "x" * 64: 2.0, "pose": "y" * 500}])
+    assert rows[0]["metrics"] == {"x" * 64: 2.0, "pose": "y" * 500}
