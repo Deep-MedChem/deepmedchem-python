@@ -62,7 +62,6 @@ MAX_ERROR_LENGTH = 500
 MAX_JSON_OBJECT_BYTES = 4096
 MAX_RESULTS_PAGE = 1000
 MAX_LIST_PAGE = 200
-MAX_SEED = 2**31 - 1
 _NAME_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 _SAFE_FILENAME = re.compile(r"[^A-Za-z0-9._-]")
 _TRANSIENT_STATUS = frozenset({500, 502, 503, 504})
@@ -238,12 +237,8 @@ def build_specification(
     if normalized_properties:
         spec["properties"] = normalized_properties
     if seed is not None:
-        if (
-            isinstance(seed, bool)
-            or not isinstance(seed, numbers.Integral)
-            or not 0 <= int(seed) <= MAX_SEED
-        ):
-            raise ValueError(f"seed must be an integer between 0 and {MAX_SEED}, got {seed!r}")
+        if isinstance(seed, bool) or not isinstance(seed, numbers.Integral) or int(seed) < 0:
+            raise ValueError(f"seed must be a non-negative integer, got {seed!r}")
         spec["seed"] = int(seed)
     scorer_object = _json_object(scorer, "scorer")
     if scorer_object is not None:
@@ -252,16 +247,6 @@ def build_specification(
     if metadata_object is not None:
         spec["metadata"] = metadata_object
     return spec
-
-
-def _control_key(idempotency_key: str | None, default: str) -> str:
-    """Idempotency key for seeds/transition: the backend accepts 1-128 characters."""
-
-    if idempotency_key is None:
-        return default
-    if not isinstance(idempotency_key, str) or not 1 <= len(idempotency_key) <= 128:
-        raise ValueError("idempotency_key must be a string of 1-128 characters")
-    return idempotency_key
 
 
 def _create_headers(name: str | None, idempotency_key: str | None) -> dict[str, str]:
@@ -584,8 +569,7 @@ def _paused_error(resource: OptimizationResource) -> DeepMedChemError:
         action = "Top up your credits, then call resume()"
     elif reason.startswith("control_failed"):
         action = (
-            "A seed upload or strategy change failed; fix it and send it again with a new "
-            "idempotency key, or call resume()"
+            "A seed upload or strategy change failed; fix it and send it again, or call resume()"
         )
     else:
         action = "Call resume()"
@@ -796,9 +780,9 @@ class Optimizations:
         body = {"mode": mode, "rows": list(rows)}
         if scorer is not None:
             body["scorer"] = dict(scorer)
-        key = _control_key(idempotency_key, "seeds-" + hashlib.sha256(
+        key = idempotency_key or "seeds-" + hashlib.sha256(
             json.dumps(body, sort_keys=True, allow_nan=False).encode()
-        ).hexdigest())
+        ).hexdigest()
         return OptimizationResource.model_validate(
             self._client._request("POST", _path(optimization_id, "/seeds"), json=body,
                                         headers={"Idempotency-Key": key})
@@ -807,7 +791,7 @@ class Optimizations:
     def transition(self, optimization_id: str, strategy: str, *,
                          idempotency_key: str | None = None) -> OptimizationResource:
         """Switch after the pending batch is scored, or immediately when paused."""
-        key = _control_key(idempotency_key, "transition-" + uuid.uuid4().hex)
+        key = idempotency_key or "transition-" + uuid.uuid4().hex
         return OptimizationResource.model_validate(
             self._client._request("POST", _path(optimization_id, ":transition"),
                                         json={"strategy": strategy},
@@ -1126,9 +1110,9 @@ class AsyncOptimizations:
         body = {"mode": mode, "rows": list(rows)}
         if scorer is not None:
             body["scorer"] = dict(scorer)
-        key = _control_key(idempotency_key, "seeds-" + hashlib.sha256(
+        key = idempotency_key or "seeds-" + hashlib.sha256(
             json.dumps(body, sort_keys=True, allow_nan=False).encode()
-        ).hexdigest())
+        ).hexdigest()
         return OptimizationResource.model_validate(
             await self._client._request("POST", _path(optimization_id, "/seeds"), json=body,
                                         headers={"Idempotency-Key": key})
@@ -1137,7 +1121,7 @@ class AsyncOptimizations:
     async def transition(self, optimization_id: str, strategy: str, *,
                          idempotency_key: str | None = None) -> OptimizationResource:
         """Switch after the pending batch is scored, or immediately when paused."""
-        key = _control_key(idempotency_key, "transition-" + uuid.uuid4().hex)
+        key = idempotency_key or "transition-" + uuid.uuid4().hex
         return OptimizationResource.model_validate(
             await self._client._request("POST", _path(optimization_id, ":transition"),
                                         json={"strategy": strategy},

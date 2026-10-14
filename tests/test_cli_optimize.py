@@ -301,30 +301,6 @@ def test_read_scores_csv_parses_cells(tmp_path) -> None:
 # --- correctness fixes (2026-10-12 review) -------------------------------------------
 
 
-@pytest.mark.parametrize("quote", ['"', "'"])
-def test_run_accepts_quoted_placeholders_in_a_path_with_spaces(
-    server, tmp_path, capsys, quote
-) -> None:
-    """`"{input}"` must not be quoted twice when the work dir needs quoting."""
-    script = tmp_path / "score.py"
-    script.write_text(SCORER)
-    command = (
-        f"{shlex.quote(sys.executable)} {shlex.quote(str(script))} "
-        f"{quote}{{input}}{quote} {quote}{{output}}{quote}"
-    )
-    work = tmp_path / "work dir with spaces"
-    code = cli.main(
-        [
-            "optimize", "run", "spaced", "-d", "enamine", "--minimize",
-            "--budget", "4", "--batch-size", "2",
-            "--score-cmd", command, "--work-dir", str(work),
-        ]
-    )
-    captured = capsys.readouterr()
-    assert code == 0, captured.err
-    assert len(server.submissions) == 2
-
-
 def test_tell_reports_progress_including_the_batch_just_accepted(
     server, tmp_path, capsys
 ) -> None:

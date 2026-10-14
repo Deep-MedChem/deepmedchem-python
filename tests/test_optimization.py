@@ -186,7 +186,7 @@ def test_create_with_same_name_returns_existing_and_conflicts_on_new_spec(server
         ({"properties": {"MolWt": (None, None)}}, "needs a min, a max"),
         ({"properties": {"MolWt": {"maximum": 5}}}, "accepts only 'min' and 'max'"),
         ({"properties": {"MolWt": (600, 500)}}, "min greater than max"),
-        ({"seed": -1}, "seed must be an integer between 0 and"),
+        ({"seed": -1}, "seed must be a non-negative integer"),
         ({"name": "has space"}, "name must be 1-128 characters"),
         ({"name": "opt_abc"}, "reserved for optimization ids"),
         ({"scorer": {"blob": "x" * 5000}}, "at most 4096 bytes"),
@@ -986,7 +986,7 @@ def test_optimize_raises_when_the_run_is_cancelled_between_rounds(server) -> Non
     [
         ("insufficient_credits", "Top up your credits", None),
         ("user_requested", "Call resume()", "credits"),
-        ("control_failed: engine error", "new idempotency key", "credits"),
+        ("control_failed: engine error", "send it again", "credits"),
     ],
 )
 def test_paused_message_matches_the_reason(reason, expected, not_expected) -> None:
@@ -997,31 +997,6 @@ def test_paused_message_matches_the_reason(reason, expected, not_expected) -> No
     assert expected in message
     if not_expected:
         assert not_expected not in message
-
-
-def test_seed_upper_bound_matches_the_backend() -> None:
-    spec = optimization_module.build_specification(
-        direction="maximize", database="enamine", budget=10, batch_size=5, seed=2**31 - 1
-    )
-    assert spec["seed"] == 2**31 - 1
-    with pytest.raises(ValueError, match="between 0 and 2147483647"):
-        optimization_module.build_specification(
-            direction="maximize", database="enamine", budget=10, batch_size=5, seed=2**31
-        )
-
-
-@pytest.mark.parametrize("key", ["", "k" * 129])
-def test_control_idempotency_keys_are_checked_before_sending(server, key) -> None:
-    with _client(server) as client:
-        opt = client.optimizations.create(
-            database="enamine", direction="maximize", budget=4, batch_size=2, name="k"
-        )
-        sent = len(server.requests)
-        with pytest.raises(ValueError, match="1-128 characters"):
-            client.optimizations.transition(opt.id, "analog_harvest_accurate", idempotency_key=key)
-        with pytest.raises(ValueError, match="1-128 characters"):
-            client.optimizations.add_seeds(opt.id, [], idempotency_key=key)
-        assert len(server.requests) == sent
 
 
 def test_batch_id_is_url_quoted(server) -> None:

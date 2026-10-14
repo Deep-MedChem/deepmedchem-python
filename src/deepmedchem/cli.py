@@ -1084,19 +1084,9 @@ def read_scores_csv(path: str | Path) -> dict[str, dict[str, Any]]:
 
 
 def _substitute(template: str, input_path: Path, output_path: Path) -> str:
-    """Fill {input}/{output} with shell-quoted paths.
-
-    A placeholder the user already wrapped in quotes ("{input}" or '{input}') is replaced
-    together with its quotes, so the path is never quoted twice.
-    """
-    for name, path in (("input", input_path), ("output", output_path)):
-        quoted = shlex.quote(str(path))
-        template = re.sub(
-            r"([\"'])\{" + name + r"\}\1|\{" + name + r"\}",
-            lambda _match, quoted=quoted: quoted,
-            template,
-        )
-    return template
+    return template.replace("{input}", shlex.quote(str(input_path))).replace(
+        "{output}", shlex.quote(str(output_path))
+    )
 
 
 def _score_with_command(
