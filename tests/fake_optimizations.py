@@ -29,6 +29,8 @@ _SPEC_FIELDS = {
     "strategy",
     "filters",
     "properties",
+    "constraints",
+    "objectives",
     "seed",
     "scorer",
     "metadata",

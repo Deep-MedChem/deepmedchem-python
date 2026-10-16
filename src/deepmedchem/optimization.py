@@ -1,12 +1,12 @@
-"""Navigator optimizations: ask for molecules, score them with your own scorer, tell the scores.
+"""Navigator optimizations with explicit chemistry and optional external scoring.
 
-Navigator proposes a batch of molecules from a synthon space on DeepMedChem's servers. Your
-scorer (docking, an ML model, anything that maps a molecule to one number) scores the batch
-locally, and the scores go back to the server, which learns from them and proposes the next
-batch until the budget is spent.
+Use constraints for supported eligibility requirements and objectives for internal
+RDKit, similarity and ADMET preferences. Navigator guides tuple acquisition before
+verifying products. A callback supplies only custom calculations such as docking.
+Built-in-only runs complete on the worker without a client scorer.
 
-The simplest entry point is :func:`optimize`; :class:`Optimization` gives manual ask/tell control,
-and ``client.optimizations`` exposes the individual endpoints.
+The simplest entry point is optimize; Optimization provides manual ask/tell control,
+and client.optimizations exposes individual endpoints.
 """
 
 from __future__ import annotations
@@ -152,7 +152,30 @@ def _properties(properties: Any) -> dict[str, dict[str, int | float]] | None:
     return normalized
 
 
-def _json_object(value: Any, name: str) -> dict[str, Any] | None:
+def _constraints(value: Any) -> dict[str, Any] | None:
+    """Keep the client chemistry-free; the service validates IDs and query semantics."""
+    data = _json_object(value, "constraints", max_bytes=128 * 1024)
+    if not data:
+        return None
+    unknown = set(data) - {"properties", "structures", "predicted_properties"}
+    if unknown:
+        raise ValueError(
+            f"Unsupported optimization constraints: {sorted(unknown)}. "
+            "Consult catalog()['optimization']['constraints'] for deployed capabilities."
+        )
+    if "predicted_properties" in data and not isinstance(data["predicted_properties"], list):
+        raise ValueError("constraints.predicted_properties must be a list")
+    if "properties" in data and not isinstance(data["properties"], list):
+        raise ValueError("constraints.properties must be a list of typed property conditions")
+    if "structures" in data and not isinstance(data["structures"], dict):
+        raise ValueError("constraints.structures must be an object with all/any/none groups")
+    # Return a detached snapshot, including nested data, for resumable specifications.
+    return json.loads(json.dumps(data, allow_nan=False))
+
+
+def _json_object(
+    value: Any, name: str, *, max_bytes: int = MAX_JSON_OBJECT_BYTES
+) -> dict[str, Any] | None:
     if value is None:
         return None
     if not isinstance(value, Mapping):
@@ -162,8 +185,8 @@ def _json_object(value: Any, name: str) -> dict[str, Any] | None:
         encoded = json.dumps(data, sort_keys=True, separators=(",", ":"), allow_nan=False)
     except (TypeError, ValueError) as error:
         raise ValueError(f"{name} must contain only JSON values: {error}") from error
-    if len(encoded.encode("utf-8")) > MAX_JSON_OBJECT_BYTES:
-        raise ValueError(f"{name} must be at most {MAX_JSON_OBJECT_BYTES} bytes of JSON")
+    if len(encoded.encode("utf-8")) > max_bytes:
+        raise ValueError(f"{name} must be at most {max_bytes} bytes of JSON")
     return data
 
 
@@ -189,6 +212,8 @@ def build_specification(
     strategy: str | None = None,
     filters: str | None = None,
     properties: Mapping[str, Any] | None = None,
+    constraints: Mapping[str, Any] | None = None,
+    objectives: list[Mapping[str, Any]] | None = None,
     seed: int | None = None,
     scorer: Mapping[str, Any] | None = None,
     metadata: Mapping[str, Any] | None = None,
@@ -233,6 +258,15 @@ def build_specification(
         if filters not in FILTERS:
             raise ValueError(f"filters must be None or 'druglike', got {filters!r}")
         spec["filters"] = filters
+    if objectives is not None:
+        if not isinstance(objectives, list) or not 1 <= len(objectives) <= 16:
+            raise ValueError("objectives must be a list of 1 to 16 objective terms")
+        if direction != "maximize":
+            raise ValueError("normalized objectives require direction='maximize'")
+        spec["objectives"] = [_json_object(term, "objective term") for term in objectives]
+    normalized_constraints = _constraints(constraints)
+    if normalized_constraints:
+        spec["constraints"] = normalized_constraints
     normalized_properties = _properties(properties)
     if normalized_properties:
         spec["properties"] = normalized_properties
@@ -623,6 +657,8 @@ class Optimizations:
         strategy: str | None = None,
         filters: str | None = None,
         properties: Mapping[str, Any] | None = None,
+        constraints: Mapping[str, Any] | None = None,
+        objectives: list[Mapping[str, Any]] | None = None,
         seed: int | None = None,
         scorer: Mapping[str, Any] | None = None,
         metadata: Mapping[str, Any] | None = None,
@@ -643,6 +679,8 @@ class Optimizations:
             strategy=strategy,
             filters=filters,
             properties=properties,
+            constraints=constraints,
+            objectives=objectives,
             seed=seed,
             scorer=scorer,
             metadata=metadata,
@@ -961,6 +999,8 @@ class AsyncOptimizations:
         strategy: str | None = None,
         filters: str | None = None,
         properties: Mapping[str, Any] | None = None,
+        constraints: Mapping[str, Any] | None = None,
+        objectives: list[Mapping[str, Any]] | None = None,
         seed: int | None = None,
         scorer: Mapping[str, Any] | None = None,
         metadata: Mapping[str, Any] | None = None,
@@ -979,6 +1019,8 @@ class AsyncOptimizations:
             strategy=strategy,
             filters=filters,
             properties=properties,
+            constraints=constraints,
+            objectives=objectives,
             seed=seed,
             scorer=scorer,
             metadata=metadata,
@@ -1468,7 +1510,7 @@ def _drive(
             receipt = _submit_with_retries(optimization, batch.id, rows, scorer)
             journal.discard(batch.id)
             saved = False
-            for row in rows:
+            for row in ([] if resource.specification.get("objectives") else rows):
                 if row.get("status") == "valid" and row.get("score") is not None:
                     if _better(direction, float(row["score"]), best):
                         best = float(row["score"])
@@ -1521,9 +1563,9 @@ def _drive(
 
 
 def optimize(
-    score: Callable[[list[str]], Any],
+    score: Callable[[list[str]], Any] | None = None,
     *,
-    direction: str,
+    direction: str | None = None,
     database: str = "enamine",
     budget: int = 1000,
     batch_size: int = 100,
@@ -1532,27 +1574,49 @@ def optimize(
     hit_threshold: float | None = None,
     filters: str | None = None,
     properties: Mapping[str, Any] | None = None,
+    constraints: Mapping[str, Any] | None = None,
+    objectives: list[Mapping[str, Any]] | None = None,
     seed: int | None = None,
     scorer: Mapping[str, Any] | None = None,
     metadata: Mapping[str, Any] | None = None,
     progress: bool = True,
     client: Client | None = None,
 ) -> OptimizationResult:
-    """Optimize ``score`` over a chemical space with Navigator and return every observation.
+    """Optimize internal objective terms and/or a custom score with Navigator.
 
     ``score`` takes a list of SMILES and returns one value per SMILES, in order: a number, None
     (or NaN) for a molecule it could not score, or a dict ``{"score": x, **metrics}``. If it
     raises, nothing is submitted and the batch stays pending.
+
+    Put supported hard requirements in ``properties=`` or ``constraints=`` rather than
+    returning penalty scores. The service verifies assembled products before asking your
+    callback to score them. Constraints guide synthon sampling before product verification;
+    consult ``catalog()["optimization"]["constraints"]`` for deployment support.
+    The callback should compute the custom objective, such as docking or your own model.
+
+    ``objectives`` declares normalized built-in terms and, for mixed runs, an external
+    term. Omit ``score`` for built-in-only runs. These aggregates are maximized; legacy
+    external-only calls must explicitly declare ``direction``.
 
     ``name`` makes the call resumable: re-running it after Ctrl-C, a crash or a reboot
     continues the same optimization, and scores that were computed but not uploaded are
     re-submitted from a local journal instead of being recomputed.
     """
 
-    if not callable(score):
+    if objectives is not None and (
+        not isinstance(objectives, list) or not 1 <= len(objectives) <= 16
+        or not all(isinstance(term, Mapping) for term in objectives)
+    ):
+        raise ValueError("objectives must be a list of 1 to 16 objective mappings")
+    needs_external = not objectives or any(term.get("type") == "external" for term in objectives)
+    if needs_external and not callable(score):
         raise TypeError(
             "score must be a function that takes a list of SMILES and returns one score per SMILES"
         )
+    if direction is None and objectives:
+        direction = "maximize"
+    if not needs_external and score is not None:
+        raise ValueError("a score callback requires an explicit external objective term")
     _check_direction(direction)
     _check_name(name)
     owned = client is None
@@ -1568,6 +1632,8 @@ def optimize(
             hit_threshold=hit_threshold,
             filters=filters,
             properties=properties,
+            constraints=constraints,
+            objectives=objectives,
             seed=seed,
             scorer=scorer,
             metadata=metadata,
