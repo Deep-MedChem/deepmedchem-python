@@ -1130,3 +1130,8 @@ def test_callback_requires_explicit_external_term():
         dmc.optimize(lambda s: [1] * len(s), objectives=OBJECTIVES)
     with pytest.raises(TypeError, match="score"):
         dmc.optimize(objectives=[*OBJECTIVES, {"type": "external", "lower": -10, "upper": 0}])
+
+
+def test_external_only_still_requires_an_explicit_direction():
+    with pytest.raises(ValueError, match="direction"):
+        dmc.optimize(lambda smiles: [1] * len(smiles))

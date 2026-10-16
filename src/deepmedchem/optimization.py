@@ -1,12 +1,12 @@
-"""Navigator optimizations: ask for molecules, score them with your own scorer, tell the scores.
+"""Navigator optimizations with explicit chemistry and optional external scoring.
 
-Navigator proposes a batch of molecules from a synthon space on DeepMedChem's servers. Your
-scorer (docking, an ML model, anything that maps a molecule to one number) scores the batch
-locally, and the scores go back to the server, which learns from them and proposes the next
-batch until the budget is spent.
+Use constraints for supported eligibility requirements and objectives for internal
+RDKit, similarity and ADMET preferences. Navigator guides tuple acquisition before
+verifying products. A callback supplies only custom calculations such as docking.
+Built-in-only runs complete on the worker without a client scorer.
 
-The simplest entry point is :func:`optimize`; :class:`Optimization` gives manual ask/tell control,
-and ``client.optimizations`` exposes the individual endpoints.
+The simplest entry point is optimize; Optimization provides manual ask/tell control,
+and client.optimizations exposes individual endpoints.
 """
 
 from __future__ import annotations
@@ -1565,7 +1565,7 @@ def _drive(
 def optimize(
     score: Callable[[list[str]], Any] | None = None,
     *,
-    direction: str = "maximize",
+    direction: str | None = None,
     database: str = "enamine",
     budget: int = 1000,
     batch_size: int = 100,
@@ -1582,7 +1582,7 @@ def optimize(
     progress: bool = True,
     client: Client | None = None,
 ) -> OptimizationResult:
-    """Optimize ``score`` over a chemical space with Navigator and return every observation.
+    """Optimize internal objective terms and/or a custom score with Navigator.
 
     ``score`` takes a list of SMILES and returns one value per SMILES, in order: a number, None
     (or NaN) for a molecule it could not score, or a dict ``{"score": x, **metrics}``. If it
@@ -1593,6 +1593,10 @@ def optimize(
     callback to score them. Constraints guide synthon sampling before product verification;
     consult ``catalog()["optimization"]["constraints"]`` for deployment support.
     The callback should compute the custom objective, such as docking or your own model.
+
+    ``objectives`` declares normalized built-in terms and, for mixed runs, an external
+    term. Omit ``score`` for built-in-only runs. These aggregates are maximized; legacy
+    external-only calls must explicitly declare ``direction``.
 
     ``name`` makes the call resumable: re-running it after Ctrl-C, a crash or a reboot
     continues the same optimization, and scores that were computed but not uploaded are
@@ -1609,6 +1613,8 @@ def optimize(
         raise TypeError(
             "score must be a function that takes a list of SMILES and returns one score per SMILES"
         )
+    if direction is None and objectives:
+        direction = "maximize"
     if not needs_external and score is not None:
         raise ValueError("a score callback requires an explicit external objective term")
     _check_direction(direction)

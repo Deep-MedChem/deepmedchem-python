@@ -497,7 +497,7 @@ def _add_optimize_parser(commands) -> None:
         "run",
         help="Run the loop with a scoring command until the budget is spent",
         description=(
-            "Create (or resume) the optimization NAME and score every batch with --score-cmd. "
+            "Create (or resume) NAME with internal --objectives and/or an external --score-cmd. "
             "The command receives {input}, a CSV with id,smiles, and must write {output}, a CSV "
             "with id,score and optionally status, error and metric columns. Re-running the same "
             "command resumes."
