@@ -213,41 +213,45 @@ the original search response, so both `hit.price` and the aligned `result.prices
 available without another API request. Databases without price estimates return `None`; run
 `dmc databases` for the current list and the vendor address to request a binding quote.
 
-## Optimize with your own scorer
+## Optimize with explicit chemistry and optional custom scores
 
-Navigator proposes molecules from a chemical space, your function scores them locally (docking,
-an ML model, an RDKit property), and the scores steer the next proposals until the budget is
-spent. Only SMILES and numbers cross the network.
+Put supported structures and property limits in `constraints=` / `properties=`, and supported
+preferences in `objectives=`. Navigator guides synthon tuple generation and ranking, then
+verifies assembled products. Docking and proprietary models remain callbacks.
 
 ```python
 import deepmedchem as dmc
-from rdkit import Chem
-from rdkit.Chem import QED
 
-def score(smiles):  # one value per SMILES, None for a molecule you cannot score
-    return [QED.qed(m) if (m := Chem.MolFromSmiles(s)) else None for s in smiles]
-
-result = dmc.optimize(score, direction="maximize", database="enamine",
-                      budget=500, batch_size=50, name="qed-demo")
-print(result.top(10))
+result = dmc.optimize(
+    database="enamine", budget=500, batch_size=50, name="qed-amino-acids",
+    properties={"MolWt": (None, 400), "MolLogP": (0, 3)},
+    constraints={"structures": {"all": [{"pattern_id": "alpha-amino-acid/v1"}]}},
+    objectives=[{"type": "property", "property_id": "rdkit.qed",
+                 "direction": "maximize", "lower": 0, "upper": 1}],
+)
 result.to_csv("qed_demo.csv")
 ```
 
-`direction` is required and scores are never negated. `name=` makes the call resumable: re-run it
-after Ctrl-C or a crash and it continues, re-sending scores that were computed but not uploaded.
-A scorer may return dicts such as `{"score": -9.1, "cnn_score": 0.82}`; the extra keys are stored
-as metrics. For manual control use `client.optimizations.create(...)` with `opt.ask()` and
-`opt.tell(batch, scores)`; for shell scorers and HPC queues use
-`dmc optimize run NAME --score-cmd 'CMD {input} {output}'` or `dmc optimize ask`/`tell`.
-Worked examples (RDKit, your own ML model, GNINA docking) are in
-[`examples/optimization`](examples/optimization/README.md).
+No callback or client RDKit installation is needed for built-in-only runs. Check
+`dmc.catalog()["optimization"]` for the deployment's enabled constraints, objectives and ADMET
+endpoints. Typed structure requirements use synthon anchors, including reaction junctions;
+released descriptor caches and reaction margins guide property-feasible sampling. Final product
+checks enforce counts, chirality, exclusions and exact descriptor bounds. The engine reports
+its actual acquisition path and any fallback in `optimization.engine.constraint_acquisition`.
 
-Put supported hard requirements in `properties=` and `constraints=`, keeping the callback for
-custom scoring such as docking. Structured constraints require
-`dmc.catalog()["optimization"]["constraints"]["enabled"]`; the first implementation checks
-assembled products before custom scoring and reports `post_assembly_only`. It does not yet
-accelerate rare-motif acquisition or expose ADMET thresholds and built-in property objectives.
-The CLI accepts the same constraint object through `--constraints constraints.json`.
+For docking, keep the callback focused on docking:
+
+```python
+result = dmc.optimize(docking_score, direction="minimize", database="enamine",
+                      budget=500, batch_size=50, properties={"MolWt": (None, 400)})
+```
+
+A callback takes a SMILES list and returns one score per molecule, optionally with metrics.
+`name=` resumes an unchanged specification; local score journals prevent repeated external
+scoring after an interrupted upload. The sync/async create APIs support the same parameters.
+The CLI accepts `--constraints constraints.json` and `--objectives objectives.json`; omit
+`--score-cmd` for built-in-only runs. See [optimization examples](examples/optimization/README.md)
+for normalized mixed objectives, molecular similarity, ADMET and docking.
 
 
 ## Filters and virtual subsets

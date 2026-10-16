@@ -524,7 +524,6 @@ def _add_optimize_parser(commands) -> None:
     run.add_argument("--batch-size", type=int, default=100, help="Molecules per batch")
     run.add_argument(
         "--score-cmd",
-        required=True,
         metavar="CMD",
         help="Shell command with {input} and {output} placeholders, "
         "e.g. './dock.sh {input} {output}'",
@@ -543,6 +542,7 @@ def _add_optimize_parser(commands) -> None:
         metavar="FILE.json",
         help="Typed descriptor/structure constraints checked before custom scoring",
     )
+    run.add_argument("--objectives", metavar="FILE.json", help="Built-in or mixed normalized objective terms")
     run.add_argument("--seed", type=int, help="Engine seed (default 0)")
     run.add_argument(
         "--scorer", metavar="JSON", help='Scorer identity to pin, e.g. \'{"name": "glide"}\''
@@ -1388,7 +1388,13 @@ def _print_observations(result: OptimizationResult, *, shown: int) -> None:
 
 
 def _optimize_run(args) -> int:
-    if "{input}" not in args.score_cmd or "{output}" not in args.score_cmd:
+    objectives = json.loads(Path(args.objectives).read_text()) if args.objectives else None
+    needs_external = not objectives or any(t.get("type") == "external" for t in objectives)
+    if needs_external and not args.score_cmd:
+        raise ValueError("--score-cmd is required for an external objective")
+    if not needs_external and args.score_cmd:
+        raise ValueError("--score-cmd requires an external term in --objectives")
+    if args.score_cmd and ("{input}" not in args.score_cmd or "{output}" not in args.score_cmd):
         raise ValueError("--score-cmd must contain both {input} and {output}")
     scorer = _json_option(args.scorer, "--scorer")
     with _open_client(args) as client:
@@ -1401,6 +1407,7 @@ def _optimize_run(args) -> int:
             strategy=args.strategy,
             filters="druglike" if args.druglike else None,
             properties=_property_options(args.property),
+            objectives=objectives,
             constraints=(
                 json.loads(Path(args.constraints).read_text(encoding="utf-8"))
                 if args.constraints

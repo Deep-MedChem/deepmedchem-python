@@ -344,3 +344,20 @@ def test_run_sends_constraints_file(server, tmp_path):
     )
     assert code == 0
     assert json.loads(server.requests[0].content)["constraints"] == constraints
+
+
+def test_builtin_cli_needs_no_score_command(server, tmp_path, monkeypatch):
+    terms = [{"type": "property", "property_id": "rdkit.qed", "lower": 0, "upper": 1}]
+    path = tmp_path / "objectives.json"
+    path.write_text(json.dumps(terms))
+    original = server.create
+    def completed(request):
+        body = original(request).json()
+        state = server.optimizations[body["id"]]
+        state["resource"].update(status="completed", status_reason="budget_exhausted")
+        state["batch"] = None
+        return httpx.Response(202, json=state["resource"])
+    monkeypatch.setattr(server, "create", completed)
+    assert cli.main(["optimize", "run", "internal", "-d", "enamine", "--maximize", "--objectives", str(path)]) == 0
+    assert json.loads(server.requests[0].content)["objectives"] == terms
+    assert not any(":submit" in str(r.url) for r in server.requests)

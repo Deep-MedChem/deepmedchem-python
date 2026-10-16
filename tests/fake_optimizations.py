@@ -30,6 +30,7 @@ _SPEC_FIELDS = {
     "filters",
     "properties",
     "constraints",
+    "objectives",
     "seed",
     "scorer",
     "metadata",

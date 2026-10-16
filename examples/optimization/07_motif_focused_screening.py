@@ -1,9 +1,8 @@
 """Search a required motif directly, then rank the returned hits locally.
 
-Optimization deployments advertising ``optimization.constraints.enabled`` can now enforce
-structure requirements before custom scoring. That gate currently runs after assembly; it
-cannot yet focus synthon generation on a rare motif. This search-first example remains useful
-when a narrowly defined motif would otherwise produce short or empty optimization batches.
+Guided optimization can enforce the same requirement through constraints.structures,
+restricting synthon tuple generation before final product checks. This separate direct-search
+example is useful when you want a bounded hit list rather than an iterative campaign.
 
 Never use a zero-valued callback reward as a substitute for a required motif. Substructure hit
 IDs also cannot be assumed to be Navigator seed IDs across different release lineages.

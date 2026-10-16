@@ -157,13 +157,14 @@ def _constraints(value: Any) -> dict[str, Any] | None:
     data = _json_object(value, "constraints", max_bytes=128 * 1024)
     if not data:
         return None
-    unknown = set(data) - {"properties", "structures"}
+    unknown = set(data) - {"properties", "structures", "predicted_properties"}
     if unknown:
         raise ValueError(
             f"Unsupported optimization constraints: {sorted(unknown)}. "
-            "Consult catalog()['optimization']['constraints']; ADMET constraints "
-            "are not offered by this version."
+            "Consult catalog()['optimization']['constraints'] for deployed capabilities."
         )
+    if "predicted_properties" in data and not isinstance(data["predicted_properties"], list):
+        raise ValueError("constraints.predicted_properties must be a list")
     if "properties" in data and not isinstance(data["properties"], list):
         raise ValueError("constraints.properties must be a list of typed property conditions")
     if "structures" in data and not isinstance(data["structures"], dict):
@@ -212,6 +213,7 @@ def build_specification(
     filters: str | None = None,
     properties: Mapping[str, Any] | None = None,
     constraints: Mapping[str, Any] | None = None,
+    objectives: list[Mapping[str, Any]] | None = None,
     seed: int | None = None,
     scorer: Mapping[str, Any] | None = None,
     metadata: Mapping[str, Any] | None = None,
@@ -256,6 +258,12 @@ def build_specification(
         if filters not in FILTERS:
             raise ValueError(f"filters must be None or 'druglike', got {filters!r}")
         spec["filters"] = filters
+    if objectives is not None:
+        if not isinstance(objectives, list) or not 1 <= len(objectives) <= 16:
+            raise ValueError("objectives must be a list of 1 to 16 objective terms")
+        if direction != "maximize":
+            raise ValueError("normalized objectives require direction='maximize'")
+        spec["objectives"] = [_json_object(term, "objective term") for term in objectives]
     normalized_constraints = _constraints(constraints)
     if normalized_constraints:
         spec["constraints"] = normalized_constraints
@@ -650,6 +658,7 @@ class Optimizations:
         filters: str | None = None,
         properties: Mapping[str, Any] | None = None,
         constraints: Mapping[str, Any] | None = None,
+        objectives: list[Mapping[str, Any]] | None = None,
         seed: int | None = None,
         scorer: Mapping[str, Any] | None = None,
         metadata: Mapping[str, Any] | None = None,
@@ -671,6 +680,7 @@ class Optimizations:
             filters=filters,
             properties=properties,
             constraints=constraints,
+            objectives=objectives,
             seed=seed,
             scorer=scorer,
             metadata=metadata,
@@ -990,6 +1000,7 @@ class AsyncOptimizations:
         filters: str | None = None,
         properties: Mapping[str, Any] | None = None,
         constraints: Mapping[str, Any] | None = None,
+        objectives: list[Mapping[str, Any]] | None = None,
         seed: int | None = None,
         scorer: Mapping[str, Any] | None = None,
         metadata: Mapping[str, Any] | None = None,
@@ -1009,6 +1020,7 @@ class AsyncOptimizations:
             filters=filters,
             properties=properties,
             constraints=constraints,
+            objectives=objectives,
             seed=seed,
             scorer=scorer,
             metadata=metadata,
@@ -1498,7 +1510,7 @@ def _drive(
             receipt = _submit_with_retries(optimization, batch.id, rows, scorer)
             journal.discard(batch.id)
             saved = False
-            for row in rows:
+            for row in ([] if resource.specification.get("objectives") else rows):
                 if row.get("status") == "valid" and row.get("score") is not None:
                     if _better(direction, float(row["score"]), best):
                         best = float(row["score"])
@@ -1551,9 +1563,9 @@ def _drive(
 
 
 def optimize(
-    score: Callable[[list[str]], Any],
+    score: Callable[[list[str]], Any] | None = None,
     *,
-    direction: str,
+    direction: str = "maximize",
     database: str = "enamine",
     budget: int = 1000,
     batch_size: int = 100,
@@ -1563,6 +1575,7 @@ def optimize(
     filters: str | None = None,
     properties: Mapping[str, Any] | None = None,
     constraints: Mapping[str, Any] | None = None,
+    objectives: list[Mapping[str, Any]] | None = None,
     seed: int | None = None,
     scorer: Mapping[str, Any] | None = None,
     metadata: Mapping[str, Any] | None = None,
@@ -1577,7 +1590,7 @@ def optimize(
 
     Put supported hard requirements in ``properties=`` or ``constraints=`` rather than
     returning penalty scores. The service verifies assembled products before asking your
-    callback to score them. Structure constraints currently use post-assembly filtering;
+    callback to score them. Constraints guide synthon sampling before product verification;
     consult ``catalog()["optimization"]["constraints"]`` for deployment support.
     The callback should compute the custom objective, such as docking or your own model.
 
@@ -1586,10 +1599,18 @@ def optimize(
     re-submitted from a local journal instead of being recomputed.
     """
 
-    if not callable(score):
+    if objectives is not None and (
+        not isinstance(objectives, list) or not 1 <= len(objectives) <= 16
+        or not all(isinstance(term, Mapping) for term in objectives)
+    ):
+        raise ValueError("objectives must be a list of 1 to 16 objective mappings")
+    needs_external = not objectives or any(term.get("type") == "external" for term in objectives)
+    if needs_external and not callable(score):
         raise TypeError(
             "score must be a function that takes a list of SMILES and returns one score per SMILES"
         )
+    if not needs_external and score is not None:
+        raise ValueError("a score callback requires an explicit external objective term")
     _check_direction(direction)
     _check_name(name)
     owned = client is None
@@ -1606,6 +1627,7 @@ def optimize(
             filters=filters,
             properties=properties,
             constraints=constraints,
+            objectives=objectives,
             seed=seed,
             scorer=scorer,
             metadata=metadata,

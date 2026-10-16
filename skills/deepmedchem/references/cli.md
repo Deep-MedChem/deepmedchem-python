@@ -148,6 +148,10 @@ dmc order shape_hits.csv --get-quote --amount-mg 5 --no-open
 
 `dmc optimize run ... --constraints constraints.json --property MolWt=:400` sends the JSON
 constraint object alongside the custom `--score-cmd`. Check optimization catalog support first.
-The object accepts `properties` (typed registry conditions) and `structures` (`all`, `any`,
-`none`). The initial implementation verifies products after assembly; it does not promise
-synthon-level filtering or expose ADMET thresholds. Reusing a name with changed constraints fails.
+The object accepts typed `properties`, `structures` (`all`, `any`, `none`) and advertised
+`predicted_properties`. Guided tuple acquisition precedes final product verification. Reusing
+a name with changed constraints or objective terms fails.
+
+`--objectives objectives.json` supplies normalized built-in or mixed terms. With `--maximize`,
+omit `--score-cmd` for a built-in-only run. When mixing docking with built-ins, include an
+`external` term; the command returns raw docking scores while the service combines components.

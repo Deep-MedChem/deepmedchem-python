@@ -34,7 +34,7 @@ def main():
     from dmc_platform_backend.settings import get_settings
     from fastapi.testclient import TestClient
 
-    from deepmedchem import Client
+    from deepmedchem import Client, optimize
 
     with tempfile.TemporaryDirectory() as scratch:
         os.environ.update(
@@ -44,6 +44,7 @@ def main():
             OPTIMIZATION_ALLOWED_TENANTS="*",
             OPTIMIZATION_PROPERTIES="MolWt",
             OPTIMIZATION_CONSTRAINTS_ENABLED="true",
+            OPTIMIZATION_OBJECTIVES_ENABLED="true",
             OPTIMIZATION_INPROCESS_WORKER="false",
             OPTIMIZATION_ARTIFACT_URI=Path(scratch, "artifacts").as_uri(),
         )
@@ -55,8 +56,12 @@ def main():
         env["DMC_NAV_DEPLOYMENT_MODE"] = "internal"
         space = backend_root / "tests/fixtures/navigator_toy_space"
         with TestClient(app) as backend:
+            drive_worker = False
 
             def handler(request):
+                if drive_worker and request.url.path.endswith("/batch"):
+                    while asyncio.run(worker.run_once()):
+                        pass
                 response = backend.request(
                     request.method,
                     request.url.path,
@@ -97,7 +102,7 @@ def main():
                     ]}},
                 )
                 assert run.resource.constraint_execution == [{
-                    "path": "constraints.structures.all[0]", "status": "post_assembly_only",
+                    "path": "constraints.structures.all[0]", "status": "guided_then_verified",
                 }]
                 assert asyncio.run(worker.run_once())
                 seeds = [{"product_id": "amide_coupling____acyl_001____amine_001", "score": -3}]
@@ -119,8 +124,26 @@ def main():
                 results = run.results()
                 assert results.best.score == -3
                 assert len(results) == len(batch.molecules) + 1
+                drive_worker = True
+                for mixed in (False, True):
+                    terms = [{"type": "property", "property_id": "rdkit.qed", "lower": 0, "upper": 1}]
+                    if mixed:
+                        terms.append({"type": "external", "direction": "minimize", "lower": -10, "upper": 0})
+                    result = optimize(
+                        (lambda smiles: [-8.] * len(smiles)) if mixed else None,
+                        objectives=terms, database="freedom", budget=4, batch_size=2,
+                        name=f"internal-contract-{mixed}", client=client, progress=False,
+                    )
+                    assert result.optimization.status == "completed"
+                    assert len(result) == 4
+                    for observation in result:
+                        expected = observation.metrics["objective_0"]
+                        if mixed:
+                            assert observation.metrics["objective_1"] == -8
+                            expected = (expected + .8) / 2
+                        assert abs(observation.score - expected) < 1e-8
                 print(
-                    "SDK/backend/real-engine contract passed: seeds, budgets, resume, "
+                    "SDK/backend/real-engine contract passed: internal-only and mixed objectives; seeds, budgets, resume, "
                     "properties, transition, duplicate submission and results"
                 )
 
