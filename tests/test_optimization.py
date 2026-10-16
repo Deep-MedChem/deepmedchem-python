@@ -1289,6 +1289,50 @@ def test_external_only_still_requires_an_explicit_direction():
         dmc.optimize(lambda smiles: [1] * len(smiles))
 
 
+def test_database_capabilities_resolve_alias_and_preserve_empty_override():
+    catalog = {
+        "optimization": {
+            "databases": ["enamine-real-v5a", "cheminfinita-2026-02"],
+            "constraints": {"predicted_properties": {"old": "unit"}},
+            "database_capabilities": {
+                "enamine-real-v5a": {
+                    "release": "enamine-real-v5a@1",
+                    "predicted_properties": {"herg": "pChEMBL"},
+                },
+                "cheminfinita-2026-02": {
+                    "release": "cheminfinita-2026-02@1",
+                    "predicted_properties": {},
+                },
+            },
+        }
+    }
+    with _client(lambda request: httpx.Response(200, json=catalog)) as client:
+        assert client.optimizations.capabilities("enamine")["predicted_properties"] == {
+            "herg": "pChEMBL"
+        }
+        assert client.optimizations.capabilities("cheminfinita")["predicted_properties"] == {}
+        with pytest.raises(ValueError, match="not available"):
+            client.optimizations.capabilities("freedom")
+
+
+def test_async_capabilities_falls_back_to_legacy_catalog():
+    catalog = {
+        "optimization": {
+            "databases": ["enamine-real-v5a"],
+            "constraints": {"predicted_properties": {"herg": "pChEMBL"}},
+        }
+    }
+
+    async def run():
+        async with _async_client(lambda request: httpx.Response(200, json=catalog)) as client:
+            assert await client.optimizations.capabilities("enamine") == {
+                "release": None,
+                "predicted_properties": {"herg": "pChEMBL"},
+            }
+
+    asyncio.run(run())
+
+
 def test_resume_builtin_only_run_without_callback(server, monkeypatch):
     def finish_on_resume(state):
         state["resource"].update(status="completed", status_reason="budget_exhausted")

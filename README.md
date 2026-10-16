@@ -253,6 +253,43 @@ The CLI accepts `--constraints constraints.json` and `--objectives objectives.js
 `--score-cmd` for built-in-only runs. See [optimization examples](examples/optimization/README.md)
 for normalized mixed objectives, molecular similarity, ADMET and docking.
 
+ADMET availability is specific to the database and its installed release. With a client,
+inspect `client.optimizations.capabilities("enamine")`; the returned
+`predicted_properties` maps endpoint IDs to units. The equivalent catalog field is
+`optimization.database_capabilities["enamine-real-v5a"].predicted_properties`.
+The legacy `optimization.constraints.predicted_properties` contains only endpoints
+shared by every advertised database, so it can be empty while Enamine supports ADMET.
+Also check the catalog's `constraints.enabled` and `objectives.enabled` flags.
+
+```python
+with dmc.Client() as client:
+    capabilities = client.optimizations.capabilities("enamine")
+    endpoint = "openadmet-herg-pchembl"
+    units = capabilities["predicted_properties"][endpoint]
+    result = dmc.optimize(
+        client=client,
+        database="enamine",
+        direction="maximize",  # aggregate desirability
+        budget=100,
+        batch_size=20,
+        constraints={"predicted_properties": [
+            {"endpoint_id": endpoint, "operator": "lte", "value": 6, "units": units},
+        ]},
+        objectives=[
+            {"type": "predicted_property", "endpoint_id": endpoint, "units": units,
+             "direction": "minimize", "lower": 3, "upper": 8},
+        ],
+    )
+```
+
+The bounds above illustrate the API; choose thresholds for your experiment. CP16
+ranks synthon tuples before assembly. The matching full-product model supplies the
+final eligibility check and objective value. These are model predictions, not
+experimental measurements. A database with no advertised endpoint rejects that term
+before a campaign is created. Adding an external docking term keeps docking in the
+callback while the same internal ADMET guidance and checks remain active.
+
+
 
 ## Filters and virtual subsets
 
