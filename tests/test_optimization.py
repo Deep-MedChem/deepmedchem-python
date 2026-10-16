@@ -1165,3 +1165,160 @@ def test_parquet_export_has_stable_schema_with_null_scores(server, tmp_path):
     table = pq.read_table(tmp_path / "out.parquet")
     assert table.num_rows == 3 and table.column("score").null_count == 3
     assert table.schema.field("score").type == __import__("pyarrow").float64()
+
+
+CONSTRAINTS = {"structures": {"all": [{"pattern_id": "alpha-amino-acid/v1"}]}}
+
+
+def test_create_preserves_structured_constraints(server):
+    with _client(server) as client:
+        client.optimizations.create(
+            database="enamine",
+            direction="minimize",
+            budget=4,
+            batch_size=2,
+            constraints=CONSTRAINTS,
+        )
+    assert json.loads(server.requests[0].content)["constraints"] == CONSTRAINTS
+
+
+def test_async_create_preserves_structured_constraints(server):
+    async def run():
+        async with _async_client(server) as client:
+            await client.optimizations.create(
+                database="enamine",
+                direction="minimize",
+                budget=4,
+                batch_size=2,
+                constraints=CONSTRAINTS,
+            )
+
+    asyncio.run(run())
+    assert json.loads(server.requests[0].content)["constraints"] == CONSTRAINTS
+
+
+def test_optimize_passes_constraints_to_create(server):
+    with _client(server) as client:
+        dmc.optimize(
+            lambda smiles: [-1.0] * len(smiles),
+            direction="minimize",
+            budget=4,
+            batch_size=2,
+            constraints=CONSTRAINTS,
+            client=client,
+            progress=False,
+        )
+    assert json.loads(server.requests[0].content)["constraints"] == CONSTRAINTS
+
+
+@pytest.mark.parametrize(
+    "constraints",
+    [
+        [],
+        {"structures": []},
+        {"properties": {}},
+        {"unknown": []},
+        {"properties": [{"value": float("inf")}]},
+    ],
+)
+def test_invalid_constraints_fail_before_request(server, constraints):
+    with _client(server) as client, pytest.raises(ValueError):
+        client.optimizations.create(
+            database="enamine",
+            direction="minimize",
+            budget=4,
+            batch_size=2,
+            constraints=constraints,
+        )
+    assert server.requests == []
+
+
+OBJECTIVES = [{"type": "property", "property_id": "rdkit.qed", "lower": 0, "upper": 1}]
+
+
+def test_sync_and_async_create_send_objectives(server):
+    with _client(server) as client:
+        client.optimizations.create(
+            database="enamine", direction="maximize", budget=4, batch_size=2, objectives=OBJECTIVES
+        )
+    assert json.loads(server.requests[0].content)["objectives"] == OBJECTIVES
+
+    async def run():
+        async with _async_client(server) as client:
+            await client.optimizations.create(
+                database="enamine",
+                direction="maximize",
+                budget=4,
+                batch_size=2,
+                objectives=OBJECTIVES,
+            )
+
+    asyncio.run(run())
+    assert json.loads(server.requests[-1].content)["objectives"] == OBJECTIVES
+
+
+def test_builtin_only_high_level_does_not_require_or_call_external_scorer(server, monkeypatch):
+    original = server.create
+
+    def completed(request):
+        response = original(request)
+        body = response.json()
+        state = server.optimizations[body["id"]]
+        state["resource"].update(status="completed", status_reason="budget_exhausted")
+        state["batch"] = None
+        return httpx.Response(202, json=state["resource"])
+
+    monkeypatch.setattr(server, "create", completed)
+    with _client(server) as client:
+        result = dmc.optimize(
+            objectives=OBJECTIVES, budget=4, batch_size=2, client=client, progress=False
+        )
+    assert result.optimization.status == "completed"
+    assert not any(":submit" in str(r.url) for r in server.requests)
+
+
+def test_callback_requires_explicit_external_term():
+    with pytest.raises(ValueError, match="external"):
+        dmc.optimize(lambda s: [1] * len(s), objectives=OBJECTIVES)
+    with pytest.raises(TypeError, match="score"):
+        dmc.optimize(objectives=[*OBJECTIVES, {"type": "external", "lower": -10, "upper": 0}])
+
+
+def test_external_only_still_requires_an_explicit_direction():
+    with pytest.raises(ValueError, match="direction"):
+        dmc.optimize(lambda smiles: [1] * len(smiles))
+
+
+def test_resume_builtin_only_run_without_callback(server, monkeypatch):
+    def finish_on_resume(state):
+        state["resource"].update(status="completed", status_reason="budget_exhausted")
+        state["batch"] = None
+        return httpx.Response(200, json=state["resource"])
+
+    monkeypatch.setattr(server, "resume", finish_on_resume)
+    with _client(server) as client:
+        opt = client.optimizations.create(
+            database="enamine", direction="maximize", budget=4, batch_size=2, objectives=OBJECTIVES
+        )
+        server.pause(opt.id, "user_requested")
+        with pytest.raises(ValueError, match="external"):
+            dmc.resume(opt.id, _toy, client=client)
+        assert not any(":resume" in str(r.url) for r in server.requests)
+        result = dmc.resume(opt.id, client=client, result_limit=0)
+    assert result.optimization.status == "completed"
+    assert sum(":resume" in str(r.url) for r in server.requests) == 1
+    assert not server.submissions
+
+
+@pytest.mark.parametrize(
+    "objectives", [None, [*OBJECTIVES, {"type": "external", "lower": -10, "upper": 0}]]
+)
+def test_resume_external_run_requires_callback_before_unpausing(server, objectives):
+    with _client(server) as client:
+        opt = client.optimizations.create(
+            database="enamine", direction="maximize", budget=4, batch_size=2, objectives=objectives
+        )
+        server.pause(opt.id, "user_requested")
+        with pytest.raises(TypeError, match="score"):
+            dmc.resume(opt.id, client=client)
+    assert not any(":resume" in str(r.url) for r in server.requests)

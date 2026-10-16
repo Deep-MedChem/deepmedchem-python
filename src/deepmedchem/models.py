@@ -517,6 +517,7 @@ class OptimizationResource(APIModel):
     last_error: str | None = None
     attempts: int = 0
     checkpoint_version: int = 0
+    constraint_execution: list[dict[str, str]] = Field(default_factory=list)
     round: int = 0
     pending_batch_id: str | None = None
     progress: OptimizationProgress = Field(default_factory=OptimizationProgress)

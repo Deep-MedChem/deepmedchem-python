@@ -450,9 +450,7 @@ def _parser() -> argparse.ArgumentParser:
     _add_output_options(sample)
     _add_connection_options(sample)
 
-    subsets = commands.add_parser(
-        "subsets", help="List named virtual subsets usable with --subset"
-    )
+    subsets = commands.add_parser("subsets", help="List named virtual subsets usable with --subset")
     subsets.add_argument("--json", action="store_true", help="Print definitions as JSON")
 
     order = commands.add_parser(
@@ -497,7 +495,7 @@ def _add_optimize_parser(commands) -> None:
         "run",
         help="Run the loop with a scoring command until the budget is spent",
         description=(
-            "Create (or resume) the optimization NAME and score every batch with --score-cmd. "
+            "Create (or resume) NAME with internal --objectives and/or an external --score-cmd. "
             "The command receives {input}, a CSV with id,smiles, and must write {output}, a CSV "
             "with id,score and optionally status, error and metric columns. Re-running the same "
             "command resumes."
@@ -507,18 +505,23 @@ def _add_optimize_parser(commands) -> None:
     run.add_argument("-d", "--database", required=True, help="Database abbreviation or full ID")
     direction = run.add_mutually_exclusive_group(required=True)
     direction.add_argument(
-        "--minimize", dest="direction", action="store_const", const="minimize",
+        "--minimize",
+        dest="direction",
+        action="store_const",
+        const="minimize",
         help="Lower scores are better (docking)",
     )
     direction.add_argument(
-        "--maximize", dest="direction", action="store_const", const="maximize",
+        "--maximize",
+        dest="direction",
+        action="store_const",
+        const="maximize",
         help="Higher scores are better (predicted activity)",
     )
     run.add_argument("--budget", type=int, default=1000, help="Molecules to score in total")
     run.add_argument("--batch-size", type=int, default=100, help="Molecules per batch")
     run.add_argument(
         "--score-cmd",
-        required=True,
         metavar="CMD",
         help="Shell command with {input} and {output} placeholders, "
         "e.g. './dock.sh {input} {output}'",
@@ -531,6 +534,14 @@ def _add_optimize_parser(commands) -> None:
         default=[],
         metavar="NAME=MIN:MAX",
         help="Descriptor range, e.g. MolWt=:500 or TPSA=20:140 (repeatable)",
+    )
+    run.add_argument(
+        "--constraints",
+        metavar="FILE.json",
+        help="Typed descriptor/structure constraints checked before custom scoring",
+    )
+    run.add_argument(
+        "--objectives", metavar="FILE.json", help="Built-in or mixed normalized objective terms"
     )
     run.add_argument("--seed", type=int, help="Engine seed (default 0)")
     run.add_argument(
@@ -571,7 +582,10 @@ def _add_optimize_parser(commands) -> None:
     ask.add_argument("name", metavar="NAME", help="Optimization name or id")
     ask.add_argument("-o", "--output", metavar="FILE", help="CSV to write (default: BATCH_ID.csv)")
     ask.add_argument(
-        "--wait", type=float, default=300.0, metavar="SECONDS",
+        "--wait",
+        type=float,
+        default=300.0,
+        metavar="SECONDS",
         help="How long to wait for a batch (default: 300)",
     )
     _add_connection_options(ask)
@@ -1374,7 +1388,13 @@ def _print_observations(result: OptimizationResult, *, shown: int) -> None:
 
 
 def _optimize_run(args) -> int:
-    if "{input}" not in args.score_cmd or "{output}" not in args.score_cmd:
+    objectives = json.loads(Path(args.objectives).read_text()) if args.objectives else None
+    needs_external = not objectives or any(t.get("type") == "external" for t in objectives)
+    if needs_external and not args.score_cmd:
+        raise ValueError("--score-cmd is required for an external objective")
+    if not needs_external and args.score_cmd:
+        raise ValueError("--score-cmd requires an external term in --objectives")
+    if args.score_cmd and ("{input}" not in args.score_cmd or "{output}" not in args.score_cmd):
         raise ValueError("--score-cmd must contain both {input} and {output}")
     scorer = _json_option(args.scorer, "--scorer")
     with _open_client(args) as client:
@@ -1387,6 +1407,12 @@ def _optimize_run(args) -> int:
             strategy=args.strategy,
             filters="druglike" if args.druglike else None,
             properties=_property_options(args.property),
+            objectives=objectives,
+            constraints=(
+                json.loads(Path(args.constraints).read_text(encoding="utf-8"))
+                if args.constraints
+                else None
+            ),
             seed=args.seed,
             scorer=scorer,
             objective_name=args.objective_name,
@@ -1550,8 +1576,11 @@ def _optimize_control(args) -> int:
         else:
             rows = json.loads(Path(args.input).read_text())
             optimization.add_seeds(
-                rows, mode=args.mode, scorer=_json_option(args.scorer, "--scorer"),
-                idempotency_key=args.idempotency_key)
+                rows,
+                mode=args.mode,
+                scorer=_json_option(args.scorer, "--scorer"),
+                idempotency_key=args.idempotency_key,
+            )
     print(json.dumps(optimization.resource.raw, indent=2, sort_keys=True))
     return 0
 
