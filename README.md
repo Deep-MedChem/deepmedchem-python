@@ -562,3 +562,47 @@ operations. `dmc optimize run` and `dmc.optimize()` accept a hit threshold (`--h
 Custom `properties={"MolWt": (None, 350)}` windows are checked on assembled products by the
 upgraded worker, including when combined with `filters="druglike"`. Check the catalog's
 optimization property capabilities before requesting them.
+
+### Long-running optimizations
+
+Give each independent campaign a name and pin scorer metadata when reproducibility matters.
+The scoring callback executes locally; keep one coordinating client per campaign.
+
+```python
+result = dmc.optimize(
+    score, direction="maximize", name="campaign-1", budget=50_000, batch_size=500,
+    score_chunk_size=25, score_workers=2, result_limit=0,
+)
+# After interruption, resume using the stored specification (no new job is created):
+result = dmc.resume("campaign-1", score, score_chunk_size=25, result_limit=0)
+
+with dmc.Client() as client:
+    run = client.optimizations.get("campaign-1")
+    run.export_csv("observations.csv")
+    # Optional: pip install 'deepmedchem[parquet]'
+    run.export_parquet("observations.parquet")
+    for observation in run.iter_results(order="best", limit=100):
+        print(observation)
+```
+
+`score_chunk_size` journals each finished scoring chunk before the next upload. A crash can
+still lose an unfinished chunk; work on another machine needs the same local cache to reuse
+unsubmitted scores. Changing chunk size on resume is supported. `score_workers` runs callbacks
+in bounded threads and requires a thread-safe scorer. Running callbacks finish before thread
+shutdown; this is not a mechanism for killing a hung docking process.
+
+`result_limit=0` returns an `OptimizationResult` with an empty observations list and the server
+summary in `.optimization`; a positive value fetches only the best N observations. Omitting it
+preserves the existing behavior of collecting every observation. Streaming exports are atomic
+and encode arbitrary metrics in one JSON column instead of discovering all metric columns in
+memory. Async handles also support `iter_results()`.
+
+`run.pause()` requests a pause after the current server step; `run.resume()` releases a server
+pause. `dmc.resume(id_or_name, score)` also resumes a server-paused job before continuing scoring.
+These pause controls require the corresponding backend release. Cancelled jobs remain terminal.
+A local advisory lock rejects a second high-level scoring client sharing the same cache; it
+cannot coordinate clients on different machines. Use one coordinator with scoring threads for
+one run, or different campaign names for independent jobs.
+
+New backend result pages pin the snapshot at the first page so advancing campaigns do not
+shuffle later pages. With older servers, export completed or paused jobs for a stable view.

@@ -512,6 +512,11 @@ class OptimizationResource(APIModel):
     status_reason: str | None = None
     specification: dict[str, Any] = Field(default_factory=dict)
     specification_hash: str | None = None
+    pause_requested: bool = False
+    recovery_status: str | None = None
+    last_error: str | None = None
+    attempts: int = 0
+    checkpoint_version: int = 0
     round: int = 0
     pending_batch_id: str | None = None
     progress: OptimizationProgress = Field(default_factory=OptimizationProgress)

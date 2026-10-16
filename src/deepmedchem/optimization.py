@@ -975,6 +975,51 @@ class Optimization:
                 os.unlink(temporary)
         return count
 
+    def export_parquet(self, path: str | os.PathLike[str], *, order: str = "round") -> int:
+        """Stream Parquet in bounded row groups; requires ``deepmedchem[parquet]``."""
+        try:
+            import pyarrow as pa
+            import pyarrow.parquet as pq
+        except ImportError as error:
+            raise ImportError(
+                "Parquet export requires: pip install 'deepmedchem[parquet]'"
+            ) from error
+        schema = pa.schema(
+            [
+                (name, kind)
+                for name, kind in (
+                    ("id", pa.string()),
+                    ("smiles", pa.string()),
+                    ("score", pa.float64()),
+                    ("status", pa.string()),
+                    ("round", pa.int64()),
+                    ("error", pa.string()),
+                    ("metrics", pa.string()),
+                )
+            ]
+        )
+        destination = Path(path)
+        count, pending = 0, []
+        descriptor, temporary = tempfile.mkstemp(dir=destination.parent, suffix=".parquet")
+        os.close(descriptor)
+        try:
+            with pq.ParquetWriter(temporary, schema) as writer:
+                for row in self.iter_results(order=order):
+                    record = {name: getattr(row, name) for name in schema.names}
+                    record["metrics"] = json.dumps(row.metrics, allow_nan=False)
+                    pending.append(record)
+                    count += 1
+                    if len(pending) == MAX_RESULTS_PAGE:
+                        writer.write_table(pa.Table.from_pylist(pending, schema=schema))
+                        pending = []
+                if pending:
+                    writer.write_table(pa.Table.from_pylist(pending, schema=schema))
+            os.replace(temporary, destination)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+        return count
+
     def results(self, *, order: str = "best", limit: int | None = None) -> OptimizationResult:
         """Every observation (or the first ``limit``), following cursors."""
 
@@ -1423,9 +1468,9 @@ class _Journal:
         locks = journal_root() / ".locks"
         locks.mkdir(parents=True, exist_ok=True)
         with (locks / f"{_filename(self.optimization_id)}.lock").open("a+b") as stream:
-            stream.seek(0)
-            stream.write(b"0")
-            stream.flush()
+            if os.fstat(stream.fileno()).st_size == 0:
+                stream.write(b"0")
+                stream.flush()
             stream.seek(0)
             try:
                 if os.name == "nt":
@@ -1673,14 +1718,6 @@ def _drive_locked(
     journal.cleanup()
     result = _collect_result(optimization, result_limit)
     final = optimization.resource
-    if final.status in {"failed", "cancelled"}:
-        stopped = f" ({final.status_reason})" if final.status_reason else ""
-        raise DeepMedChemError(
-            f"Optimization {label} ({optimization.id}) ended {final.status}{stopped} after "
-            f"{final.progress.scored}/{final.progress.budget} molecules were scored. Its results "
-            f"stay readable with client.optimizations.get({optimization.id!r}).results().",
-            code="optimization_not_active",
-        )
     reason = f" ({final.status_reason})" if final.status_reason else ""
     best_row = result.best
     best_score = (
@@ -1724,6 +1761,11 @@ def optimize(
     ``name`` makes the call resumable: re-running it after Ctrl-C, a crash or a reboot
     continues the same optimization, and scores that were computed but not uploaded are
     re-submitted from a local journal instead of being recomputed.
+
+    Set ``score_chunk_size`` to journal partial progress within a server batch.
+    ``score_workers`` enables bounded threads for callbacks that support concurrency.
+    ``result_limit=0`` returns only the run summary; a positive limit collects the
+    best N observations. The default preserves collection of every observation.
     """
 
     if not callable(score):
@@ -1786,10 +1828,14 @@ def _check_driver_options(chunk_size, workers, result_limit):
 
 def _collect_result(optimization, limit):
     optimization.refresh()
-    if optimization.status in {"failed", "cancelled"}:
+    final = optimization.resource
+    label = optimization.name or optimization.id
+    if final.status in {"failed", "cancelled"}:
+        stopped = f" ({final.status_reason})" if final.status_reason else ""
         raise DeepMedChemError(
-            f"Optimization {optimization.id} is {optimization.status}: "
-            f"{optimization.resource.status_reason}. Committed results remain readable.",
+            f"Optimization {label} ({optimization.id}) ended {final.status}{stopped} after "
+            f"{final.progress.scored}/{final.progress.budget} molecules were scored. Its results "
+            f"stay readable with client.optimizations.get({optimization.id!r}).results().",
             code="optimization_not_active",
         )
     if limit == 0:

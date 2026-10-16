@@ -973,9 +973,7 @@ def test_optimize_raises_when_the_run_is_cancelled_between_rounds(server) -> Non
             server.cancel(server.optimizations["opt_test0001"])
         return response
 
-    with _client(cancelling_after_first_submit) as client, pytest.raises(
-        DeepMedChemError
-    ) as error:
+    with _client(cancelling_after_first_submit) as client, pytest.raises(DeepMedChemError) as error:
         dmc.optimize(_toy, direction="maximize", budget=8, batch_size=2, name="c", client=client)
     assert error.value.code == "optimization_not_active"
     assert "ended cancelled" in str(error.value)
@@ -1004,8 +1002,17 @@ def test_batch_id_is_url_quoted(server) -> None:
 
     def recording(request):
         seen.append(request.url.raw_path.decode())
-        return httpx.Response(404, json={"error": {"code": "batch_not_found", "message": "x",
-                                                    "retryable": False, "request_id": "r"}})
+        return httpx.Response(
+            404,
+            json={
+                "error": {
+                    "code": "batch_not_found",
+                    "message": "x",
+                    "retryable": False,
+                    "request_id": "r",
+                }
+            },
+        )
 
     with _client(recording) as client, pytest.raises(DeepMedChemError):
         client.optimizations.batch("opt_x", "a/b c")
@@ -1026,6 +1033,8 @@ def test_metric_limits_match_the_backend_and_fail_before_upload(metrics, message
         normalize_scores(batch, [{"score": 1.0, **metrics}])
     rows = normalize_scores(batch, [{"score": 1.0, "x" * 64: 2.0, "pose": "y" * 500}])
     assert rows[0]["metrics"] == {"x" * 64: 2.0, "pose": "y" * 500}
+
+
 def test_chunk_journal_resume_skips_finished_molecules(server):
     calls = []
 
@@ -1139,3 +1148,20 @@ def test_driver_options_fail_before_creating_job(server):
             with pytest.raises(ValueError):
                 dmc.optimize(_toy, direction="maximize", client=client, **options)
     assert not server.requests
+
+
+def test_parquet_export_has_stable_schema_with_null_scores(server, tmp_path):
+    pq = pytest.importorskip("pyarrow.parquet")
+    with _client(server) as client:
+        dmc.optimize(
+            lambda smiles: [None] * len(smiles),
+            direction="maximize",
+            name="parquet",
+            budget=3,
+            batch_size=3,
+            client=client,
+        )
+        assert client.optimizations.get("parquet").export_parquet(tmp_path / "out.parquet") == 3
+    table = pq.read_table(tmp_path / "out.parquet")
+    assert table.num_rows == 3 and table.column("score").null_count == 3
+    assert table.schema.field("score").type == __import__("pyarrow").float64()

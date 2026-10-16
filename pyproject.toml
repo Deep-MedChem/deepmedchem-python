@@ -39,6 +39,7 @@ dependencies = [
 
 [project.optional-dependencies]
 auth = []
+parquet = ["pyarrow>=14,<24"]
 rdkit = [
   "rdkit>=2023.9",
 ]
