@@ -316,3 +316,31 @@ def test_tell_reports_progress_including_the_batch_just_accepted(
     out = capsys.readouterr().out
     assert "2/4 molecules scored." in out
     assert "total" not in out and "0 " not in out.split("(", 1)[1].split(")", 1)[0]
+
+
+def test_run_sends_constraints_file(server, tmp_path):
+    constraints = {
+        "structures": {"none": [{"query": {"format": "smarts", "value": "[N+](=O)[O-]"}}]}
+    }
+    path = tmp_path / "constraints.json"
+    path.write_text(json.dumps(constraints))
+    code = cli.main(
+        [
+            "optimize",
+            "run",
+            "constrained",
+            "-d",
+            "enamine",
+            "--minimize",
+            "--budget",
+            "3",
+            "--batch-size",
+            "3",
+            "--constraints",
+            str(path),
+            "--score-cmd",
+            _command(tmp_path),
+        ]
+    )
+    assert code == 0
+    assert json.loads(server.requests[0].content)["constraints"] == constraints

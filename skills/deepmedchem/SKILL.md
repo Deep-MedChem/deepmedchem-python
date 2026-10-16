@@ -163,7 +163,16 @@ dmc optimize status [NAME] | results NAME --top 50 -o best.csv | cancel NAME | r
   The same name with a different specification is a 409 `idempotency_conflict`.
 - **Report failures, never drop them.** Every proposed id needs exactly one row; the SDK fills
   ids a scorer did not return as `failed`. If the scorer raises, nothing is submitted.
-- One scalar is optimized. Put other numbers in metrics; combine objectives in the scorer.
+- Put supported hard requirements in `properties=` / `constraints=`, never in zero/penalty
+  callback scores. Keep docking and proprietary models in the callback. Unknown hard
+  requirements are unsupported; do not silently turn them into a soft preference.
+- Check `catalog()["optimization"]["constraints"]["enabled"]` before using typed structures.
+  `all`, thresholded `any`, and `none` accept typed SMILES/SMARTS or advertised pattern IDs.
+  Current enforcement is `post_assembly_only`; rare motifs can still exhaust bounded refill.
+  Prefer direct substructure search when rare-motif generation is the limiting step.
+- Optimization ADMET constraints and built-in property objectives are not yet advertised.
+  CP16 acquisition estimates do not certify an ADMET threshold. One custom scalar is currently
+  optimized; metrics are reported only. Keep supported descriptor *limits* out of that scalar.
 - `filters="druglike"` and `properties={"MolWt": (None, 500)}` restrict the space;
   `strategy` picks a Navigator preset (`gamma_diversity_screening` default). Allowed databases,
   strategies, properties and limits are in `dmc.catalog()["optimization"]`.

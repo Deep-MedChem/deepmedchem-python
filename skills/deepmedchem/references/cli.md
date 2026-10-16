@@ -142,3 +142,12 @@ dmc search "O=C(Nc1ccccc1)c1ccncc1" -d enamine-real-v5a -m shape -n 50 -o shape_
 dmc substructure "[#6]C(=O)N[c;R]" -d enamine-real-v5a -n 200 -o amides.csv
 dmc order shape_hits.csv --get-quote --amount-mg 5 --no-open
 ```
+
+
+### Optimization chemistry constraints
+
+`dmc optimize run ... --constraints constraints.json --property MolWt=:400` sends the JSON
+constraint object alongside the custom `--score-cmd`. Check optimization catalog support first.
+The object accepts `properties` (typed registry conditions) and `structures` (`all`, `any`,
+`none`). The initial implementation verifies products after assembly; it does not promise
+synthon-level filtering or expose ADMET thresholds. Reusing a name with changed constraints fails.

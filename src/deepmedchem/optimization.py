@@ -152,7 +152,29 @@ def _properties(properties: Any) -> dict[str, dict[str, int | float]] | None:
     return normalized
 
 
-def _json_object(value: Any, name: str) -> dict[str, Any] | None:
+def _constraints(value: Any) -> dict[str, Any] | None:
+    """Keep the client chemistry-free; the service validates IDs and query semantics."""
+    data = _json_object(value, "constraints", max_bytes=128 * 1024)
+    if not data:
+        return None
+    unknown = set(data) - {"properties", "structures"}
+    if unknown:
+        raise ValueError(
+            f"Unsupported optimization constraints: {sorted(unknown)}. "
+            "Consult catalog()['optimization']['constraints']; ADMET constraints "
+            "are not offered by this version."
+        )
+    if "properties" in data and not isinstance(data["properties"], list):
+        raise ValueError("constraints.properties must be a list of typed property conditions")
+    if "structures" in data and not isinstance(data["structures"], dict):
+        raise ValueError("constraints.structures must be an object with all/any/none groups")
+    # Return a detached snapshot, including nested data, for resumable specifications.
+    return json.loads(json.dumps(data, allow_nan=False))
+
+
+def _json_object(
+    value: Any, name: str, *, max_bytes: int = MAX_JSON_OBJECT_BYTES
+) -> dict[str, Any] | None:
     if value is None:
         return None
     if not isinstance(value, Mapping):
@@ -162,8 +184,8 @@ def _json_object(value: Any, name: str) -> dict[str, Any] | None:
         encoded = json.dumps(data, sort_keys=True, separators=(",", ":"), allow_nan=False)
     except (TypeError, ValueError) as error:
         raise ValueError(f"{name} must contain only JSON values: {error}") from error
-    if len(encoded.encode("utf-8")) > MAX_JSON_OBJECT_BYTES:
-        raise ValueError(f"{name} must be at most {MAX_JSON_OBJECT_BYTES} bytes of JSON")
+    if len(encoded.encode("utf-8")) > max_bytes:
+        raise ValueError(f"{name} must be at most {max_bytes} bytes of JSON")
     return data
 
 
@@ -189,6 +211,7 @@ def build_specification(
     strategy: str | None = None,
     filters: str | None = None,
     properties: Mapping[str, Any] | None = None,
+    constraints: Mapping[str, Any] | None = None,
     seed: int | None = None,
     scorer: Mapping[str, Any] | None = None,
     metadata: Mapping[str, Any] | None = None,
@@ -233,6 +256,9 @@ def build_specification(
         if filters not in FILTERS:
             raise ValueError(f"filters must be None or 'druglike', got {filters!r}")
         spec["filters"] = filters
+    normalized_constraints = _constraints(constraints)
+    if normalized_constraints:
+        spec["constraints"] = normalized_constraints
     normalized_properties = _properties(properties)
     if normalized_properties:
         spec["properties"] = normalized_properties
@@ -623,6 +649,7 @@ class Optimizations:
         strategy: str | None = None,
         filters: str | None = None,
         properties: Mapping[str, Any] | None = None,
+        constraints: Mapping[str, Any] | None = None,
         seed: int | None = None,
         scorer: Mapping[str, Any] | None = None,
         metadata: Mapping[str, Any] | None = None,
@@ -643,6 +670,7 @@ class Optimizations:
             strategy=strategy,
             filters=filters,
             properties=properties,
+            constraints=constraints,
             seed=seed,
             scorer=scorer,
             metadata=metadata,
@@ -961,6 +989,7 @@ class AsyncOptimizations:
         strategy: str | None = None,
         filters: str | None = None,
         properties: Mapping[str, Any] | None = None,
+        constraints: Mapping[str, Any] | None = None,
         seed: int | None = None,
         scorer: Mapping[str, Any] | None = None,
         metadata: Mapping[str, Any] | None = None,
@@ -979,6 +1008,7 @@ class AsyncOptimizations:
             strategy=strategy,
             filters=filters,
             properties=properties,
+            constraints=constraints,
             seed=seed,
             scorer=scorer,
             metadata=metadata,
@@ -1532,6 +1562,7 @@ def optimize(
     hit_threshold: float | None = None,
     filters: str | None = None,
     properties: Mapping[str, Any] | None = None,
+    constraints: Mapping[str, Any] | None = None,
     seed: int | None = None,
     scorer: Mapping[str, Any] | None = None,
     metadata: Mapping[str, Any] | None = None,
@@ -1543,6 +1574,12 @@ def optimize(
     ``score`` takes a list of SMILES and returns one value per SMILES, in order: a number, None
     (or NaN) for a molecule it could not score, or a dict ``{"score": x, **metrics}``. If it
     raises, nothing is submitted and the batch stays pending.
+
+    Put supported hard requirements in ``properties=`` or ``constraints=`` rather than
+    returning penalty scores. The service verifies assembled products before asking your
+    callback to score them. Structure constraints currently use post-assembly filtering;
+    consult ``catalog()["optimization"]["constraints"]`` for deployment support.
+    The callback should compute the custom objective, such as docking or your own model.
 
     ``name`` makes the call resumable: re-running it after Ctrl-C, a crash or a reboot
     continues the same optimization, and scores that were computed but not uploaded are
@@ -1568,6 +1605,7 @@ def optimize(
             hit_threshold=hit_threshold,
             filters=filters,
             properties=properties,
+            constraints=constraints,
             seed=seed,
             scorer=scorer,
             metadata=metadata,

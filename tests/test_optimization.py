@@ -1026,3 +1026,69 @@ def test_metric_limits_match_the_backend_and_fail_before_upload(metrics, message
         normalize_scores(batch, [{"score": 1.0, **metrics}])
     rows = normalize_scores(batch, [{"score": 1.0, "x" * 64: 2.0, "pose": "y" * 500}])
     assert rows[0]["metrics"] == {"x" * 64: 2.0, "pose": "y" * 500}
+
+
+CONSTRAINTS = {"structures": {"all": [{"pattern_id": "alpha-amino-acid/v1"}]}}
+
+
+def test_create_preserves_structured_constraints(server):
+    with _client(server) as client:
+        client.optimizations.create(
+            database="enamine",
+            direction="minimize",
+            budget=4,
+            batch_size=2,
+            constraints=CONSTRAINTS,
+        )
+    assert json.loads(server.requests[0].content)["constraints"] == CONSTRAINTS
+
+
+def test_async_create_preserves_structured_constraints(server):
+    async def run():
+        async with _async_client(server) as client:
+            await client.optimizations.create(
+                database="enamine",
+                direction="minimize",
+                budget=4,
+                batch_size=2,
+                constraints=CONSTRAINTS,
+            )
+
+    asyncio.run(run())
+    assert json.loads(server.requests[0].content)["constraints"] == CONSTRAINTS
+
+
+def test_optimize_passes_constraints_to_create(server):
+    with _client(server) as client:
+        dmc.optimize(
+            lambda smiles: [-1.0] * len(smiles),
+            direction="minimize",
+            budget=4,
+            batch_size=2,
+            constraints=CONSTRAINTS,
+            client=client,
+            progress=False,
+        )
+    assert json.loads(server.requests[0].content)["constraints"] == CONSTRAINTS
+
+
+@pytest.mark.parametrize(
+    "constraints",
+    [
+        [],
+        {"structures": []},
+        {"properties": {}},
+        {"predicted_properties": []},
+        {"properties": [{"value": float("inf")}]},
+    ],
+)
+def test_invalid_constraints_fail_before_request(server, constraints):
+    with _client(server) as client, pytest.raises(ValueError):
+        client.optimizations.create(
+            database="enamine",
+            direction="minimize",
+            budget=4,
+            batch_size=2,
+            constraints=constraints,
+        )
+    assert server.requests == []

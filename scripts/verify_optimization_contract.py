@@ -43,6 +43,7 @@ def main():
             OPTIMIZATIONS_ENABLED="true",
             OPTIMIZATION_ALLOWED_TENANTS="*",
             OPTIMIZATION_PROPERTIES="MolWt",
+            OPTIMIZATION_CONSTRAINTS_ENABLED="true",
             OPTIMIZATION_INPROCESS_WORKER="false",
             OPTIMIZATION_ARTIFACT_URI=Path(scratch, "artifacts").as_uri(),
         )
@@ -91,7 +92,13 @@ def main():
                     start_paused=True,
                     hit_threshold=-1,
                     properties={"MolWt": (None, 130)},
+                    constraints={"structures": {"all": [
+                        {"query": {"format": "smarts", "value": "C(=O)N"}},
+                    ]}},
                 )
+                assert run.resource.constraint_execution == [{
+                    "path": "constraints.structures.all[0]", "status": "post_assembly_only",
+                }]
                 assert asyncio.run(worker.run_once())
                 seeds = [{"product_id": "amide_coupling____acyl_001____amine_001", "score": -3}]
                 run.add_seeds(seeds, mode="synthon")

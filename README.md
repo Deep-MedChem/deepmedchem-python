@@ -242,6 +242,14 @@ as metrics. For manual control use `client.optimizations.create(...)` with `opt.
 Worked examples (RDKit, your own ML model, GNINA docking) are in
 [`examples/optimization`](examples/optimization/README.md).
 
+Put supported hard requirements in `properties=` and `constraints=`, keeping the callback for
+custom scoring such as docking. Structured constraints require
+`dmc.catalog()["optimization"]["constraints"]["enabled"]`; the first implementation checks
+assembled products before custom scoring and reports `post_assembly_only`. It does not yet
+accelerate rare-motif acquisition or expose ADMET thresholds and built-in property objectives.
+The CLI accepts the same constraint object through `--constraints constraints.json`.
+
+
 ## Filters and virtual subsets
 
 A similarity search can be restricted to a *virtual subset*: a definition rather than a

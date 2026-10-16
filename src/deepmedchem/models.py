@@ -512,6 +512,7 @@ class OptimizationResource(APIModel):
     status_reason: str | None = None
     specification: dict[str, Any] = Field(default_factory=dict)
     specification_hash: str | None = None
+    constraint_execution: list[dict[str, str]] = Field(default_factory=list)
     round: int = 0
     pending_batch_id: str | None = None
     progress: OptimizationProgress = Field(default_factory=OptimizationProgress)

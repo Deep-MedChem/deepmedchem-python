@@ -507,11 +507,17 @@ def _add_optimize_parser(commands) -> None:
     run.add_argument("-d", "--database", required=True, help="Database abbreviation or full ID")
     direction = run.add_mutually_exclusive_group(required=True)
     direction.add_argument(
-        "--minimize", dest="direction", action="store_const", const="minimize",
+        "--minimize",
+        dest="direction",
+        action="store_const",
+        const="minimize",
         help="Lower scores are better (docking)",
     )
     direction.add_argument(
-        "--maximize", dest="direction", action="store_const", const="maximize",
+        "--maximize",
+        dest="direction",
+        action="store_const",
+        const="maximize",
         help="Higher scores are better (predicted activity)",
     )
     run.add_argument("--budget", type=int, default=1000, help="Molecules to score in total")
@@ -531,6 +537,11 @@ def _add_optimize_parser(commands) -> None:
         default=[],
         metavar="NAME=MIN:MAX",
         help="Descriptor range, e.g. MolWt=:500 or TPSA=20:140 (repeatable)",
+    )
+    run.add_argument(
+        "--constraints",
+        metavar="FILE.json",
+        help="Typed descriptor/structure constraints checked before custom scoring",
     )
     run.add_argument("--seed", type=int, help="Engine seed (default 0)")
     run.add_argument(
@@ -571,7 +582,10 @@ def _add_optimize_parser(commands) -> None:
     ask.add_argument("name", metavar="NAME", help="Optimization name or id")
     ask.add_argument("-o", "--output", metavar="FILE", help="CSV to write (default: BATCH_ID.csv)")
     ask.add_argument(
-        "--wait", type=float, default=300.0, metavar="SECONDS",
+        "--wait",
+        type=float,
+        default=300.0,
+        metavar="SECONDS",
         help="How long to wait for a batch (default: 300)",
     )
     _add_connection_options(ask)
@@ -1387,6 +1401,11 @@ def _optimize_run(args) -> int:
             strategy=args.strategy,
             filters="druglike" if args.druglike else None,
             properties=_property_options(args.property),
+            constraints=(
+                json.loads(Path(args.constraints).read_text(encoding="utf-8"))
+                if args.constraints
+                else None
+            ),
             seed=args.seed,
             scorer=scorer,
             objective_name=args.objective_name,

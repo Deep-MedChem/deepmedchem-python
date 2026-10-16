@@ -27,20 +27,27 @@ What the **service** enforces on the molecules it proposes is a shorter list:
 
 | Constraint | How |
 | --- | --- |
+| Required/excluded structures | `constraints={"structures": {"all": [...], "none": [...]}}`; check `catalog()["optimization"]["constraints"]["enabled"]` |
 | Exact windows on RDKit descriptors | `properties={"MolWt": {"max": 400}, ...}`; the offered names are in `catalog()["optimization"]["properties"]` |
 | The druglike gate | `filters="druglike"` |
 | Which space is searched | `database=`, plus the strategy and the optional `seed` |
 
-Anything else is a preference you express through the score, and a score cannot exclude: it ranks
-what was proposed. That distinction decides whether a request is expressible today:
+Put hard requirements in call parameters, not in the callback as zero/penalty scores. Docking
+and proprietary models remain custom scores. A requirement unsupported by the optimization
+catalog cannot be made reliable by hiding it in the score. Current capabilities:
 
 - *"minimize logP, stay under 400 Da"* — fully supported, and logP can be both a window and the
   objective ([`06_hard_limits_soft_score.py`](06_hard_limits_soft_score.py)).
-- *"only molecules containing this substructure"* — **not supported.** There are no SMARTS
-  constraints in the optimization gate, and rewarding the motif in the score does not work:
-  a specific motif is so rare that the surrogate never sees a positive example (measured: a
-  150-molecule run whose score was dominated by an acrylamide reward returned 0 matches). Use
-  [`07_motif_focused_screening.py`](07_motif_focused_screening.py) instead.
+- *"only molecules containing this substructure"* — supported on deployments advertising
+  `optimization.constraints.enabled`. Required, excluded, and thresholded `any` groups use the
+  same typed SMILES/SMARTS queries or versioned patterns as selections. Every proposed product
+  is checked before custom scoring. This first implementation reports `post_assembly_only`:
+  rare motifs can still produce short or empty batches after bounded refill. It does **not**
+  yet restrict synthon generation. For rare motifs, use the substructure-first workflow in
+  [`07_motif_focused_screening.py`](07_motif_focused_screening.py).
+- *"ADMET below a threshold"* — optimization does not yet advertise this capability. Do not
+  replace it with a zero-valued callback penalty or interpret CP16 acquisition scores as
+  assembled-product model predictions. Built-in ADMET evaluation is a later integration step.
 - *"scaffold-hop from this molecule of mine"* — **not supported end to end.** You can put
   similarity to your reference in the score, but the search cannot be restricted to that
   neighbourhood, and the same needle-in-a-haystack problem applies. Seeding does not bridge it:
@@ -89,3 +96,46 @@ sbatch --wait score.sh batch.csv scores.csv
 dmc optimize tell my-campaign scores.csv
 dmc optimize results my-campaign --top 50 -o best.csv
 ```
+
+## Constrained docking
+
+The callback computes docking; eligibility is declared separately:
+
+```python
+result = dmc.optimize(
+    docking_score,
+    direction="minimize",
+    database="enamine",
+    budget=2000,
+    batch_size=100,
+    properties={"MolWt": (None, 400)},
+    constraints={"structures": {
+        "all": [{"pattern_id": "alpha-amino-acid/v1"}],
+        "none": [{"query": {"format": "smarts", "value": "[N+](=O)[O-]"}}],
+    }},
+)
+```
+
+`docking_score` is your function; the service does not execute docking. The named amino-acid
+pattern has a specific chemical definition; use an explicit query when you need different
+protection, substitution, or stereochemical semantics. Structural matching uses chirality.
+Counts refer to unique atom matches, including overlapping matches; bounds are limited to 1000.
+
+Typed descriptor conditions also work in `constraints.properties`:
+`{"property_id": "rdkit.mol_wt", "operator": "lte", "value": 400, "units": "Da"}`.
+They intersect with `properties=` and `filters=`; contradictions are errors. RDKit is optional
+on the client. The server validates registry IDs and the worker compiles chemistry queries
+before proposing. Unsupported constraints fail instead of falling back to a callback.
+
+For the CLI, save the constraints object in `constraints.json` and use:
+
+```bash
+dmc optimize run constrained-docking -d enamine --minimize --property MolWt=:400 \
+    --constraints constraints.json --score-cmd './dock.sh {input} {output}'
+```
+
+The constraint specification is part of resume identity. Changing it requires a new run name.
+Internal rejections do not consume the external scoring budget. Seed evidence remains audited
+under the existing seed policy; imported measured seeds are not newly proposed molecules.
+Built-in descriptor objectives and mixed objectives are not implemented by this constraint
+release: the earlier property-objective examples remain compatibility examples for that reason.
