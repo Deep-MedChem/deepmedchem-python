@@ -640,11 +640,39 @@ def _ask_delays(deadline: float | None) -> tuple[int, float | None]:
 # --- Sync API ----------------------------------------------------------------------
 
 
+def _database_capabilities(catalog: dict[str, Any], database: str) -> dict[str, Any]:
+    """Resolve aliases and preserve explicit per-database unavailability."""
+    database = resolve_database(database)
+    optimization = catalog.get("optimization") or {}
+    if database not in optimization.get("databases", []):
+        raise ValueError(f"Database {database!r} is not available for optimization")
+    entries = optimization.get("database_capabilities")
+    if entries is not None:
+        result = dict(entries.get(database, {}))
+        result["predicted_properties"] = dict(result.get("predicted_properties", {}))
+        return result
+    # Older deployments advertise only endpoints supported across every database.
+    return {
+        "release": None,
+        "predicted_properties": dict(
+            optimization.get("constraints", {}).get("predicted_properties", {})
+        ),
+    }
+
+
 class Optimizations:
     """``client.optimizations``: the optimization endpoints, one method per request."""
 
     def __init__(self, client: Client):
         self._client = client
+
+    def capabilities(self, database: str) -> dict[str, Any]:
+        """Fetch this database's release and native ADMET endpoint-to-units map.
+
+        Feature availability still follows the catalog's constraints/objectives
+        enabled flags. Callers should check capabilities before constructing terms.
+        """
+        return _database_capabilities(self._client.catalog(), database)
 
     def create(
         self,
@@ -987,6 +1015,10 @@ class AsyncOptimizations:
 
     def __init__(self, client: AsyncClient):
         self._client = client
+
+    async def capabilities(self, database: str) -> dict[str, Any]:
+        """Async equivalent of :meth:`Optimizations.capabilities`."""
+        return _database_capabilities(await self._client.catalog(), database)
 
     async def create(
         self,
@@ -1591,7 +1623,8 @@ def optimize(
     Put supported hard requirements in ``properties=`` or ``constraints=`` rather than
     returning penalty scores. The service verifies assembled products before asking your
     callback to score them. Constraints guide synthon sampling before product verification;
-    consult ``catalog()["optimization"]["constraints"]`` for deployment support.
+    consult ``client.optimizations.capabilities(database)`` for native ADMET support
+    and the catalog constraints/objectives flags before creating a campaign.
     The callback should compute the custom objective, such as docking or your own model.
 
     ``objectives`` declares normalized built-in terms and, for mixed runs, an external
