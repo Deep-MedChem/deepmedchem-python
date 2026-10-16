@@ -450,9 +450,7 @@ def _parser() -> argparse.ArgumentParser:
     _add_output_options(sample)
     _add_connection_options(sample)
 
-    subsets = commands.add_parser(
-        "subsets", help="List named virtual subsets usable with --subset"
-    )
+    subsets = commands.add_parser("subsets", help="List named virtual subsets usable with --subset")
     subsets.add_argument("--json", action="store_true", help="Print definitions as JSON")
 
     order = commands.add_parser(
@@ -542,7 +540,9 @@ def _add_optimize_parser(commands) -> None:
         metavar="FILE.json",
         help="Typed descriptor/structure constraints checked before custom scoring",
     )
-    run.add_argument("--objectives", metavar="FILE.json", help="Built-in or mixed normalized objective terms")
+    run.add_argument(
+        "--objectives", metavar="FILE.json", help="Built-in or mixed normalized objective terms"
+    )
     run.add_argument("--seed", type=int, help="Engine seed (default 0)")
     run.add_argument(
         "--scorer", metavar="JSON", help='Scorer identity to pin, e.g. \'{"name": "glide"}\''
@@ -1576,8 +1576,11 @@ def _optimize_control(args) -> int:
         else:
             rows = json.loads(Path(args.input).read_text())
             optimization.add_seeds(
-                rows, mode=args.mode, scorer=_json_option(args.scorer, "--scorer"),
-                idempotency_key=args.idempotency_key)
+                rows,
+                mode=args.mode,
+                scorer=_json_option(args.scorer, "--scorer"),
+                idempotency_key=args.idempotency_key,
+            )
     print(json.dumps(optimization.resource.raw, indent=2, sort_keys=True))
     return 0
 

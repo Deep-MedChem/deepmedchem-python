@@ -6,6 +6,7 @@ Requires only deepmedchem. No RDKit installation or scoring callback is needed.
 from __future__ import annotations
 
 import argparse
+
 import deepmedchem as dmc
 
 

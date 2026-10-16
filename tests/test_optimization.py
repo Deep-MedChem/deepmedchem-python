@@ -973,9 +973,7 @@ def test_optimize_raises_when_the_run_is_cancelled_between_rounds(server) -> Non
             server.cancel(server.optimizations["opt_test0001"])
         return response
 
-    with _client(cancelling_after_first_submit) as client, pytest.raises(
-        DeepMedChemError
-    ) as error:
+    with _client(cancelling_after_first_submit) as client, pytest.raises(DeepMedChemError) as error:
         dmc.optimize(_toy, direction="maximize", budget=8, batch_size=2, name="c", client=client)
     assert error.value.code == "optimization_not_active"
     assert "ended cancelled" in str(error.value)
@@ -1004,8 +1002,17 @@ def test_batch_id_is_url_quoted(server) -> None:
 
     def recording(request):
         seen.append(request.url.raw_path.decode())
-        return httpx.Response(404, json={"error": {"code": "batch_not_found", "message": "x",
-                                                    "retryable": False, "request_id": "r"}})
+        return httpx.Response(
+            404,
+            json={
+                "error": {
+                    "code": "batch_not_found",
+                    "message": "x",
+                    "retryable": False,
+                    "request_id": "r",
+                }
+            },
+        )
 
     with _client(recording) as client, pytest.raises(DeepMedChemError):
         client.optimizations.batch("opt_x", "a/b c")
@@ -1099,18 +1106,28 @@ OBJECTIVES = [{"type": "property", "property_id": "rdkit.qed", "lower": 0, "uppe
 
 def test_sync_and_async_create_send_objectives(server):
     with _client(server) as client:
-        client.optimizations.create(database="enamine", direction="maximize", budget=4, batch_size=2, objectives=OBJECTIVES)
+        client.optimizations.create(
+            database="enamine", direction="maximize", budget=4, batch_size=2, objectives=OBJECTIVES
+        )
     assert json.loads(server.requests[0].content)["objectives"] == OBJECTIVES
 
     async def run():
         async with _async_client(server) as client:
-            await client.optimizations.create(database="enamine", direction="maximize", budget=4, batch_size=2, objectives=OBJECTIVES)
+            await client.optimizations.create(
+                database="enamine",
+                direction="maximize",
+                budget=4,
+                batch_size=2,
+                objectives=OBJECTIVES,
+            )
+
     asyncio.run(run())
     assert json.loads(server.requests[-1].content)["objectives"] == OBJECTIVES
 
 
 def test_builtin_only_high_level_does_not_require_or_call_external_scorer(server, monkeypatch):
     original = server.create
+
     def completed(request):
         response = original(request)
         body = response.json()
@@ -1118,9 +1135,12 @@ def test_builtin_only_high_level_does_not_require_or_call_external_scorer(server
         state["resource"].update(status="completed", status_reason="budget_exhausted")
         state["batch"] = None
         return httpx.Response(202, json=state["resource"])
+
     monkeypatch.setattr(server, "create", completed)
     with _client(server) as client:
-        result = dmc.optimize(objectives=OBJECTIVES, budget=4, batch_size=2, client=client, progress=False)
+        result = dmc.optimize(
+            objectives=OBJECTIVES, budget=4, batch_size=2, client=client, progress=False
+        )
     assert result.optimization.status == "completed"
     assert not any(":submit" in str(r.url) for r in server.requests)
 
