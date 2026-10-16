@@ -35,6 +35,7 @@ from .optimization import (
     Optimization,
     normalize_scores,
     optimize,
+    resume,
 )
 from .ordering import OrderBundle, OrderDraft, OrderMolecule, prepare_order
 from .selection import Run, Selection
@@ -84,6 +85,7 @@ __all__ = [
     "catalog",
     "normalize_scores",
     "optimize",
+    "resume",
     "prepare_order",
     "read_queries",
     "sample",

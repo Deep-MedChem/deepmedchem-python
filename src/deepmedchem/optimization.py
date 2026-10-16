@@ -12,6 +12,7 @@ and client.optimizations exposes individual endpoints.
 from __future__ import annotations
 
 import asyncio
+import csv
 import hashlib
 import json
 import math
@@ -22,7 +23,9 @@ import sys
 import tempfile
 import time
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -47,6 +50,7 @@ __all__ = [
     "Optimizations",
     "normalize_scores",
     "optimize",
+    "resume",
 ]
 
 OPTIMIZATIONS_PATH = "/api/v2/optimizations"
@@ -836,8 +840,15 @@ class Optimizations:
         )
         return [Observation.model_validate(item) for item in page.data], page.next_cursor
 
-    def add_seeds(self, optimization_id: str, rows, *, mode="external", scorer=None,
-                        idempotency_key: str | None = None) -> OptimizationResource:
+    def add_seeds(
+        self,
+        optimization_id: str,
+        rows,
+        *,
+        mode="external",
+        scorer=None,
+        idempotency_key: str | None = None,
+    ) -> OptimizationResource:
         """Queue measured seeds at a batch boundary; external SMILES train only the surrogate.
 
         Synthon mode requires Navigator product ids and also seeds the search archive.
@@ -846,27 +857,42 @@ class Optimizations:
         body = {"mode": mode, "rows": list(rows)}
         if scorer is not None:
             body["scorer"] = dict(scorer)
-        key = idempotency_key or "seeds-" + hashlib.sha256(
-            json.dumps(body, sort_keys=True, allow_nan=False).encode()
-        ).hexdigest()
+        key = (
+            idempotency_key
+            or "seeds-"
+            + hashlib.sha256(json.dumps(body, sort_keys=True, allow_nan=False).encode()).hexdigest()
+        )
         return OptimizationResource.model_validate(
-            self._client._request("POST", _path(optimization_id, "/seeds"), json=body,
-                                        headers={"Idempotency-Key": key})
+            self._client._request(
+                "POST",
+                _path(optimization_id, "/seeds"),
+                json=body,
+                headers={"Idempotency-Key": key},
+            )
         )
 
-    def transition(self, optimization_id: str, strategy: str, *,
-                         idempotency_key: str | None = None) -> OptimizationResource:
+    def transition(
+        self, optimization_id: str, strategy: str, *, idempotency_key: str | None = None
+    ) -> OptimizationResource:
         """Switch after the pending batch is scored, or immediately when paused."""
         key = idempotency_key or "transition-" + uuid.uuid4().hex
         return OptimizationResource.model_validate(
-            self._client._request("POST", _path(optimization_id, ":transition"),
-                                        json={"strategy": strategy},
-                                        headers={"Idempotency-Key": key})
+            self._client._request(
+                "POST",
+                _path(optimization_id, ":transition"),
+                json={"strategy": strategy},
+                headers={"Idempotency-Key": key},
+            )
         )
 
     def cancel(self, optimization_id: str) -> OptimizationResource:
         return OptimizationResource.model_validate(
             self._client._request("POST", _path(optimization_id, ":cancel"))
+        )
+
+    def pause(self, optimization_id: str) -> OptimizationResource:
+        return OptimizationResource.model_validate(
+            self._client._request("POST", _path(optimization_id, ":pause"))
         )
 
     def resume(self, optimization_id: str) -> OptimizationResource:
@@ -967,6 +993,99 @@ class Optimization:
             self.resource = receipt.optimization
         return receipt
 
+    def iter_results(
+        self, *, order: str = "round", limit: int | None = None, page_size: int = MAX_RESULTS_PAGE
+    ) -> Iterator[Observation]:
+        """Read observations one page at a time; newer servers pin the first snapshot."""
+        limit = _check_limit(limit)
+        page_size = _positive_int(page_size, "page_size")
+        if page_size > MAX_RESULTS_PAGE:
+            raise ValueError(f"page_size must be at most {MAX_RESULTS_PAGE}")
+        cursor, seen = None, 0
+        while True:
+            size = min(page_size, limit - seen) if limit is not None else page_size
+            rows, cursor = self._api.results_page(self.id, order=order, limit=size, cursor=cursor)
+            for row in rows:
+                yield row
+                seen += 1
+                if limit is not None and seen >= limit:
+                    return
+            if not cursor or not rows:
+                return
+
+    def export_csv(self, path: str | os.PathLike[str], *, order: str = "round") -> int:
+        """Stream CSV atomically. Metrics use one JSON column to keep a stable schema."""
+        destination = Path(path)
+        count = 0
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w", dir=destination.parent, delete=False, encoding="utf-8", newline=""
+            ) as stream:
+                temporary = stream.name
+                writer = csv.DictWriter(
+                    stream,
+                    fieldnames=["id", "smiles", "score", "status", "round", "error", "metrics"],
+                )
+                writer.writeheader()
+                for row in self.iter_results(order=order):
+                    record = {key: getattr(row, key) for key in writer.fieldnames}
+                    record["metrics"] = json.dumps(row.metrics, allow_nan=False)
+                    writer.writerow(record)
+                    count += 1
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, destination)
+        finally:
+            if temporary is not None and os.path.exists(temporary):
+                os.unlink(temporary)
+        return count
+
+    def export_parquet(self, path: str | os.PathLike[str], *, order: str = "round") -> int:
+        """Stream Parquet in bounded row groups; requires ``deepmedchem[parquet]``."""
+        try:
+            import pyarrow as pa
+            import pyarrow.parquet as pq
+        except ImportError as error:
+            raise ImportError(
+                "Parquet export requires: pip install 'deepmedchem[parquet]'"
+            ) from error
+        schema = pa.schema(
+            [
+                (name, kind)
+                for name, kind in (
+                    ("id", pa.string()),
+                    ("smiles", pa.string()),
+                    ("score", pa.float64()),
+                    ("status", pa.string()),
+                    ("round", pa.int64()),
+                    ("error", pa.string()),
+                    ("metrics", pa.string()),
+                )
+            ]
+        )
+        destination = Path(path)
+        count, pending = 0, []
+        descriptor, temporary = tempfile.mkstemp(dir=destination.parent, suffix=".parquet")
+        os.close(descriptor)
+        try:
+            with pq.ParquetWriter(temporary, schema) as writer:
+                for row in self.iter_results(order=order):
+                    record = {name: getattr(row, name) for name in schema.names}
+                    record["metrics"] = json.dumps(row.metrics, allow_nan=False)
+                    pending.append(record)
+                    count += 1
+                    if len(pending) == MAX_RESULTS_PAGE:
+                        writer.write_table(pa.Table.from_pylist(pending, schema=schema))
+                        pending = []
+                if pending:
+                    writer.write_table(pa.Table.from_pylist(pending, schema=schema))
+            os.replace(temporary, destination)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+        return count
+
     def results(self, *, order: str = "best", limit: int | None = None) -> OptimizationResult:
         """Every observation (or the first ``limit``), following cursors."""
 
@@ -990,16 +1109,21 @@ class Optimization:
 
     def add_seeds(self, rows, *, mode="external", scorer=None, idempotency_key=None):
         self.resource = self._api.add_seeds(
-            self.id, rows, mode=mode, scorer=scorer, idempotency_key=idempotency_key)
+            self.id, rows, mode=mode, scorer=scorer, idempotency_key=idempotency_key
+        )
         return self
 
     def transition(self, strategy, *, idempotency_key=None):
-        self.resource = self._api.transition(
-            self.id, strategy, idempotency_key=idempotency_key)
+        self.resource = self._api.transition(self.id, strategy, idempotency_key=idempotency_key)
         return self
 
     def cancel(self) -> Optimization:
         self.resource = self._api.cancel(self.id)
+        return self
+
+    def pause(self) -> Optimization:
+        """Pause after the current server step, preserving any pending batch."""
+        self.resource = self._api.pause(self.id)
         return self
 
     def resume(self) -> Optimization:
@@ -1174,8 +1298,15 @@ class AsyncOptimizations:
         )
         return [Observation.model_validate(item) for item in page.data], page.next_cursor
 
-    async def add_seeds(self, optimization_id: str, rows, *, mode="external", scorer=None,
-                        idempotency_key: str | None = None) -> OptimizationResource:
+    async def add_seeds(
+        self,
+        optimization_id: str,
+        rows,
+        *,
+        mode="external",
+        scorer=None,
+        idempotency_key: str | None = None,
+    ) -> OptimizationResource:
         """Queue measured seeds at a batch boundary; external SMILES train only the surrogate.
 
         Synthon mode requires Navigator product ids and also seeds the search archive.
@@ -1184,27 +1315,42 @@ class AsyncOptimizations:
         body = {"mode": mode, "rows": list(rows)}
         if scorer is not None:
             body["scorer"] = dict(scorer)
-        key = idempotency_key or "seeds-" + hashlib.sha256(
-            json.dumps(body, sort_keys=True, allow_nan=False).encode()
-        ).hexdigest()
+        key = (
+            idempotency_key
+            or "seeds-"
+            + hashlib.sha256(json.dumps(body, sort_keys=True, allow_nan=False).encode()).hexdigest()
+        )
         return OptimizationResource.model_validate(
-            await self._client._request("POST", _path(optimization_id, "/seeds"), json=body,
-                                        headers={"Idempotency-Key": key})
+            await self._client._request(
+                "POST",
+                _path(optimization_id, "/seeds"),
+                json=body,
+                headers={"Idempotency-Key": key},
+            )
         )
 
-    async def transition(self, optimization_id: str, strategy: str, *,
-                         idempotency_key: str | None = None) -> OptimizationResource:
+    async def transition(
+        self, optimization_id: str, strategy: str, *, idempotency_key: str | None = None
+    ) -> OptimizationResource:
         """Switch after the pending batch is scored, or immediately when paused."""
         key = idempotency_key or "transition-" + uuid.uuid4().hex
         return OptimizationResource.model_validate(
-            await self._client._request("POST", _path(optimization_id, ":transition"),
-                                        json={"strategy": strategy},
-                                        headers={"Idempotency-Key": key})
+            await self._client._request(
+                "POST",
+                _path(optimization_id, ":transition"),
+                json={"strategy": strategy},
+                headers={"Idempotency-Key": key},
+            )
         )
 
     async def cancel(self, optimization_id: str) -> OptimizationResource:
         return OptimizationResource.model_validate(
             await self._client._request("POST", _path(optimization_id, ":cancel"))
+        )
+
+    async def pause(self, optimization_id: str) -> OptimizationResource:
+        return OptimizationResource.model_validate(
+            await self._client._request("POST", _path(optimization_id, ":pause"))
         )
 
     async def resume(self, optimization_id: str) -> OptimizationResource:
@@ -1297,6 +1443,27 @@ class AsyncOptimization:
             self.resource = receipt.optimization
         return receipt
 
+    async def iter_results(
+        self, *, order: str = "round", limit: int | None = None, page_size: int = MAX_RESULTS_PAGE
+    ) -> AsyncIterator[Observation]:
+        limit = _check_limit(limit)
+        page_size = _positive_int(page_size, "page_size")
+        if page_size > MAX_RESULTS_PAGE:
+            raise ValueError(f"page_size must be at most {MAX_RESULTS_PAGE}")
+        cursor, seen = None, 0
+        while True:
+            size = min(page_size, limit - seen) if limit is not None else page_size
+            rows, cursor = await self._api.results_page(
+                self.id, order=order, limit=size, cursor=cursor
+            )
+            for row in rows:
+                yield row
+                seen += 1
+                if limit is not None and seen >= limit:
+                    return
+            if not cursor or not rows:
+                return
+
     async def results(self, *, order: str = "best", limit: int | None = None) -> OptimizationResult:
         limit = _check_limit(limit)
         observations: list[Observation] = []
@@ -1320,16 +1487,22 @@ class AsyncOptimization:
 
     async def add_seeds(self, rows, *, mode="external", scorer=None, idempotency_key=None):
         self.resource = await self._api.add_seeds(
-            self.id, rows, mode=mode, scorer=scorer, idempotency_key=idempotency_key)
+            self.id, rows, mode=mode, scorer=scorer, idempotency_key=idempotency_key
+        )
         return self
 
     async def transition(self, strategy, *, idempotency_key=None):
         self.resource = await self._api.transition(
-            self.id, strategy, idempotency_key=idempotency_key)
+            self.id, strategy, idempotency_key=idempotency_key
+        )
         return self
 
     async def cancel(self) -> AsyncOptimization:
         self.resource = await self._api.cancel(self.id)
+        return self
+
+    async def pause(self) -> AsyncOptimization:
+        self.resource = await self._api.pause(self.id)
         return self
 
     async def resume(self) -> AsyncOptimization:
@@ -1364,10 +1537,42 @@ class _Journal:
         self.directory = journal_root() / _filename(optimization_id)
         self.optimization_id = optimization_id
 
+    @contextmanager
+    def lock(self):
+        locks = journal_root() / ".locks"
+        locks.mkdir(parents=True, exist_ok=True)
+        with (locks / f"{_filename(self.optimization_id)}.lock").open("a+b") as stream:
+            if os.fstat(stream.fileno()).st_size == 0:
+                stream.write(b"0")
+                stream.flush()
+            stream.seek(0)
+            try:
+                if os.name == "nt":
+                    import msvcrt
+
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as error:
+                raise DeepMedChemError(
+                    "Another local client is scoring this optimization.",
+                    code="optimization_client_busy",
+                ) from error
+            try:
+                yield
+            finally:
+                stream.seek(0)
+                if os.name == "nt":
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+
     def path(self, batch_id: str) -> Path:
         return self.directory / f"{_filename(batch_id)}.json"
 
-    def load(self, batch: Batch) -> list[dict[str, Any]] | None:
+    def load(self, batch: Batch, scorer: Any = None) -> list[dict[str, Any]] | None:
         path = self.path(batch.id)
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
@@ -1379,6 +1584,7 @@ class _Journal:
         if (
             not isinstance(rows, list)
             or payload.get("batch_id") != batch.id
+            or payload.get("scorer") != scorer
             or sorted(str(row.get("id")) for row in rows if isinstance(row, dict))
             != sorted(batch.ids)
         ):
@@ -1426,7 +1632,7 @@ class _Journal:
             return
         keep = self.path(keep_batch_id).name
         for path in self.directory.glob("*.json"):
-            if path.name != keep:
+            if path.name not in {keep, self.path(keep_batch_id + ".partial").name}:
                 try:
                     path.unlink()
                 except OSError:
@@ -1477,7 +1683,12 @@ def _submit_with_retries(
     raise AssertionError("unreachable")
 
 
-def _drive(
+def _drive(optimization, score_batch, **kwargs):
+    with _Journal(optimization.id).lock():
+        return _drive_locked(optimization, score_batch, **kwargs)
+
+
+def _drive_locked(
     optimization: Optimization,
     score_batch: Callable[[Batch], list[dict[str, Any]]],
     *,
@@ -1485,6 +1696,9 @@ def _drive(
     progress: bool,
     named: bool,
     resume_hint: str,
+    score_chunk_size: int | None = None,
+    score_workers: int = 1,
+    result_limit: int | None = None,
 ) -> OptimizationResult:
     """Run the ask → score → journal → submit loop until the optimization finishes."""
 
@@ -1494,7 +1708,7 @@ def _drive(
         reason = f" ({resource.status_reason})" if resource.status_reason else ""
         if resource.status == "completed":
             _say(progress, f"Optimization {label} has already completed{reason}.")
-            return optimization.results()
+            return _collect_result(optimization, result_limit)
         raise DeepMedChemError(
             f"Optimization {label} ({optimization.id}) is {resource.status}{reason}. Its results "
             f"stay readable with client.optimizations.get({optimization.id!r}).results(); "
@@ -1528,9 +1742,11 @@ def _drive(
             if batch is None:
                 break
             journal.discard_others(batch.id)
-            rows = journal.load(batch)
+            rows = journal.load(batch, scorer=scorer)
             if rows is None:
-                rows = score_batch(batch)
+                rows = _score_chunks(
+                    batch, score_batch, journal, scorer, score_chunk_size, score_workers
+                )
                 journal.save(batch, rows, scorer)
             else:
                 _say(
@@ -1541,6 +1757,7 @@ def _drive(
             saved = True
             receipt = _submit_with_retries(optimization, batch.id, rows, scorer)
             journal.discard(batch.id)
+            journal.discard(batch.id + ".partial")
             saved = False
             for row in ([] if resource.specification.get("objectives") else rows):
                 if row.get("status") == "valid" and row.get("score") is not None:
@@ -1573,19 +1790,13 @@ def _drive(
         )
         raise
     journal.cleanup()
-    result = optimization.results()
+    result = _collect_result(optimization, result_limit)
     final = optimization.resource
-    if final.status in {"failed", "cancelled"}:
-        stopped = f" ({final.status_reason})" if final.status_reason else ""
-        raise DeepMedChemError(
-            f"Optimization {label} ({optimization.id}) ended {final.status}{stopped} after "
-            f"{final.progress.scored}/{final.progress.budget} molecules were scored. Its results "
-            f"stay readable with client.optimizations.get({optimization.id!r}).results().",
-            code="optimization_not_active",
-        )
     reason = f" ({final.status_reason})" if final.status_reason else ""
     best_row = result.best
-    best_score = best_row.score if best_row is not None else None
+    best_score = (
+        best_row.score if best_row is not None else (final.best.score if final.best else None)
+    )
     _say(
         progress,
         f"Optimization {label} {final.status}{reason}: {final.progress.scored} scored, "
@@ -1612,6 +1823,9 @@ def optimize(
     scorer: Mapping[str, Any] | None = None,
     metadata: Mapping[str, Any] | None = None,
     progress: bool = True,
+    score_chunk_size: int | None = None,
+    score_workers: int = 1,
+    result_limit: int | None = None,
     client: Client | None = None,
 ) -> OptimizationResult:
     """Optimize internal objective terms and/or a custom score with Navigator.
@@ -1634,6 +1848,11 @@ def optimize(
     ``name`` makes the call resumable: re-running it after Ctrl-C, a crash or a reboot
     continues the same optimization, and scores that were computed but not uploaded are
     re-submitted from a local journal instead of being recomputed.
+
+    Set ``score_chunk_size`` to journal partial progress within a server batch.
+    ``score_workers`` enables bounded threads for callbacks that support concurrency.
+    ``result_limit=0`` returns only the run summary; a positive limit collects the
+    best N observations. The default preserves collection of every observation.
     """
 
     if objectives is not None and (
@@ -1652,6 +1871,7 @@ def optimize(
         raise ValueError("a score callback requires an explicit external objective term")
     _check_direction(direction)
     _check_name(name)
+    _check_driver_options(score_chunk_size, score_workers, result_limit)
     owned = client is None
     active = Client() if client is None else client
     try:
@@ -1685,6 +1905,143 @@ def optimize(
             progress=progress,
             named=name is not None,
             resume_hint=hint,
+            score_chunk_size=score_chunk_size,
+            score_workers=score_workers,
+            result_limit=result_limit,
+        )
+    finally:
+        if owned:
+            active.close()
+
+
+def _check_driver_options(chunk_size, workers, result_limit):
+    if chunk_size is not None:
+        _positive_int(chunk_size, "score_chunk_size")
+    _positive_int(workers, "score_workers")
+    if workers > 1 and chunk_size is None:
+        raise ValueError("score_workers > 1 requires score_chunk_size")
+    if result_limit is not None:
+        if isinstance(result_limit, bool) or not isinstance(result_limit, int) or result_limit < 0:
+            raise ValueError("result_limit must be a nonnegative integer or None")
+
+
+def _collect_result(optimization, limit):
+    optimization.refresh()
+    final = optimization.resource
+    label = optimization.name or optimization.id
+    if final.status in {"failed", "cancelled"}:
+        stopped = f" ({final.status_reason})" if final.status_reason else ""
+        raise DeepMedChemError(
+            f"Optimization {label} ({optimization.id}) ended {final.status}{stopped} after "
+            f"{final.progress.scored}/{final.progress.budget} molecules were scored. Its results "
+            f"stay readable with client.optimizations.get({optimization.id!r}).results().",
+            code="optimization_not_active",
+        )
+    if limit == 0:
+        return OptimizationResult(observations=[], optimization=optimization.resource)
+    return optimization.results(limit=limit)
+
+
+def _score_chunks(batch, score_batch, journal, scorer, chunk_size, workers):
+    if chunk_size is None:
+        return score_batch(batch)
+    partial = batch.model_copy(update={"id": batch.id + ".partial"})
+    path = journal.path(partial.id)
+    completed = {}
+    if path.exists():
+        payload = json.loads(path.read_text())
+        if payload.get("batch_id") != partial.id or payload.get("scorer") != scorer:
+            raise DeepMedChemError(
+                "Saved partial scores belong to a different scorer or batch.",
+                code="invalid_score_journal",
+            )
+        completed = {row["id"]: row for row in payload["rows"]}
+        if not set(completed).issubset(batch.ids):
+            raise DeepMedChemError(
+                "Saved partial scores do not match this batch.", code="invalid_score_journal"
+            )
+    remaining = [molecule for molecule in batch.molecules if molecule.id not in completed]
+    chunks = [
+        batch.model_copy(update={"molecules": remaining[start : start + chunk_size]})
+        for start in range(0, len(remaining), chunk_size)
+    ]
+
+    def accept(rows):
+        completed.update((row["id"], row) for row in rows)
+        journal.save(partial, list(completed.values()), scorer)
+
+    if workers == 1:
+        for chunk in chunks:
+            accept(score_batch(chunk))
+    else:
+        # Callbacks must support threads. Already running callbacks finish before
+        # shutdown; successful chunks are journaled even if another callback fails.
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [executor.submit(score_batch, chunk) for chunk in chunks]
+            failure = None
+            try:
+                for future in as_completed(futures):
+                    try:
+                        accept(future.result())
+                    except Exception as error:
+                        failure = failure or error
+                        for pending in futures:
+                            pending.cancel()
+            except BaseException:
+                for future in futures:
+                    future.cancel()
+                raise
+            if failure is not None:
+                raise failure
+    return [completed[molecule_id] for molecule_id in batch.ids]
+
+
+def resume(
+    id_or_name: str,
+    score: Callable[[list[str]], Any] | None = None,
+    *,
+    client: Client | None = None,
+    progress: bool = True,
+    score_chunk_size: int | None = None,
+    score_workers: int = 1,
+    result_limit: int | None = None,
+) -> OptimizationResult:
+    """Continue an existing run by ID/name using its original specification and scorer.
+
+    A server-paused run is explicitly resumed. A failed/cancelled run remains terminal.
+    Chunk sizes and local concurrency may change without changing the server specification.
+    Omit ``score`` for a run whose objectives are all scored on the server.
+    """
+    if score is not None and not callable(score):
+        raise TypeError("score must be callable")
+    _check_driver_options(score_chunk_size, score_workers, result_limit)
+    owned = client is None
+    active = Client() if owned else client
+    try:
+        optimization = active.optimizations.get(id_or_name)
+        objectives = optimization.resource.specification.get("objectives")
+        needs_external = not objectives or any(
+            term.get("type") == "external" for term in objectives
+        )
+        if needs_external and not callable(score):
+            raise TypeError("score must be callable for an external or mixed objective run")
+        if not needs_external and score is not None:
+            raise ValueError("a score callback requires an explicit external objective term")
+        if optimization.status == "paused":
+            optimization.resume()
+        return _drive(
+            optimization,
+            lambda batch: normalize_scores(batch, score(list(batch.smiles))),
+            scorer=optimization.resource.specification.get("scorer"),
+            progress=progress,
+            named=True,
+            resume_hint=(
+                f"continue with dmc.resume({optimization.id!r}, score)" if needs_external
+                else f"continue with dmc.resume({optimization.id!r})"
+            ),
+            score_chunk_size=score_chunk_size,
+            score_workers=score_workers,
+            result_limit=result_limit,
         )
     finally:
         if owned:
