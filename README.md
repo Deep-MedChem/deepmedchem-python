@@ -678,3 +678,12 @@ one run, or different campaign names for independent jobs.
 
 New backend result pages pin the snapshot at the first page so advancing campaigns do not
 shuffle later pages. With older servers, export completed or paused jobs for a stable view.
+
+### Exact molecular retrieval
+
+Morgan searches use the shared platform engine, including inverse-assembly
+identity recovery enabled by default in core 0.4.3. No client flag or larger
+result limit is required. Synchronous and asynchronous clients preserve server
+ordering, including exact isomeric identity ahead of equal-score fingerprint
+collisions. Existing filters still apply; a bounded search miss is not proof
+that a molecule is absent. Several supplier routes may produce the same molecule.
