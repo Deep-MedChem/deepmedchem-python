@@ -9,6 +9,17 @@ https://www.biosolveit.de/chemical-spaces/ . Asterisks denote indirect mappings.
 from __future__ import annotations
 
 DATABASE_DETAILS: dict[str, dict[str, str]] = {
+    "onepot-core-2-lite": {
+        "abbreviation": "onepot",
+        "biosolveit": "—",
+        "type": "Make-On-Demand",
+        "availability": "5-7 business days synthesis; overnight US delivery",
+        "success": "60-70%",
+        "url": "https://onepot.ai/",
+        "price_quote": "1 mg: $250 (2 components); $375 (3 or more components)",
+        "price_quote_source": "Supplier meeting notes; amount confirmed 2026-10-21",
+        "shipping_cost": "Not specified",
+    },
     "cheminfinita-2026-02": {
         "abbreviation": "cheminfinita",
         "biosolveit": "CHEMriya_55bn_2025-10*",
@@ -69,6 +80,7 @@ DATABASE_DETAILS: dict[str, dict[str, str]] = {
 
 # Preferred presentation order; unknown/private catalog entries follow these spaces.
 DATABASE_DISPLAY_ORDER = (
+    "onepot-core-2-lite",
     "enamine-real-v5a",
     "freedom-space-5",
     "synple-explore-2025-10",

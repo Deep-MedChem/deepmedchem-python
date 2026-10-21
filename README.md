@@ -160,6 +160,28 @@ counts differ. [BioSolveIT download catalog](https://www.biosolveit.de/chemical-
 
 \*\* No direct mapping: our Enamine version is built from public Enamine building blocks, so it is not identical to the BioSolveIT version. But it is very similar.
 
+## Onepot CORE 2.0 Lite
+
+Use `database="onepot"` (canonical ID `onepot-core-2-lite`) for Onepot searches.
+Availability and supported capabilities come from the connected API catalog.
+The supplier quotes **$250 for two-component products and $375 for three or more
+components, per 1 mg**. Shipping cost is unspecified. Reported synthesis success
+is 60–70%, synthesis takes 5–7 business days, and US delivery is overnight.
+These are supplier estimates; request a final quote from **hello@onepot.ai**.
+
+```bash
+dmc search "CC(=O)Nc1ccccc1" -d onepot -n 10 -o onepot.csv
+dmc substructure "[N;R0]C(=O)" -d onepot -n 10 -o onepot-substructure.csv
+dmc order onepot.csv --get-quote --amount-mg 1 --no-open
+```
+
+Use the existing `properties=` and `max_price=` search arguments for descriptor
+and price constraints. ADMET availability is listed in the API capabilities;
+CP16 acquisition scores are approximate and final properties use full-product
+models. Onepot result exports retain the supplier reaction ID and ordered vendor
+synthon IDs in `offers`. Order drafts carry those identifiers into the supplier
+CSV, together with the product SMILES and DeepMedChem reference.
+
 ## Requesting quotes and orders
 
 Prepare vendor-ready requests directly from an exported result CSV:
@@ -213,34 +235,83 @@ the original search response, so both `hit.price` and the aligned `result.prices
 available without another API request. Databases without price estimates return `None`; run
 `dmc databases` for the current list and the vendor address to request a binding quote.
 
-## Optimize with your own scorer
+## Optimize with explicit chemistry and optional custom scores
 
-Navigator proposes molecules from a chemical space, your function scores them locally (docking,
-an ML model, an RDKit property), and the scores steer the next proposals until the budget is
-spent. Only SMILES and numbers cross the network.
+Put supported structures and property limits in `constraints=` / `properties=`, and supported
+preferences in `objectives=`. Navigator guides synthon tuple generation and ranking, then
+verifies assembled products. Docking and proprietary models remain callbacks.
 
 ```python
 import deepmedchem as dmc
-from rdkit import Chem
-from rdkit.Chem import QED
 
-def score(smiles):  # one value per SMILES, None for a molecule you cannot score
-    return [QED.qed(m) if (m := Chem.MolFromSmiles(s)) else None for s in smiles]
-
-result = dmc.optimize(score, direction="maximize", database="enamine",
-                      budget=500, batch_size=50, name="qed-demo")
-print(result.top(10))
+result = dmc.optimize(
+    database="enamine", budget=500, batch_size=50, name="qed-amino-acids",
+    properties={"MolWt": (None, 400), "MolLogP": (0, 3)},
+    constraints={"structures": {"all": [{"pattern_id": "alpha-amino-acid/v1"}]}},
+    objectives=[{"type": "property", "property_id": "rdkit.qed",
+                 "direction": "maximize", "lower": 0, "upper": 1}],
+)
 result.to_csv("qed_demo.csv")
 ```
 
-`direction` is required and scores are never negated. `name=` makes the call resumable: re-run it
-after Ctrl-C or a crash and it continues, re-sending scores that were computed but not uploaded.
-A scorer may return dicts such as `{"score": -9.1, "cnn_score": 0.82}`; the extra keys are stored
-as metrics. For manual control use `client.optimizations.create(...)` with `opt.ask()` and
-`opt.tell(batch, scores)`; for shell scorers and HPC queues use
-`dmc optimize run NAME --score-cmd 'CMD {input} {output}'` or `dmc optimize ask`/`tell`.
-Worked examples (RDKit, your own ML model, GNINA docking) are in
-[`examples/optimization`](examples/optimization/README.md).
+No callback or client RDKit installation is needed for built-in-only runs. Check
+`dmc.catalog()["optimization"]` for the deployment's enabled constraints, objectives and ADMET
+endpoints. Typed structure requirements use synthon anchors, including reaction junctions;
+released descriptor caches and reaction margins guide property-feasible sampling. Final product
+checks enforce counts, chirality, exclusions and exact descriptor bounds. The engine reports
+its actual acquisition path and any fallback in `optimization.engine.constraint_acquisition`.
+
+For docking, keep the callback focused on docking:
+
+```python
+result = dmc.optimize(docking_score, direction="minimize", database="enamine",
+                      budget=500, batch_size=50, properties={"MolWt": (None, 400)})
+```
+
+A callback takes a SMILES list and returns one score per molecule, optionally with metrics.
+`name=` resumes an unchanged specification; local score journals prevent repeated external
+scoring after an interrupted upload. The sync/async create APIs support the same parameters.
+The CLI accepts `--constraints constraints.json` and `--objectives objectives.json`; omit
+`--score-cmd` for built-in-only runs. See [optimization examples](examples/optimization/README.md)
+for normalized mixed objectives, molecular similarity, ADMET and docking.
+
+ADMET availability is specific to the database and its installed release. With a client,
+inspect `client.optimizations.capabilities("enamine")`; the returned
+`predicted_properties` maps endpoint IDs to units. The equivalent catalog field is
+`optimization.database_capabilities["enamine-real-v5a"].predicted_properties`.
+The legacy `optimization.constraints.predicted_properties` contains only endpoints
+shared by every advertised database, so it can be empty while Enamine supports ADMET.
+Also check the catalog's `constraints.enabled` and `objectives.enabled` flags.
+
+```python
+with dmc.Client() as client:
+    capabilities = client.optimizations.capabilities("enamine")
+    endpoint = "openadmet-herg-pchembl"
+    units = capabilities["predicted_properties"][endpoint]
+    result = dmc.optimize(
+        client=client,
+        database="enamine",
+        direction="maximize",  # aggregate desirability
+        budget=100,
+        batch_size=20,
+        constraints={"predicted_properties": [
+            {"endpoint_id": endpoint, "operator": "lte", "value": 6, "units": units},
+        ]},
+        objectives=[
+            {"type": "predicted_property", "endpoint_id": endpoint, "units": units,
+             "direction": "minimize", "lower": 3, "upper": 8},
+        ],
+    )
+```
+
+The bounds above illustrate the API; choose thresholds for your experiment. CP16
+ranks synthon tuples before assembly. The matching full-product model supplies the
+final eligibility check and objective value. These are model predictions, not
+experimental measurements. A database with no advertised endpoint rejects that term
+before a campaign is created. Adding an external docking term keeps docking in the
+callback while the same internal ADMET guidance and checks remain active.
+
+
 
 ## Filters and virtual subsets
 
@@ -562,3 +633,57 @@ operations. `dmc optimize run` and `dmc.optimize()` accept a hit threshold (`--h
 Custom `properties={"MolWt": (None, 350)}` windows are checked on assembled products by the
 upgraded worker, including when combined with `filters="druglike"`. Check the catalog's
 optimization property capabilities before requesting them.
+
+### Long-running optimizations
+
+Give each independent campaign a name and pin scorer metadata when reproducibility matters.
+The scoring callback executes locally; keep one coordinating client per campaign.
+
+```python
+result = dmc.optimize(
+    score, direction="maximize", name="campaign-1", budget=50_000, batch_size=500,
+    score_chunk_size=25, score_workers=2, result_limit=0,
+)
+# After interruption, resume using the stored specification (no new job is created):
+result = dmc.resume("campaign-1", score, score_chunk_size=25, result_limit=0)
+
+with dmc.Client() as client:
+    run = client.optimizations.get("campaign-1")
+    run.export_csv("observations.csv")
+    # Optional: pip install 'deepmedchem[parquet]'
+    run.export_parquet("observations.parquet")
+    for observation in run.iter_results(order="best", limit=100):
+        print(observation)
+```
+
+`score_chunk_size` journals each finished scoring chunk before the next upload. A crash can
+still lose an unfinished chunk; work on another machine needs the same local cache to reuse
+unsubmitted scores. Changing chunk size on resume is supported. `score_workers` runs callbacks
+in bounded threads and requires a thread-safe scorer. Running callbacks finish before thread
+shutdown; this is not a mechanism for killing a hung docking process.
+
+`result_limit=0` returns an `OptimizationResult` with an empty observations list and the server
+summary in `.optimization`; a positive value fetches only the best N observations. Omitting it
+preserves the existing behavior of collecting every observation. Streaming exports are atomic
+and encode arbitrary metrics in one JSON column instead of discovering all metric columns in
+memory. Async handles also support `iter_results()`.
+
+`run.pause()` requests a pause after the current server step; `run.resume()` releases a server
+pause. `dmc.resume(id_or_name, score)` also resumes a server-paused job before continuing scoring.
+For built-in-only objectives, use `dmc.resume(id_or_name)` without a callback.
+These pause controls require the corresponding backend release. Cancelled jobs remain terminal.
+A local advisory lock rejects a second high-level scoring client sharing the same cache; it
+cannot coordinate clients on different machines. Use one coordinator with scoring threads for
+one run, or different campaign names for independent jobs.
+
+New backend result pages pin the snapshot at the first page so advancing campaigns do not
+shuffle later pages. With older servers, export completed or paused jobs for a stable view.
+
+### Exact molecular retrieval
+
+Morgan searches use the shared platform engine, including inverse-assembly
+identity recovery enabled by default in core 0.4.3. No client flag or larger
+result limit is required. Synchronous and asynchronous clients preserve server
+ordering, including exact isomeric identity ahead of equal-score fingerprint
+collisions. Existing filters still apply; a bounded search miss is not proof
+that a molecule is absent. Several supplier routes may produce the same molecule.

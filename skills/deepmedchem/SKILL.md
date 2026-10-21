@@ -122,8 +122,8 @@ with Client() as client:                   # api_key=..., profile=..., timeout=4
 ## Optimization with the user's own scorer (Navigator ask/tell)
 
 Navigator proposes a batch of molecules; the user's scorer scores it locally; the scores go back
-and steer the next batch until `budget` molecules are scored. The SDK contains no scorer: write
-the scoring function (or shell command) yourself.
+and steer the next batch until `budget` molecules are scored. Use explicit `objectives=` for
+supported descriptors, similarity and ADMET; a built-in-only run needs no callback.
 
 ```python
 import deepmedchem as dmc
@@ -156,14 +156,28 @@ dmc optimize tell NAME scores.csv
 dmc optimize status [NAME] | results NAME --top 50 -o best.csv | cancel NAME | resume NAME
 ```
 
-- **`direction` is required** (`"minimize"` for docking scores, usually `"maximize"` for model
+- **Declare `direction` explicitly for external scores** (`"minimize"` for docking scores, usually `"maximize"` for model
   predictions). Scores are never negated; do not negate them yourself.
 - **`name` is the resume key.** Re-running the same `dmc.optimize(...)` or `dmc optimize run`
   continues the optimization; scores computed but not uploaded are re-sent from a local journal.
   The same name with a different specification is a 409 `idempotency_conflict`.
 - **Report failures, never drop them.** Every proposed id needs exactly one row; the SDK fills
   ids a scorer did not return as `failed`. If the scorer raises, nothing is submitted.
-- One scalar is optimized. Put other numbers in metrics; combine objectives in the scorer.
+- Put supported hard requirements in `properties=` / `constraints=`, never in zero/penalty
+  callback scores. Keep docking and proprietary models in the callback. Unknown hard
+  requirements are unsupported; do not silently turn them into a soft preference.
+- Check `catalog()["optimization"]["constraints"]["enabled"]` before using typed structures.
+  `all`, thresholded `any`, and `none` accept typed SMILES/SMARTS or advertised pattern IDs.
+  Guided acquisition is the default: synthon anchors and additive property sampling precede
+  exact product verification. Inspect `engine.constraint_acquisition` for actual execution/fallbacks.
+- Check `optimization.objectives.enabled` and advertised ADMET endpoints. Put supported
+  preferences in `objectives=` with explicit normalization bounds, direction and weight.
+  Built-in-only runs omit the callback. Mixed runs include an `external` term and maximize the
+  weighted mean desirability; the callback returns only its raw external score.
+- CP16 guides acquisition; pinned assembled-product teachers enforce ADMET thresholds and
+  score ADMET objectives. Neither value is a measurement. Unavailable models fail explicitly.
+- Keep supported descriptor limits and preferences out of custom callbacks. Internal objective
+  raw values appear as `metrics.objective_N`, with ADMET provenance in `objective_N_model`.
 - `filters="druglike"` and `properties={"MolWt": (None, 500)}` restrict the space;
   `strategy` picks a Navigator preset (`gamma_diversity_screening` default). Allowed databases,
   strategies, properties and limits are in `dmc.catalog()["optimization"]`.
