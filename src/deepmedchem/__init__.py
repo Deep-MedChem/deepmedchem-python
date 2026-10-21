@@ -1,6 +1,6 @@
 """Official Python client for the DeepMedChem platform API."""
 
-__version__ = "0.4.0b2"
+__version__ = "0.4.0b5"
 
 from . import aio, subsets
 from .batch import BatchQuery, BatchQueryResult, BatchResult, read_queries
@@ -35,6 +35,7 @@ from .optimization import (
     Optimization,
     normalize_scores,
     optimize,
+    resume,
 )
 from .ordering import OrderBundle, OrderDraft, OrderMolecule, prepare_order
 from .selection import Run, Selection
@@ -84,6 +85,7 @@ __all__ = [
     "catalog",
     "normalize_scores",
     "optimize",
+    "resume",
     "prepare_order",
     "read_queries",
     "sample",

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.4.0b4 (2026-10-21)
+
+- Add the `onepot` alias for Onepot CORE 2.0 Lite and supplier information: 1 mg pricing ($250 for two components; $375 for three or more), estimated synthesis time and success, and US delivery timing.
+- Preserve the source reaction and ordered vendor synthon IDs in Onepot order drafts addressed to `hello@onepot.ai`.
+- Expose supplier offers alongside search and sampling results for reproducible ordering. Library availability remains determined by the live server catalog.
+
+## 0.4.0b3 (2026-10-16)
+
+### Added
+
+- Per-database optimization capability discovery through synchronous and asynchronous
+  `client.optimizations.capabilities(database)`, including release pins and supported ADMET units.
+- Native ADMET optimization examples: supported constraints and objectives guide CP16
+  acquisition and receive final full-product teacher validation; custom docking stays in
+  the external scoring callback. Endpoint availability depends on the selected deployment
+  and database.
+- Native optimization constraints and objectives, streaming results, and campaign resume
+  support from the intervening development updates.
+
 ## 0.4.0b2 (2026-10-13)
 
 ### Added

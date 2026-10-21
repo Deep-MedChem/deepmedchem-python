@@ -296,3 +296,82 @@ def test_read_scores_csv_parses_cells(tmp_path) -> None:
     path.write_text("id,score\na,1\na,2\n")
     with pytest.raises(ValueError, match="duplicate id"):
         cli.read_scores_csv(path)
+
+
+# --- correctness fixes (2026-10-12 review) -------------------------------------------
+
+
+def test_tell_reports_progress_including_the_batch_just_accepted(server, tmp_path, capsys) -> None:
+    _create(server, budget=4, batch_size=2)
+    batch_path = tmp_path / "b.csv"
+    assert cli.main(["optimize", "ask", "hpc", "-o", str(batch_path)]) == 0
+    capsys.readouterr()
+    with open(batch_path, newline="") as handle:
+        ids = [row["id"] for row in csv.DictReader(handle)]
+    scores = tmp_path / "s.csv"
+    scores.write_text("id,score\n" + "\n".join(f"{i},-1.0" for i in ids) + "\n")
+    assert cli.main(["optimize", "tell", "hpc", str(scores)]) == 0
+    out = capsys.readouterr().out
+    assert "2/4 molecules scored." in out
+    assert "total" not in out and "0 " not in out.split("(", 1)[1].split(")", 1)[0]
+
+
+def test_run_sends_constraints_file(server, tmp_path):
+    constraints = {
+        "structures": {"none": [{"query": {"format": "smarts", "value": "[N+](=O)[O-]"}}]}
+    }
+    path = tmp_path / "constraints.json"
+    path.write_text(json.dumps(constraints))
+    code = cli.main(
+        [
+            "optimize",
+            "run",
+            "constrained",
+            "-d",
+            "enamine",
+            "--minimize",
+            "--budget",
+            "3",
+            "--batch-size",
+            "3",
+            "--constraints",
+            str(path),
+            "--score-cmd",
+            _command(tmp_path),
+        ]
+    )
+    assert code == 0
+    assert json.loads(server.requests[0].content)["constraints"] == constraints
+
+
+def test_builtin_cli_needs_no_score_command(server, tmp_path, monkeypatch):
+    terms = [{"type": "property", "property_id": "rdkit.qed", "lower": 0, "upper": 1}]
+    path = tmp_path / "objectives.json"
+    path.write_text(json.dumps(terms))
+    original = server.create
+
+    def completed(request):
+        body = original(request).json()
+        state = server.optimizations[body["id"]]
+        state["resource"].update(status="completed", status_reason="budget_exhausted")
+        state["batch"] = None
+        return httpx.Response(202, json=state["resource"])
+
+    monkeypatch.setattr(server, "create", completed)
+    assert (
+        cli.main(
+            [
+                "optimize",
+                "run",
+                "internal",
+                "-d",
+                "enamine",
+                "--maximize",
+                "--objectives",
+                str(path),
+            ]
+        )
+        == 0
+    )
+    assert json.loads(server.requests[0].content)["objectives"] == terms
+    assert not any(":submit" in str(r.url) for r in server.requests)

@@ -7,6 +7,7 @@ platform backend.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import math
@@ -15,6 +16,8 @@ from typing import Any
 
 import httpx
 
+# The backend's score statuses (dmc_platform_backend.optimizations.models.SCORE_STATUSES).
+SCORE_STATUSES = ("valid", "failed", "timeout", "filtered", "cancelled")
 TERMINAL = {"completed", "failed", "cancelled"}
 _SPEC_FIELDS = {
     "start_paused",
@@ -26,6 +29,8 @@ _SPEC_FIELDS = {
     "strategy",
     "filters",
     "properties",
+    "constraints",
+    "objectives",
     "seed",
     "scorer",
     "metadata",
@@ -152,6 +157,7 @@ class FakeOptimizationServer:
             "polls": 0,
             "observations": [],
             "submitted": {},
+            "counts": {},
         }
         self.optimizations[optimization_id] = state
         if key:
@@ -220,7 +226,7 @@ class FakeOptimizationServer:
                         "accepted": True,
                         "duplicate": True,
                         "batch_id": batch_id,
-                        "counts": {},
+                        "counts": state["counts"][batch_id],
                         "optimization": resource,
                     },
                 )
@@ -261,7 +267,7 @@ class FakeOptimizationServer:
                 },
             )
         smiles = {molecule["id"]: molecule["smiles"] for molecule in batch["molecules"]}
-        counts: dict[str, int] = {}
+        counts: dict[str, int] = {status: 0 for status in SCORE_STATUSES}
         for row in rows:
             status = row.get("status") or ("valid" if row.get("score") is not None else "failed")
             counts[status] = counts.get(status, 0) + 1
@@ -275,7 +281,11 @@ class FakeOptimizationServer:
                     "metrics": row.get("metrics") or {},
                 }
             )
+        counts["total"] = len(rows)
         state["submitted"][batch_id] = digest
+        state["counts"][batch_id] = counts
+        receipt_resource = copy.deepcopy(resource)
+        receipt_resource.update(status="ingesting", pending_batch_id=None)
         progress = resource["progress"]
         progress["scored"] += len(rows)
         progress["valid"] += counts.get("valid", 0)
@@ -295,7 +305,7 @@ class FakeOptimizationServer:
                 "duplicate": False,
                 "batch_id": batch_id,
                 "counts": counts,
-                "optimization": resource,
+                "optimization": receipt_resource,
             },
         )
 
@@ -328,6 +338,12 @@ class FakeOptimizationServer:
     def pause(self, optimization_id: str, reason: str = "insufficient_credits") -> None:
         resource = self.optimizations[optimization_id]["resource"]
         resource.update(status="paused", status_reason=reason)
+
+    def fail(self, optimization_id: str, reason: str = "engine_crashed") -> None:
+        """Stop the run the way a crashed engine does: terminal, no pending batch."""
+        state = self.optimizations[optimization_id]
+        state["resource"].update(status="failed", status_reason=reason, pending_batch_id=None)
+        state["batch"] = None
 
     # --- router -----------------------------------------------------------------------
     def __call__(self, request: httpx.Request) -> httpx.Response:

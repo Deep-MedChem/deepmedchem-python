@@ -142,3 +142,16 @@ dmc search "O=C(Nc1ccccc1)c1ccncc1" -d enamine-real-v5a -m shape -n 50 -o shape_
 dmc substructure "[#6]C(=O)N[c;R]" -d enamine-real-v5a -n 200 -o amides.csv
 dmc order shape_hits.csv --get-quote --amount-mg 5 --no-open
 ```
+
+
+### Optimization chemistry constraints
+
+`dmc optimize run ... --constraints constraints.json --property MolWt=:400` sends the JSON
+constraint object alongside the custom `--score-cmd`. Check optimization catalog support first.
+The object accepts typed `properties`, `structures` (`all`, `any`, `none`) and advertised
+`predicted_properties`. Guided tuple acquisition precedes final product verification. Reusing
+a name with changed constraints or objective terms fails.
+
+`--objectives objectives.json` supplies normalized built-in or mixed terms. With `--maximize`,
+omit `--score-cmd` for a built-in-only run. When mixing docking with built-ins, include an
+`external` term; the command returns raw docking scores while the service combines components.

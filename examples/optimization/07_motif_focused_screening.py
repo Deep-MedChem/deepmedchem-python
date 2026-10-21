@@ -1,21 +1,11 @@
-"""Work from a required substructure: search for the motif, then rank the hits locally.
+"""Search a required motif directly, then rank the returned hits locally.
 
-**Read this before reaching for an optimization run.** A hosted optimization cannot be
-restricted to a substructure: ``properties=`` constrains RDKit descriptors, ``filters="druglike"``
-applies the druglike gate, and that is all the service enforces. Rewarding the motif in your
-score does not work either — in a space this large, essentially none of the proposals contain a
-specific motif, so the surrogate never sees a positive example and has nothing to learn from.
-Measured on a 150-molecule run with a dominant acrylamide reward: 0 matches.
+Guided optimization can enforce the same requirement through constraints.structures,
+restricting synthon tuple generation before final product checks. This separate direct-search
+example is useful when you want a bounded hit list rather than an iterative campaign.
 
-So when a motif is a *requirement*, start from substructure search, which does take SMARTS, and
-rank its hits with the same scoring function you would have optimized. That is exhaustive within
-the limit you ask for rather than adaptive, which for a narrowly defined motif is usually what
-you wanted anyway.
-
-What would need to change for a genuine motif-constrained optimization: SMARTS constraints in the
-optimization gate, or a decomposition of a reference molecule into synthons so it can seed analog
-search. Substructure hits cannot stand in for the latter today: their ``product_id`` belongs to
-the platform search, not to Navigator's synthon space, and seeding rejects it as malformed.
+Never use a zero-valued callback reward as a substitute for a required motif. Substructure hit
+IDs also cannot be assumed to be Navigator seed IDs across different release lineages.
 
 Requirements::
 
