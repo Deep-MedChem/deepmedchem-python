@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0b4 (2026-10-21)
+
+- Add the `onepot` alias for Onepot CORE 2.0 Lite and supplier information: 1 mg pricing ($250 for two components; $375 for three or more), estimated synthesis time and success, and US delivery timing.
+- Preserve the source reaction and ordered vendor synthon IDs in Onepot order drafts addressed to `hello@onepot.ai`.
+- Expose supplier offers alongside search and sampling results for reproducible ordering. Library availability remains determined by the live server catalog.
+
 ## 0.4.0b3 (2026-10-16)
 
 ### Added
