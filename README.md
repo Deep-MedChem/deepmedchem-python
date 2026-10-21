@@ -160,6 +160,28 @@ counts differ. [BioSolveIT download catalog](https://www.biosolveit.de/chemical-
 
 \*\* No direct mapping: our Enamine version is built from public Enamine building blocks, so it is not identical to the BioSolveIT version. But it is very similar.
 
+## Onepot CORE 2.0 Lite
+
+Use `database="onepot"` (canonical ID `onepot-core-2-lite`) for Onepot searches.
+Availability and supported capabilities come from the connected API catalog.
+The supplier quotes **$250 for two-component products and $375 for three or more
+components, per 1 mg**. Shipping cost is unspecified. Reported synthesis success
+is 60–70%, synthesis takes 5–7 business days, and US delivery is overnight.
+These are supplier estimates; request a final quote from **hello@onepot.ai**.
+
+```bash
+dmc search "CC(=O)Nc1ccccc1" -d onepot -n 10 -o onepot.csv
+dmc substructure "[N;R0]C(=O)" -d onepot -n 10 -o onepot-substructure.csv
+dmc order onepot.csv --get-quote --amount-mg 1 --no-open
+```
+
+Use the existing `properties=` and `max_price=` search arguments for descriptor
+and price constraints. ADMET availability is listed in the API capabilities;
+CP16 acquisition scores are approximate and final properties use full-product
+models. Onepot result exports retain the supplier reaction ID and ordered vendor
+synthon IDs in `offers`. Order drafts carry those identifiers into the supplier
+CSV, together with the product SMILES and DeepMedChem reference.
+
 ## Requesting quotes and orders
 
 Prepare vendor-ready requests directly from an exported result CSV:
