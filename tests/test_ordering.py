@@ -223,3 +223,39 @@ def test_mcule_amino_acid_and_explore_5p4b_catalogues_have_procurement_contacts(
     ):
         assert contacts[database_id.casefold()].email == "order@mcule.com"
     assert contacts["explore-5p4b"].email == "sales@emolecules.com"
+
+
+def test_onepot_order_preserves_supplier_reconstruction_tuple(tmp_path):
+    import csv
+    import json
+
+    from deepmedchem.ordering import prepare_order
+
+    source = tmp_path / "hits.csv"
+    with source.open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["database_id", "product_id", "smiles", "offers"])
+        writer.writeheader()
+        writer.writerow(
+            dict(
+                database_id="onepot-core-2-lite",
+                product_id="hash",
+                smiles="CCNC(C)=O",
+                offers=json.dumps(
+                    [
+                        dict(
+                            vendor="Onepot",
+                            source_reaction_id="amide_coupling_0",
+                            vendor_synthon_ids=["000001a", "000002b"],
+                        )
+                    ]
+                ),
+            )
+        )
+    bundle = prepare_order(source, output_dir=tmp_path / "draft", amount_mg=1)
+    draft = bundle.drafts[0]
+    assert draft.email == "hello@onepot.ai"
+    assert "amide_coupling_0" in draft.body
+    with draft.csv_path.open() as f:
+        rows = list(csv.DictReader(f))
+    assert json.loads(rows[0]["vendor_synthon_ids"]) == ["000001a", "000002b"]
+    assert rows[0]["source_reaction_id"] == "amide_coupling_0"

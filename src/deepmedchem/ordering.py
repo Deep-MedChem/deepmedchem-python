@@ -102,8 +102,11 @@ _register(
     "MCULE-UNNATURAL-AA-IN-STOCK",
 )
 _register(VendorContact("Molport", "sales@molport.com"), "MOLPORT")
+# Yurii's supplied CORE 2.0 Lite email explicitly names this order address.
+_register(VendorContact("Onepot", "hello@onepot.ai"), "onepot-core-2-lite")
 
 CURRENT_DATABASE_IDS: tuple[str, ...] = (
+    "onepot-core-2-lite",
     "freedom-space-5",
     "vast-2026-h2",
     "cheminfinita-2026-02",
@@ -126,6 +129,8 @@ class OrderMolecule:
     database_id: str
     deepmedchem_id: str
     smiles: str
+    source_reaction_id: str | None = None
+    vendor_synthon_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -255,10 +260,36 @@ def read_order_csv(path: str | Path, *, database: str | None = None) -> list[Ord
             if not database_id:
                 raise ValueError(f"{source}: row {row_number} has no database ID")
 
+            source_reaction_id = None
+            vendor_synthon_ids = ()
+            if expand_database_alias(database_id) == "onepot-core-2-lite" and row.get("offers"):
+                offers = json.loads(row["offers"])
+                source_offer = next(
+                    (offer for offer in offers if offer.get("vendor") == "Onepot"), None
+                )
+                if source_offer is not None:
+                    source_reaction_id = _without_control_characters(
+                        str(source_offer["source_reaction_id"]),
+                        field="source reaction",
+                        source=source,
+                        row=row_number,
+                    )
+                    vendor_synthon_ids = tuple(
+                        _without_control_characters(
+                            str(value), field="vendor synthon", source=source, row=row_number
+                        )
+                        for value in source_offer["vendor_synthon_ids"]
+                    )
+                    if len(vendor_synthon_ids) not in (2, 3, 4) or not all(vendor_synthon_ids):
+                        raise ValueError(
+                            "Onepot order provenance requires two to four vendor synthons"
+                        )
             molecule = OrderMolecule(
                 database_id=expand_database_alias(database_id),
                 deepmedchem_id=_reference_id(product_id, row_number=row_number - 1),
                 smiles=smiles,
+                source_reaction_id=source_reaction_id,
+                vendor_synthon_ids=vendor_synthon_ids,
             )
             identity = (molecule.database_id.casefold(), molecule.deepmedchem_id, molecule.smiles)
             if identity not in seen:
@@ -308,16 +339,29 @@ def _draft_text(
         [
             "",
             "DeepMedChem price estimates are intentionally omitted and are not binding.",
-            "The generated molecules.csv file contains only database IDs, DeepMedChem reference "
+            "The generated molecules.csv file contains database IDs, DeepMedChem reference "
             "IDs, and SMILES.",
         ]
     )
+    provenance = any(m.source_reaction_id for m in molecules)
+    if provenance:
+        lines.append(
+            "The CSV also includes the supplier reaction ID and ordered vendor synthon IDs."
+        )
     inline_characters = sum(
         len(m.database_id) + len(m.deepmedchem_id) + len(m.smiles) + 2 for m in molecules
     )
     if count <= INLINE_MOLECULE_LIMIT and inline_characters <= INLINE_CHARACTER_LIMIT:
         lines.extend(["", "Molecules:", "database_id\tdeepmedchem_id\tsmiles"])
         lines.extend(f"{m.database_id}\t{m.deepmedchem_id}\t{m.smiles}" for m in molecules)
+        if provenance:
+            lines.extend(["", "Supplier reconstruction tuples:"])
+            lines.extend(
+                f"{m.deepmedchem_id}: {m.source_reaction_id}; "
+                f"synthons (slot order): {', '.join(m.vendor_synthon_ids)}"
+                for m in molecules
+                if m.source_reaction_id
+            )
     else:
         lines.extend(["", "Please see the accompanying molecules.csv file for the molecule list."])
     lines.extend(["", "Thank you for your assistance.", "", "Best regards,", name or "[Your Name]"])
@@ -330,17 +374,25 @@ def _mailto(email: str, *, subject: str, body: str, cc: str) -> str:
 
 
 def _write_request_csv(path: Path, molecules: list[OrderMolecule]) -> None:
+    provenance = any(m.source_reaction_id for m in molecules)
+    fields = ["database_id", "deepmedchem_id", "smiles"]
+    if provenance:
+        fields += ["source_reaction_id", "vendor_synthon_ids"]
     with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=("database_id", "deepmedchem_id", "smiles"))
+        writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
-        writer.writerows(
-            {
+        for molecule in molecules:
+            row = {
                 "database_id": molecule.database_id,
                 "deepmedchem_id": molecule.deepmedchem_id,
                 "smiles": molecule.smiles,
             }
-            for molecule in molecules
-        )
+            if provenance:
+                row.update(
+                    source_reaction_id=molecule.source_reaction_id,
+                    vendor_synthon_ids=json.dumps(molecule.vendor_synthon_ids),
+                )
+            writer.writerow(row)
 
 
 def prepare_order(
