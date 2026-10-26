@@ -31,6 +31,7 @@ class SelectionModel(BaseModel):
 
     schema_version: Literal["molecule-selection/1"] = "molecule-selection/1"
     database: dict[str, str | None]
+    calculation_mode: Literal["original", "deprotected"] = "original"
     references: list[dict[str, Any]] = Field(default_factory=list)
     strategy: dict[str, Any]
     constraints: dict[str, Any] = Field(default_factory=dict)
@@ -43,6 +44,8 @@ class SelectionModel(BaseModel):
     def validate_shape(self):
         if self.strategy.get("type") not in {"ranked", "sample"}:
             raise ValueError("strategy.type must be ranked or sample")
+        if self.calculation_mode == "deprotected" and self.strategy.get("type") != "ranked":
+            raise ValueError("deprotected calculation is supported only for ranked similarity")
         ids = [str(item.get("id", "")) for item in self.references]
         if len(ids) != len(set(ids)) or any(not value for value in ids):
             raise ValueError("reference IDs must be non-empty and unique")
@@ -107,6 +110,10 @@ class Selection:
 
     def ranked(self) -> Selection:
         return self._changed(lambda payload: payload.update(strategy={"type": "ranked"}))
+
+    def calculation_mode(self, mode: Literal["original", "deprotected"]) -> Selection:
+        """Choose similarity representation; source structures and constraints stay intact."""
+        return self._changed(lambda payload: payload.update(calculation_mode=mode))
 
     def sample(
         self,
@@ -486,7 +493,10 @@ class Selection:
         return self._changed(update)
 
     def to_dict(self) -> dict[str, Any]:
-        return deepcopy(self._model.model_dump(mode="json", exclude_none=True))
+        payload = deepcopy(self._model.model_dump(mode="json", exclude_none=True))
+        if payload.get("calculation_mode") == "original":
+            payload.pop("calculation_mode", None)
+        return payload
 
     def to_json(self, *, indent: int | None = 2) -> str:
         return json.dumps(self.to_dict(), sort_keys=True, indent=indent)

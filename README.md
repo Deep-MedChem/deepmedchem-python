@@ -235,6 +235,26 @@ the original search response, so both `hit.price` and the aligned `result.prices
 available without another API request. Databases without price estimates return `None`; run
 `dmc databases` for the current list and the vendor address to request a binding quote.
 
+For a server configured with the experimental PG parent assets, pass
+`calculation_mode="deprotected"` to `search()` (Morgan, shape, or ESP), or use
+`.calculation_mode("deprotected")` on a ranked `Selection`. Ordinary molecules
+remain in the search; approved protected molecules use their deprotected
+calculation structures for retrieval and similarity. The query uses the same
+approved transformation policy. The default is `"original"` and sends no new
+request field to older servers.
+
+In parent mode, `hit.smiles`, product IDs, prices, and constraints still refer to
+the original source. `hit.calculation_smiles` identifies the evaluated structure;
+`result.raw["calculation"]` and `result.warnings` report policy and review coverage.
+HTML exports show both structures when they differ and display optional
+`hit.calculation_reason` for retained exceptions. The local v2 policy covers
+supported Boc, Fmoc, Troc, silyl and trityl contexts. Confirmed detector exceptions
+remain unchanged and searchable with their reason recorded; this does not change
+the separate legacy PG-exclusion filter. Unsupported transformations
+are reported and excluded from parent scoring. This option is separate from PG
+exclusion and does not remove salts or counterions. It requires matching backend
+and core changes plus prepared assets; it is not enabled on existing deployments.
+
 ## Optimize with explicit chemistry and optional custom scores
 
 Put supported structures and property limits in `constraints=` / `properties=`, and supported
