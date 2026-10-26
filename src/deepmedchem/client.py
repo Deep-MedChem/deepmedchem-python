@@ -39,6 +39,12 @@ from .subsets import sample_selection, search_filters, similarity_selection
 USAGE_PATH = "/api/v2/usage"
 
 
+def _calculation_payload(mode: str) -> dict[str, str]:
+    if not isinstance(mode, str) or mode not in {"original", "deprotected"}:
+        raise ValueError("calculation_mode must be 'original' or 'deprotected'")
+    return {} if mode == "original" else {"calculation_mode": mode}
+
+
 class DeepMedChemError(RuntimeError):
     def __init__(
         self,
@@ -449,8 +455,14 @@ class Client:
         scope: str = "orderable",
         databases: list[str] | None = None,
         timeout_seconds: int = 30,
+        calculation_mode: str = "original",
     ) -> SearchResult:
         """Rank molecules of ``database`` by similarity to ``smiles``.
+
+        ``calculation_mode="deprotected"`` requires a server with approved PG
+        parent assets. Similarity retrieval and scores use the calculation
+        structures; result SMILES, product IDs, constraints, and prices retain
+        their original source meaning. Each hit includes ``calculation_smiles``.
 
         ``subset`` (a name from ``deepmedchem.subsets.SUBSETS``, or ``database=
         "synple:amino-acids"``), ``where`` (``"mw<=450"``), ``require`` and ``exclude``
@@ -463,6 +475,7 @@ class Client:
 
         if method not in {"morgan", "shape", "esp"}:
             raise ValueError("method must be one of: 'morgan', 'shape', 'esp'")
+        calculation = _calculation_payload(calculation_mode)
         database, filters = search_filters(
             database,
             subset=subset,
@@ -517,6 +530,7 @@ class Client:
                     method=method,
                     limit=limit,
                     include_synthons=include_synthons,
+                    calculation_mode=calculation_mode,
                 )
             )
         database_id = resolve_database(database)
@@ -527,6 +541,7 @@ class Client:
                 scorer=method,
                 limit=limit,
                 include_synthons=include_synthons,
+                calculation_mode=calculation_mode,
             )
         return SearchResult.model_validate(
             self._request(
@@ -537,6 +552,7 @@ class Client:
                     "database_id": database_id,
                     "limit": limit,
                     "include_synthons": include_synthons,
+                    **calculation,
                 },
             )
         )
@@ -644,6 +660,7 @@ class Client:
         scorer: str,
         limit: int = 20,
         include_synthons: bool = False,
+        calculation_mode: str = "original",
     ) -> SearchResult:
         if database == "auto":
             return self.search(
@@ -664,6 +681,7 @@ class Client:
                     "scorer": scorer,
                     "limit": limit,
                     "include_synthons": include_synthons,
+                    **_calculation_payload(calculation_mode),
                 },
             )
         )
@@ -1026,6 +1044,8 @@ class AsyncClient:
 
     async def search(self, smiles: str, **kwargs) -> SearchResult:
         method = kwargs.pop("method", "morgan")
+        calculation_mode = kwargs.pop("calculation_mode", "original")
+        calculation = _calculation_payload(calculation_mode)
         if method not in {"morgan", "shape", "esp"}:
             raise ValueError("method must be one of: 'morgan', 'shape', 'esp'")
         database, filters = search_filters(
@@ -1089,18 +1109,23 @@ class AsyncClient:
                 method=method,
                 limit=kwargs.pop("limit", 20),
                 include_synthons=kwargs.pop("include_synthons", False),
+                calculation_mode=calculation_mode,
             )
             if kwargs:
                 raise TypeError(f"unexpected search arguments: {sorted(kwargs)}")
             return await self.selections.create(selection)
         database_id = resolve_database(database)
         if method != "morgan":
-            return await self.search_cheese(smiles, database=database_id, scorer=method, **kwargs)
+            return await self.search_cheese(
+                smiles, database=database_id, scorer=method,
+                calculation_mode=calculation_mode, **kwargs,
+            )
         payload = {
             "query_smiles": smiles,
             "database_id": database_id,
             "limit": kwargs.pop("limit", 20),
             "include_synthons": kwargs.pop("include_synthons", False),
+            **calculation,
         }
         if kwargs:
             raise TypeError(f"unexpected search arguments: {sorted(kwargs)}")
@@ -1137,6 +1162,7 @@ class AsyncClient:
             "scorer": scorer,
             "limit": kwargs.pop("limit", 20),
             "include_synthons": kwargs.pop("include_synthons", False),
+            **_calculation_payload(kwargs.pop("calculation_mode", "original")),
         }
         if kwargs:
             raise TypeError(f"unexpected search arguments: {sorted(kwargs)}")

@@ -72,6 +72,7 @@ _CSS = """
 .dmc-results .structure { display: flex; align-items: center; justify-content: center;
   aspect-ratio: 11 / 8; max-height: 200px; width: 100%; margin: -4px 0 0; }
 .dmc-results .structure img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.dmc-results .structure-label { margin: 0; color: var(--muted); font-size: 12px; }
 .dmc-results .unavailable { color: var(--muted); font-size: 12px; text-align: center; }
 .dmc-results .badges { display: flex; flex-wrap: wrap; gap: 6px; min-height: 26px; }
 .dmc-results .badge { display: inline-flex; align-items: center; gap: 4px; border-radius: 9999px;
@@ -157,6 +158,17 @@ def _text(value: Any) -> str:
     return html.escape("–" if value is None or value == "" else str(value), quote=True)
 
 
+def _structure_markup(smiles: str, chem, rd_draw) -> str:
+    image = _structure_image(smiles, chem, rd_draw)
+    content = (
+        f'<img src="{image}" width="{_IMAGE_SIZE[0]}" height="{_IMAGE_SIZE[1]}" '
+        f'alt="{_text(smiles)}" loading="lazy">'
+        if image
+        else '<span class="unavailable">structure not available</span>'
+    )
+    return f'<div class="structure">{content}</div>'
+
+
 def _score(value: float | None) -> str:
     return f"{value:.4f}" if value is not None else "–"
 
@@ -196,13 +208,32 @@ def render_html_fragment(
     with rd_base.BlockLogs():
         cards = []
         for hit in shown:
-            image = _structure_image(hit.smiles, chem, rd_draw)
-            structure = (
-                f'<img src="{image}" width="{_IMAGE_SIZE[0]}" height="{_IMAGE_SIZE[1]}" '
-                f'alt="{_text(hit.smiles)}" loading="lazy">'
-                if image
-                else '<span class="unavailable">structure not available</span>'
-            )
+            structure = _structure_markup(hit.smiles, chem, rd_draw)
+            calculation_smiles = hit.extra.get("calculation_smiles")
+            calculation_details = ""
+            if isinstance(calculation_smiles, str) and calculation_smiles:
+                if calculation_smiles != hit.smiles:
+                    structure = (
+                        '<p class="structure-label">Evaluated structure</p>'
+                        + _structure_markup(calculation_smiles, chem, rd_draw)
+                        + '<p class="structure-label">Source structure (product ID and price)</p>'
+                        + structure
+                    )
+                else:
+                    structure = (
+                        '<p class="structure-label">Evaluated and source structure</p>' + structure
+                    )
+                calculation_details = (
+                    '<p class="structure-label">Score calculated from</p>'
+                    f'<p class="smiles" title="{_text(calculation_smiles)}">'
+                    f"{_text(calculation_smiles)}</p>"
+                )
+                calculation_reason = hit.extra.get("calculation_reason")
+                if isinstance(calculation_reason, str) and calculation_reason:
+                    calculation_details += (
+                        '<p class="structure-label">Calculation note: '
+                        f"{_text(calculation_reason)}</p>"
+                    )
             badges = []
             if score_column and score_column[1] == "match":
                 badges.append('<span class="badge score">Exact match</span>')
@@ -220,12 +251,13 @@ def render_html_fragment(
             )
             cards.append(
                 f'<article class="card"><div class="rank">#{_text(hit.rank)}</div>'
-                f'<div class="structure">{structure}</div>'
+                f"{structure}"
                 f'<div class="badges">{"".join(badges)}</div>'
                 f'<div class="details">'
                 f'<p class="id" title="Product ID: {_text(hit.product_id)}">'
                 f"{_text(hit.product_id)}</p>"
                 f'<p class="smiles" title="{_text(hit.smiles)}">{_text(hit.smiles)}</p>'
+                f"{calculation_details}"
                 f"</div></article>"
             )
 
@@ -247,6 +279,18 @@ def render_html_fragment(
         if len(shown) < len(hits)
         else ""
     )
+    calculation = result.raw.get("calculation")
+    if isinstance(calculation, dict) and calculation.get("mode") == "deprotected":
+        notice += (
+            '<p class="notice">Similarity uses the evaluated structures. '
+            "Product IDs and prices refer to the source structures. "
+            "Constraints apply to the source structures.</p>"
+        )
+        notice += "".join(
+            f'<p class="notice">{_text(warning.message)}</p>'
+            for warning in result.warnings
+            if warning.message
+        )
     fragment = (
         f'<div class="dmc-results"><style>{_CSS}</style>'
         f"<header><h1>DeepMedChem results</h1>"
