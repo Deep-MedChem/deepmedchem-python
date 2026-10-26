@@ -542,6 +542,7 @@ def similarity_selection(
     method: str = "morgan",
     limit: int = 20,
     include_synthons: bool = False,
+    calculation_mode: str = "original",
 ):
     """A ranked similarity selection restricted by ``filters``."""
 
@@ -557,6 +558,7 @@ def similarity_selection(
         .reference("query", smiles=smiles)
         .maximize_similarity(METRICS[method], reference="query")
         .limit(limit)
+        .calculation_mode(calculation_mode)
     )
     selection = filters.apply(selection)
     include = _include(filters, include_synthons)
