@@ -5,6 +5,7 @@ import httpx
 import pytest
 
 from deepmedchem import AsyncClient, Client, Selection
+from deepmedchem.client import DeepMedChemError
 
 
 @pytest.mark.parametrize("method", ["morgan", "shape", "esp"])
@@ -54,6 +55,48 @@ def test_sync_and_async_search_forward_calculation_without_changing_defaults(
     assert body.get("calculation_mode", "original") == mode
     if mode == "original":
         assert "calculation_mode" not in body
+
+
+@pytest.mark.parametrize("mode", ["original", "deprotected"])
+@pytest.mark.parametrize("operation", ["validate", "estimate", "create"])
+def test_retired_pg_constraint_is_not_silently_rewritten(mode, operation):
+    selection = (
+        Selection.from_database("enamine-real-v5a")
+        .reference("q", smiles="NCCO")
+        .maximize_similarity("rdkit.ecfp4_tanimoto", reference="q")
+        .calculation_mode(mode)
+    ).to_dict()
+    selection["constraints"] = {
+        "structures": {"none": [{"pattern_id": "protecting-groups/v1"}]}
+    }
+    original = json.loads(json.dumps(selection))
+    sent = []
+    message = "protecting-groups/v1 is retired; use calculation_mode='deprotected'"
+
+    def handler(request):
+        sent.append(json.loads(request.content))
+        return httpx.Response(422, json={"error": {
+            "code": "invalid_schema", "message": message,
+            "field": "constraints.structures.none.0", "retryable": False,
+        }})
+
+    with Client(api_key="test", transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(DeepMedChemError, match="is retired") as error:
+            getattr(client.selections, operation)(selection)
+    assert error.value.status_code == 422 and not error.value.retryable
+
+    async def run():
+        async with AsyncClient(api_key="test", transport=httpx.MockTransport(handler)) as client:
+            with pytest.raises(DeepMedChemError, match="is retired") as error:
+                await getattr(client.selections, operation)(selection)
+            assert error.value.status_code == 422 and not error.value.retryable
+
+    asyncio.run(run())
+    assert len(sent) == 2  # Permanent schema failures are not retried.
+    assert selection == original
+    for body in sent:
+        assert body["constraints"] == original["constraints"]
+        assert body.get("calculation_mode", "original") == mode
 
 
 def test_builder_keeps_mode_in_portable_selection_and_rejects_sampling():

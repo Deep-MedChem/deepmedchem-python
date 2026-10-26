@@ -249,10 +249,15 @@ the original source. `hit.calculation_smiles` identifies the evaluated structure
 HTML exports show both structures when they differ and display optional
 `hit.calculation_reason` for retained exceptions. The local v2 policy covers
 supported Boc, Fmoc, Troc, silyl and trityl contexts. Confirmed detector exceptions
-remain unchanged and searchable with their reason recorded; this does not change
-the separate legacy PG-exclusion filter. Unsupported transformations
-are reported and excluded from parent scoring. This option is separate from PG
-exclusion and does not remove salts or counterions. It requires matching backend
+remain unchanged and searchable with their reason recorded. Unsupported transformations
+are reported and excluded from parent scoring. Salts and counterions are preserved.
+The old `protecting-groups/v1` named exclusion filter is retired: the server rejects
+saved constraints using it with an explicit migration error. Remove that condition
+when deliberately creating a new parent-scoring request; it is never silently
+ignored or translated. PAINS, custom SMARTS and other source constraints retain
+their existing meaning. The SDK's generic pattern builder remains chemistry-thin;
+server validation is authoritative for registered pattern availability.
+Parent calculation requires matching backend
 and core changes plus prepared assets; it is not enabled on existing deployments.
 
 ## Optimize with explicit chemistry and optional custom scores
