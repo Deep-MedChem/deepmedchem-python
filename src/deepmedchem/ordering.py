@@ -103,7 +103,7 @@ _register(
 )
 _register(VendorContact("Molport", "sales@molport.com"), "MOLPORT")
 # Yurii's supplied CORE 2.0 Lite email explicitly names this order address.
-_register(VendorContact("Onepot", "hello@onepot.ai"), "onepot-core-2-lite")
+_register(VendorContact("Onepot", "orders@onepot.ai"), "onepot-core-2-lite")
 
 CURRENT_DATABASE_IDS: tuple[str, ...] = (
     "onepot-core-2-lite",

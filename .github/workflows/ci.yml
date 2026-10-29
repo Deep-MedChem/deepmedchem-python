@@ -14,7 +14,8 @@ concurrency:
 jobs:
   test-and-package:
     name: Python ${{ matrix.python-version }} test and package
-    runs-on: ubuntu-latest
+    # Ubuntu 26.04 has no setup-python build for our supported Python 3.9.
+    runs-on: ${{ matrix.python-version == '3.9' && 'ubuntu-22.04' || 'ubuntu-latest' }}
     timeout-minutes: 10
     strategy:
       fail-fast: false
