@@ -253,7 +253,7 @@ def test_onepot_order_preserves_supplier_reconstruction_tuple(tmp_path):
         )
     bundle = prepare_order(source, output_dir=tmp_path / "draft", amount_mg=1)
     draft = bundle.drafts[0]
-    assert draft.email == "hello@onepot.ai"
+    assert draft.email == "orders@onepot.ai"
     assert "amide_coupling_0" in draft.body
     with draft.csv_path.open() as f:
         rows = list(csv.DictReader(f))

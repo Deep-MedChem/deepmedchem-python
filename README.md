@@ -167,7 +167,7 @@ Availability and supported capabilities come from the connected API catalog.
 The supplier quotes **$250 for two-component products and $375 for three or more
 components, per 1 mg**. Shipping cost is unspecified. Reported synthesis success
 is 60–70%, synthesis takes 5–7 business days, and US delivery is overnight.
-These are supplier estimates; request a final quote from **hello@onepot.ai**.
+These are supplier estimates; request a final quote from **orders@onepot.ai**.
 
 ```bash
 dmc search "CC(=O)Nc1ccccc1" -d onepot -n 10 -o onepot.csv
