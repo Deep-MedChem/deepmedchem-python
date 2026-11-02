@@ -19,7 +19,7 @@ It contains no RDKit, models, databases, or proprietary search implementation.
 pip install deepmedchem
 ```
 
-Authenticate once, or set `DEEPMEDCHEM_API_KEY` in automation:
+For account features, authenticate once, or set `DEEPMEDCHEM_API_KEY` in automation:
 
 ```bash
 dmc login
@@ -32,6 +32,48 @@ on any device. Sign in or create a CHEESE account there, approve the connection,
 on its own. The key goes to the OS keyring when one is available, otherwise to a `credentials.json`
 file (mode 0600) next to the SDK config. Use `--no-browser` to force the print-only behaviour and
 `--token-stdin` to paste an existing key from a pipe.
+
+## Search without an account
+
+When no API key is configured, the SDK uses guest access for catalog, unfiltered
+single-database similarity search (Morgan, shape or ESP), and sampling. Pass `guest=True`
+to ignore saved/environment credentials explicitly; it cannot be combined with an explicit
+`api_key` or `credential_provider`.
+
+```python
+import deepmedchem as dmc
+
+# Guest access is currently enabled on the development API.
+result = dmc.search(
+    "CC(=O)Oc1ccccc1C(=O)O",
+    database="enamine",
+    guest=True,
+    api_url="https://api-dev.deepmedchem.com",
+)
+print(result.mode)       # "guest"
+print(result.warnings)   # server limit/field warnings, if any
+result.to_csv("guest_search.csv")
+```
+
+`Client(guest=True)`, `AsyncClient(guest=True)` and `dmc.aio.search(..., guest=True)`
+work the same way. `client.is_guest` reports whether the client has no credentials.
+The server enforces the guest policy: by default at most 20 results, no synthon/property
+acquisition, and per-IP/shared request budgets. Larger requests are clamped with warnings;
+`guest_limit` errors retain the server's `details` (including `retry_after` and `login_url`)
+and are returned immediately without automatic retries. Invalid keys remain authentication
+errors; the SDK never retries them anonymously.
+
+```bash
+dmc search "CCO" -d enamine --guest --profile dev -n 20
+dmc sample -d enamine --guest --profile dev -n 20
+dmc databases --guest --profile dev
+```
+
+Exact substructure search, filtered/conditioned similarity, automatic multi-database
+routing, selections, batches and optimization require an account. Guest clients fail
+locally for these operations; sign in and create a client without `guest=True`.
+Guest access must also be enabled on the selected server. Production remains gated until
+its guest rollout; installing this SDK alone does not enable anonymous production access.
 
 ## Command line
 

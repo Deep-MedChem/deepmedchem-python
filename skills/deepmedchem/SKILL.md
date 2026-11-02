@@ -43,8 +43,11 @@ dmc status --verify                # confirms the profile and that the API accep
 - In CI or scripts, set `DEEPMEDCHEM_API_KEY` instead of `dmc login`. Keys are created at
   https://cheese.deepmedchem.com. Never paste a key into code, logs, or chat output.
 - `dmc login --no-browser` prints only the URL for SSH/containers; `--token-stdin` accepts a key from a pipe.
-- Errors mentioning `missing_api_key` mean neither the keyring, the credentials file, nor the
-  environment variable holds a key for the selected profile.
+- With no configured key, catalog, unfiltered single-database similarity search and sampling
+  use guest access where enabled (currently dev). Use `guest=True` / `--guest` to ignore saved
+  keys; the server normally caps results at 20. Substructure, filters, auto routing and campaigns
+  require an account. `missing_api_key` means an account-only operation was called as a guest.
+- `guest_limit` includes retry timing and a login URL in `error.details`; do not loop on it.
 
 ## Pick the operation
 
@@ -251,7 +254,7 @@ dmc optimize status [NAME] | results NAME --top 50 -o best.csv | cancel NAME | r
 | Symptom | Fix |
 | --- | --- |
 | `missing_api_key` | `dmc login`, or export `DEEPMEDCHEM_API_KEY`; check `dmc status`. |
-| HTTP 401 / 403 | Key revoked or wrong profile; `dmc login --profile default` again. |
+| HTTP 401 / 403 | Key revoked/wrong profile, or guest access disabled on this deployment; check the server error and login URL. |
 | HTTP 429 / `credit_limit_exceeded` | Daily credits exhausted; `dmc usage` shows the reset time. |
 | Substructure timeout | Increase `--timeout-seconds`, simplify the SMARTS, or lower `-n`. |
 | Unknown database | Copy the exact `database_id` from `dmc databases --json`. Enumerated and in-stock catalogues (Mcule, Molport, ZINC15, ENAMINE-REAL, ...) are not reachable from the SDK; do not retry them. |

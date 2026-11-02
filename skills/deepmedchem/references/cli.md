@@ -1,5 +1,13 @@
 # `dmc` command reference
 
+Without configured credentials, catalog, unfiltered single-database similarity and sampling
+use guest access where the server enables it (currently the dev API). Python `guest=True`
+and CLI `--guest` ignore stored/environment keys. Exact substructure, filters, automatic
+routing, selections, batches and optimization still need an account. Guest results retain
+`mode="guest"` and server warnings; the default server cap is 20 results. `guest_limit`
+errors preserve `details.retry_after` / `details.login_url` and are not retried automatically.
+An invalid configured key is never downgraded to guest.
+
 The `dmc` command is installed with `pip install deepmedchem` and is also available as
 `deepmedchem`. Run `dmc <command> --help` for the authoritative flags of the installed version.
 

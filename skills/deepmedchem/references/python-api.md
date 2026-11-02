@@ -1,11 +1,19 @@
 # `deepmedchem` Python API reference
 
+Without configured credentials, catalog, unfiltered single-database similarity and sampling
+use guest access where the server enables it (currently the dev API). Python `guest=True`
+and CLI `--guest` ignore stored/environment keys. Exact substructure, filters, automatic
+routing, selections, batches and optimization still need an account. Guest results retain
+`mode="guest"` and server warnings; the default server cap is 20 results. `guest_limit`
+errors preserve `details.retry_after` / `details.login_url` and are not retried automatically.
+An invalid configured key is never downgraded to guest.
+
 Full documentation: https://docs.deepmedchem.com/docs/guides/python/reference
 
 ## Module-level operations
 
 Each function creates a short-lived client, performs one request, and closes the transport.
-All accept `api_key`, `api_url`, `profile`, `credential_provider`, and `timeout` (seconds,
+All accept `guest`, `api_key`, `api_url`, `profile`, `credential_provider`, and `timeout` (seconds,
 default 45.0) as keyword arguments.
 
 ```python
@@ -40,7 +48,7 @@ dmc.usage() -> Usage
 ```python
 from deepmedchem import Client, AsyncClient
 
-Client(api_key=None, *, api_url=None, profile=None, timeout=45.0, transport=None,
+Client(api_key=None, *, api_url=None, guest=False, profile=None, timeout=45.0, transport=None,
        credential_provider=None, application="deepmedchem-python", application_version=None,
        max_retries=2, retry_backoff=0.25)
 ```
