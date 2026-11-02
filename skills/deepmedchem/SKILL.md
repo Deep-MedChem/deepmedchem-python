@@ -49,6 +49,16 @@ dmc status --verify                # confirms the profile and that the API accep
   require an account. `missing_api_key` means an account-only operation was called as a guest.
 - `guest_limit` includes retry timing and a login URL in `error.details`; do not loop on it.
 
+## Automatic search and synthesis estimates
+
+`dmc search SMILES` defaults to orderable synthon spaces. Add `--synthesis 7d` to require a
+vendor-declared upper bound of seven business days, excluding shipping. Unknown estimates
+are excluded. `--all` also includes orderable in-stock/enumerated catalogues; it does not
+admit hypothetical/research collections. `--explain` shows routing without executing search.
+Use `--profile dev` when testing against the matching development backend. Keep full SMILES
+and source provenance; do not present synthesis estimates as delivery guarantees. Auto search
+requires an account; for guest similarity, explicitly select a database with `-d`.
+
 ## Pick the operation
 
 | Goal | CLI | Python |

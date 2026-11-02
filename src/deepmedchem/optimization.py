@@ -293,7 +293,9 @@ def build_specification(
         if objectives:
             raise ValueError("auto optimization currently requires an external score callback")
         options = auto_options(availability=availability, scope=scope, databases=databases)
-        options.pop("timeout_seconds")
+        # Search-specific filters are not part of the campaign routing contract.
+        for field in ("timeout_seconds", "max_synthesis_days", "include_catalogues"):
+            options.pop(field)
         if databases is not None and len(databases) > 8:
             raise ValueError("auto optimization supports at most 8 databases")
         spec["auto"] = options

@@ -41,13 +41,17 @@ Use the `database_id` column verbatim as the `-d/--database` value below.
 
 ## Searching
 
-### `dmc search SMILES -d DATABASE [options]`
+### `dmc search SMILES [-d DATABASE] [options]`
 
 Ranked similarity search for one query molecule.
 
 | Flag | Meaning |
 | --- | --- |
-| `-d, --database ID` | Required database id. `ID:SUBSET[,SUBSET]` also applies named subsets. |
+| `-d, --database ID` | Database id; omitted means auto search of orderable synthon spaces. `ID:SUBSET[,SUBSET]` also applies named subsets. |
+| `--synthesis DAYS` | Maximum declared synthesis upper bound in business days, e.g. `7d` or `7 days`; unknown timing is excluded. Shipping additional. |
+| `--all` | Include orderable enumerated/in-stock catalogues in automatic search. Does not include research/hypothetical sources. |
+| `--availability {in_stock,make_on_demand}` | Restrict catalogue availability; use `--all` for in-stock catalogues. |
+| `--timeout-seconds N` | Auto-search time budget (default 30). |
 | `-m, --method {morgan,shape,esp}` | `morgan` (default) is ECFP4 Tanimoto; `shape` and `esp` are CHEESE 3D shape and electrostatic similarity. |
 | `-n, --limit N` | Number of hits (default 20; at most 200 with filters). |
 | `-o, --output FILE` | Save hits; format inferred from `.csv`, `.sdf`, `.smi`, `.json`. |
@@ -166,3 +170,8 @@ a name with changed constraints or objective terms fails.
 `--objectives objectives.json` supplies normalized built-in or mixed terms. With `--maximize`,
 omit `--score-cmd` for a built-in-only run. When mixing docking with built-ins, include an
 `external` term; the command returns raw docking scores while the service combines components.
+
+Automatic `--explain` prints source selection/exclusion without a search credit. Tables show
+synthesis with full unit words and untruncated SMILES; automatic results add a database column.
+Synthesis and price belong to the displayed supplier source. Account credentials and a compatible
+backend are required for auto search; append `--profile dev` for development testing.

@@ -8,7 +8,9 @@ from .client import AsyncClient
 from .models import SampleResult, SearchResult, SubstructureResult, Usage
 
 
-async def search(smiles: str, *, database: str, method: str = "morgan", **kwargs) -> SearchResult:
+async def search(
+    smiles: str, *, database: str = "auto", method: str = "morgan", **kwargs
+) -> SearchResult:
     async with AsyncClient(**_connection_options(kwargs)) as client:
         return await client.search(smiles, database=database, method=method, **kwargs)
 

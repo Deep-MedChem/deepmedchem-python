@@ -471,7 +471,6 @@ def test_cli_resume_reconnects_without_a_new_run(monkeypatch, capsys, tmp_path) 
     [
         (["search", "-d", "enamine"], "give exactly one of"),
         (["search", "CCO", "-i", "x.smi", "-d", "enamine"], "give exactly one of"),
-        (["search", "CCO"], "-d/--database"),
         (["search", "-i", "x.smi"], "-d/--database"),
         (["search", "-i", "x.smi", "-d", "enamine", "-o", "hits.sdf"], "saved as .csv or .json"),
     ],

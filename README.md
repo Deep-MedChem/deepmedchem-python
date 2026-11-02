@@ -813,8 +813,46 @@ that a molecule is absent. Several supplier routes may produce the same molecule
 
 ### Automatic database selection
 
+Omit the database to search orderable **synthon spaces** automatically. Use `--all`
+(or Python `include_catalogues=True`) to also search orderable in-stock and enumerated
+catalogues. This is separate from `scope="all"`, which explicitly admits research and
+hypothetical sources. The default never admits those sources.
+
+```bash
+dmc search 'CC/C(/C1C=CC=CC=1)=C(/C1C=CC(OCCN(C)C)=CC=1)\C1C=CC=CC=1' --synthesis 7d -n 5
+dmc search 'CCO' --all --availability in_stock
+dmc search 'CCO' --synthesis '7 days' --max-price 300 --explain
+```
+
+`--synthesis 7d` means a maximum vendor-declared synthesis time of **7 business days**,
+excluding shipping. The planner compares the declaration's upper bound, excludes unknown
+or non-comparable estimates, and reports why each source was skipped. In-stock offers need
+no synthesis wait, but availability is a catalogue snapshot. Onepot CORE 2.0 Lite currently
+has a supplier-declared 5–7 business-day estimate; these are estimates, not guarantees.
+Calendar/unspecified timing and months are not silently converted into business days.
+
+The table always includes `synthesis` next to `price`, with full words such as `5–7 days`,
+`1–2 months`, `in stock` or `unknown`. Auto results also show the `database` immediately
+after rank. SMILES are printed in full. Database, price and timing refer to the same
+representative offer; other retrieved offers remain available in `hit.sources`.
+`hit.synthesis` is a typed `SynthesisEstimate` with bounds, units and declaration provenance;
+CSV/JSON retain that metadata. Timing for explicit single-database CLI results comes from
+the catalogue when available.
+
 ```python
-hits = dmc.search(query, database="auto", availability="in_stock", limit=100)
+hits = dmc.search(query, synthesis="7d", max_price=300)
+hits = dmc.search(query, include_catalogues=True, availability="in_stock")
+with dmc.Client() as client:
+    plan = client.plan_search(query, synthesis=7)  # no search credit
+```
+
+These additions need the matching backend synthesis-routing release. For development testing,
+append `--profile dev` or pass `profile="dev"`. An older server returns an error; the SDK
+never silently discards a requested filter or falls back to unfiltered search.
+
+
+```python
+hits = dmc.search(query, database="auto", include_catalogues=True, availability="in_stock", limit=100)
 hits = dmc.search(
     query, database="auto", max_price=200, where=dmc.PropertyRange("MolWt", max=450)
 )
@@ -832,7 +870,7 @@ for hit in hits.hits:
 Requires a backend with `/api/v2/search_auto`; older servers return an error and
 are not silently searched through a client-side fallback. Explicit database
 selection keeps its existing behavior. Sync/async clients and module-level search
-facades accept `auto`. `scope="orderable"` is the default; `scope="all"` includes
+facades accept `auto` (the default for similarity search). `scope="orderable"` is the default; `scope="all"` includes
 research/hypothetical collections. An optional `databases=["enamine", "vast"]`
 restricts candidate sources. `availability` describes catalogue snapshots, not
 live stock or a delivery guarantee. Unsupported filters exclude sources with a

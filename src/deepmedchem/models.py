@@ -44,6 +44,27 @@ class PredictedPropertyAcquisitionResult(APIModel):
     candidates_after: int
 
 
+class SynthesisEstimate(APIModel):
+    """Vendor-declared duration, excluding shipping; not a delivery guarantee."""
+
+    min: int
+    max: int
+    unit: str = "days"
+    day_basis: str = "business"
+    source: str
+    as_of: str | None = None
+
+    @property
+    def label(self) -> str:
+        duration = str(self.max) if self.min == self.max else f"{self.min}–{self.max}"
+        unit = self.unit.removesuffix("s") if self.min == self.max == 1 else self.unit
+        if self.day_basis == "calendar":
+            unit = f"calendar {unit}"
+        elif self.day_basis == "unspecified":
+            unit = f"{unit} (basis unspecified)"
+        return f"{duration} {unit}"
+
+
 class Hit(APIModel):
     """One typed, immutable row in a molecular result."""
 
@@ -63,6 +84,8 @@ class Hit(APIModel):
     database_release: str | None = None
     canonical_smiles: str | None = None
     sources: list[dict[str, Any]] | None = None
+    synthesis: SynthesisEstimate | None = None
+    availability: str | None = None
 
     @property
     def extra(self) -> Mapping[str, Any]:
@@ -81,6 +104,8 @@ class Hit(APIModel):
             "database_release",
             "canonical_smiles",
             "sources",
+            "synthesis",
+            "availability",
         }
         return {key: value for key, value in self.raw.items() if key not in common}
 
@@ -488,6 +513,8 @@ class Observation(APIModel):
     metrics: dict[str, Any] = Field(default_factory=dict)
     error: str | None = None
     sources: list[dict[str, Any]] | None = None
+    synthesis: SynthesisEstimate | None = None
+    availability: str | None = None
 
     @field_validator("metrics", mode="before")
     @classmethod

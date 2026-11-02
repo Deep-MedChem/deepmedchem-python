@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Default single-query similarity searches to automatic routing over orderable synthon
+  spaces. `--all` / `include_catalogues=True` also admits orderable enumerated/in-stock
+  catalogues; research/hypothetical scope remains a separate explicit choice.
+- Add `--synthesis 7d` / `synthesis="7d"` for server-enforced vendor synthesis upper bounds
+  in business days, plus CLI availability filtering and auto `--explain` planning.
+- Add the synthesis column (full unit words), per-hit database column in auto mode and
+  typed `SynthesisEstimate` result metadata. Preserve full SMILES and same-source prices,
+  timings and provenance in output and exports. Requires the matching backend release.
+
 - Allow guest catalog, unfiltered similarity search and sampling when no credentials are
   configured; add explicit `guest=True` to sync/async clients and convenience functions,
   and `--guest` to CLI operations. Account-only operations fail locally without a key.
