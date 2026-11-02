@@ -24,8 +24,8 @@ def main():
         batch_size=args.batch_size,
         name=args.name,
         filters="druglike",
-        properties={"MolLogP": (0, 3)},
-        objectives=[{"type": "property", "property_id": "rdkit.qed", "lower": 0, "upper": 1}],
+        constraints=[dmc.PropertyRange("MolLogP", min=0, max=3)],
+        objectives=[dmc.Maximize("rdkit.qed", scale=(0, 1))],
     )
     for row in result.top(10):
         print(row.score, row.metrics.get("objective_0"), row.smiles)

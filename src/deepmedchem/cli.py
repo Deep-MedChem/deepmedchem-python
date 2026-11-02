@@ -19,6 +19,7 @@ from typing import Any
 
 from . import __version__
 from .auth import LoginError, browser_login, can_open_browser
+from .chemistry import ExcludeStructure, RequireStructure
 from .client import Client, DeepMedChemError
 from .config import (
     FILE_STORE,
@@ -35,7 +36,7 @@ from .config import (
 from .databases import DATABASE_DETAILS, DATABASE_DISPLAY_ORDER, resolve_database
 from .export import FORMATS, check_export_dependencies, infer_format, write_result
 from .models import Batch, OptimizationResource, OptimizationResult, SearchResult, Usage
-from .optimization import _drive, _filename, normalize_scores
+from .optimization import _constraints, _drive, _filename, _objectives, normalize_scores
 from .ordering import open_order_drafts, prepare_order, procurement_contacts
 from .subsets import (
     SUBSETS,
@@ -540,6 +541,14 @@ def _add_optimize_parser(commands) -> None:
         metavar="FILE.json",
         help="Typed descriptor/structure constraints checked before custom scoring",
     )
+    for flag, metavar, help in (
+        ("--require-pattern", "ID", "Require a registered structure pattern"),
+        ("--exclude-pattern", "ID", "Exclude a registered structure pattern"),
+        ("--require-smarts", "SMARTS", "Require an inline SMARTS pattern"),
+        ("--exclude-smarts", "SMARTS", "Exclude an inline SMARTS pattern"),
+    ):
+        run.add_argument(flag, action="append", default=[], metavar=metavar,
+                         help=f"{help} (repeatable; combined with --constraints)")
     run.add_argument(
         "--objectives", metavar="FILE.json", help="Built-in or mixed normalized objective terms"
     )
@@ -1387,8 +1396,29 @@ def _print_observations(result: OptimizationResult, *, shown: int) -> None:
     print(_format_table(headers, rows, align_right=[True, True, False, True, False, False]))
 
 
+def _optimization_constraints(args) -> dict[str, Any] | None:
+    data = _constraints(
+        json.loads(Path(args.constraints).read_text(encoding="utf-8"))
+        if args.constraints else None
+    ) or {}
+    flags = [
+        *(RequireStructure(value) for value in args.require_pattern),
+        *(ExcludeStructure(value) for value in args.exclude_pattern),
+        *(RequireStructure(smarts=value) for value in args.require_smarts),
+        *(ExcludeStructure(smarts=value) for value in args.exclude_smarts),
+    ]
+    if flags:
+        structures = data.setdefault("structures", {})
+        for group, conditions in _constraints(flags)["structures"].items():
+            structures.setdefault(group, []).extend(conditions)
+    return _constraints(data)
+
+
 def _optimize_run(args) -> int:
-    objectives = json.loads(Path(args.objectives).read_text()) if args.objectives else None
+    objectives = _objectives(
+        json.loads(Path(args.objectives).read_text()) if args.objectives else None
+    )
+    constraints = _optimization_constraints(args)
     needs_external = not objectives or any(t.get("type") == "external" for t in objectives)
     if needs_external and not args.score_cmd:
         raise ValueError("--score-cmd is required for an external objective")
@@ -1408,11 +1438,7 @@ def _optimize_run(args) -> int:
             filters="druglike" if args.druglike else None,
             properties=_property_options(args.property),
             objectives=objectives,
-            constraints=(
-                json.loads(Path(args.constraints).read_text(encoding="utf-8"))
-                if args.constraints
-                else None
-            ),
+            constraints=constraints,
             seed=args.seed,
             scorer=scorer,
             objective_name=args.objective_name,

@@ -10,6 +10,7 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .chemistry import Constraint, PropertyRange, _constraints_to_wire, _validate_constraint_limits
 from .databases import resolve_database
 
 
@@ -351,6 +352,45 @@ class Selection:
             )
         return selection
 
+    def constrain(self, *constraints: Constraint) -> Selection:
+        """Add the same typed chemistry constraints accepted by optimize().
+
+        All arguments must hold. Existing constraints are retained; only one
+        RequireAnyStructure group is supported across the whole selection.
+        """
+        added = _constraints_to_wire(constraints)
+
+        def update(payload):
+            target = payload["constraints"]
+            for key, kind, fidelity in (
+                ("properties", "property", "exact_product"),
+                ("predicted_properties", "predicted_property", "pinned_assembled_product_teacher"),
+            ):
+                for condition in added.get(key, []):
+                    target.setdefault(key, []).append({
+                        "type": kind, "required_fidelity": fidelity, "missing": "reject",
+                        **condition,
+                    })
+            if "structures" in added:
+                structures = self._structures(payload)
+                for group, conditions in added["structures"].items():
+                    if group == "any":
+                        if structures["any"]["conditions"]:
+                            raise ValueError("a selection has one require-any group")
+                        structures["any"]["minimum"] = conditions["minimum"]
+                        conditions = conditions["conditions"]
+                    destination = (
+                        structures["any"]["conditions"] if group == "any" else structures[group]
+                    )
+                    for condition in conditions:
+                        destination.append({
+                            "type": "structure", "relation": "contains", "count": {"min": 1},
+                            "id": self._structure_id(structures, group), **condition,
+                        })
+            _validate_constraint_limits(target)
+
+        return self._changed(update)
+
     def where(
         self,
         property_id,
@@ -364,11 +404,20 @@ class Selection:
 
         ``property_id`` is a server ID (``rdkit.mol_wt``) or a short name (``mw``), in
         which case ``units`` may be omitted. A text filter such as ``"mw<=450"`` or a
-        :class:`deepmedchem.subsets.PropertyCondition` may be passed on its own.
+        :class:`deepmedchem.PropertyRange` or legacy PropertyCondition may be passed alone.
         """
 
         from .subsets import PropertyCondition, parse_condition, property_definition
 
+        if isinstance(property_id, PropertyRange):
+            if operator_value or units is not None:
+                raise ValueError("pass either a PropertyRange or property_id with an operator")
+            condition = property_id._to_wire()
+            return self.where(
+                condition["property_id"], units=condition["units"],
+                fidelity=fidelity, missing=missing,
+                **{condition["operator"]: condition["value"]},
+            )
         if not isinstance(property_id, PropertyCondition) and not operator_value:
             property_id = parse_condition(str(property_id))
         if isinstance(property_id, PropertyCondition):

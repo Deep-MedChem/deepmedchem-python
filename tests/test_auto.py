@@ -124,3 +124,30 @@ def test_export_preserves_per_hit_database_and_sources(tmp_path):
         row = next(csv.DictReader(stream))
     assert row["database_id"] == "enamine-real-v5a"
     assert json.loads(row["sources"])[0]["database_id"] == "enamine-real-v5a"
+
+
+def test_auto_search_and_plan_reuse_typed_constraints():
+    captured = []
+    connection = dict(api_key="test", transport=transport(captured))
+    filters = dict(
+        where=dmc.PropertyRange("MolWt", max=400),
+        require=dmc.RequireStructure("alpha-amino-acid/v1"),
+        exclude=dmc.ExcludeStructure(smarts="N", min_count=2),
+    )
+    with dmc.Client(**connection) as client:
+        client.search("CCO", database="auto", **filters)
+        client.plan_search("CCO", **filters)
+    dmc.search("CCO", database="auto", **filters, **connection)
+
+    async def run():
+        async with dmc.AsyncClient(**connection) as client:
+            await client.search("CCO", database="auto", **filters)
+            await client.plan_search("CCO", **filters)
+
+    asyncio.run(run())
+    assert captured[1][0] == captured[4][0] == "/api/v2/search_auto:plan"
+    constraints = captured[0][1]["selection"]["constraints"]
+    assert all(item[1]["selection"]["constraints"] == constraints for item in captured)
+    assert constraints["properties"][0]["value"] == 400
+    assert constraints["structures"]["all"][0]["pattern_id"] == "alpha-amino-acid/v1"
+    assert constraints["structures"]["none"][0]["count"] == {"min": 2}

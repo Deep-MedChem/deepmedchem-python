@@ -34,7 +34,15 @@ def main():
     from dmc_platform_backend.settings import get_settings
     from fastapi.testclient import TestClient
 
-    from deepmedchem import Client, optimize
+    from deepmedchem import (
+        Client,
+        ExternalScore,
+        Maximize,
+        Minimize,
+        PropertyRange,
+        RequireStructure,
+        optimize,
+    )
 
     with tempfile.TemporaryDirectory() as scratch:
         os.environ.update(
@@ -96,16 +104,16 @@ def main():
                     name="seeded-contract",
                     start_paused=True,
                     hit_threshold=-1,
-                    properties={"MolWt": (None, 130)},
-                    constraints={
-                        "structures": {
-                            "all": [
-                                {"query": {"format": "smarts", "value": "C(=O)N"}},
-                            ]
-                        }
-                    },
+                    constraints=[
+                        PropertyRange("MolWt", max=130),
+                        RequireStructure(smarts="C(=O)N"),
+                    ],
                 )
                 assert run.resource.constraint_execution == [
+                    {
+                        "path": "constraints.properties[0]",
+                        "status": "guided_then_verified",
+                    },
                     {
                         "path": "constraints.structures.all[0]",
                         "status": "guided_then_verified",
@@ -133,12 +141,10 @@ def main():
                 assert len(results) == len(batch.molecules) + 1
                 drive_worker = True
                 for mixed in (False, True):
-                    terms = [
-                        {"type": "property", "property_id": "rdkit.qed", "lower": 0, "upper": 1}
-                    ]
+                    terms = [Maximize("rdkit.qed", scale=(0, 1))]
                     if mixed:
                         terms.append(
-                            {"type": "external", "direction": "minimize", "lower": -10, "upper": 0}
+                            Minimize(ExternalScore(), scale=(-10, 0))
                         )
                     result = optimize(
                         (lambda smiles: [-8.0] * len(smiles)) if mixed else None,

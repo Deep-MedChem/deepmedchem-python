@@ -375,3 +375,35 @@ def test_builtin_cli_needs_no_score_command(server, tmp_path, monkeypatch):
     )
     assert json.loads(server.requests[0].content)["objectives"] == terms
     assert not any(":submit" in str(r.url) for r in server.requests)
+
+
+def test_structure_flags_combine_with_json_without_losing_conditions(server, tmp_path, capsys):
+    path = tmp_path / "constraints.json"
+    path.write_text(json.dumps({"structures": {"all": [{"pattern_id": "existing/v1"}]}}))
+    code = cli.main([
+        "optimize", "run", "flags", "-d", "enamine", "--minimize",
+        "--budget", "2", "--batch-size", "2", "--score-cmd", _command(tmp_path),
+        "--constraints", str(path), "--require-pattern", "alpha-amino-acid/v1",
+        "--require-pattern", "another/v1", "--require-smarts", "C(=O)N",
+        "--exclude-pattern", "alerts/v1", "--exclude-smarts", "[N+](=O)[O-]",
+    ])
+    assert code == 0, capsys.readouterr().err
+    structures = json.loads(server.requests[0].content)["constraints"]["structures"]
+    assert structures == {
+        "all": [{"pattern_id": "existing/v1"}, {"pattern_id": "alpha-amino-acid/v1"},
+                {"pattern_id": "another/v1"}, {"query": {"format": "smarts", "value": "C(=O)N"}}],
+        "none": [{"pattern_id": "alerts/v1"},
+                 {"query": {"format": "smarts", "value": "[N+](=O)[O-]"}}],
+    }
+
+
+def test_structure_flags_obey_combined_caps_before_any_request(server, tmp_path, capsys):
+    path = tmp_path / "constraints.json"
+    path.write_text(json.dumps({"structures": {"all": [{"pattern_id": "x"}] * 16}}))
+    assert cli.main([
+        "optimize", "run", "too-many", "-d", "enamine", "--minimize",
+        "--constraints", str(path), "--require-smarts", "C",
+        "--score-cmd", _command(tmp_path),
+    ]) == 1
+    assert "at most 16" in capsys.readouterr().err
+    assert not server.requests
