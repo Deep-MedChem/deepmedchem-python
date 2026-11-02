@@ -722,3 +722,46 @@ coverage; check `routing.sources` and warnings for failures and timeouts.
 One federated request costs one credit, independent of selected source count;
 all-source failure is refunded. The default shared execution deadline is 30 s.
 For `timeout_seconds=120`, configure a client HTTP `timeout` above 120 s too.
+
+### Adaptive optimization across databases
+
+```python
+result = dmc.optimize(
+    docking_score,
+    database="auto",
+    databases=["enamine", "freedom"],  # optional candidate allowlist
+    availability="make_on_demand",
+    direction="minimize",
+    budget=1000,
+    batch_size=40,
+    name="multi-space-docking",
+)
+result.to_csv("candidates.csv")  # includes source routes as JSON
+```
+
+The backend selects up to eight eligible spaces, pins their releases, and runs
+one resumable campaign with one total evaluation budget. Each space keeps its
+own Navigator state. The coordinator explores each source, then uses observed
+score ranks with an exploration allowance to allocate later proposals. Scores
+are reused for duplicate canonical isomeric molecules across sources; different
+salts, tautomers and stereoisomers remain distinct. Failed evaluations also use
+the budget. Source IDs, releases and product routes are retained in each
+observation's `sources` and in exports.
+
+`client.optimizations.create` and its async equivalent accept the same routing
+options. `scope="orderable"` is the default. Existing property/structure
+constraints exclude spaces that cannot enforce them. Inspect
+`result.optimization.specification["resolved_databases"]` for the pinned selection
+and `result.optimization.engine["constraint_acquisition"]` for evaluation counts.
+Resuming the same named intent retains its original releases.
+
+Requires the matching backend and worker implementation. Auto optimization
+currently supports external scoring callbacks only; built-in multi-objective
+runs and seed import are unsupported. Price filters are available for auto
+search, not optimization. Exhausting child proposal budgets can stop a campaign
+before the global budget; it does not prove exhaustion of the chemical union.
+
+In local real-Navigator benchmarks (two small amide spaces, three seeds, 24
+evaluations), adaptive allocation raised mean top-five QED from 0.816 to 0.875
+and tied equal allocation on a target-molecular-weight objective. These are
+small-space checks, not evidence of docking or trillion-scale performance.
