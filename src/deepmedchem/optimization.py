@@ -32,7 +32,15 @@ from urllib.parse import quote
 
 import httpx
 
-from .chemistry import Constraints, Maximize, Minimize, Objectives, _constraints_to_wire
+from .chemistry import (
+    Constraints,
+    Maximize,
+    Minimize,
+    Objectives,
+    _constraints_to_wire,
+    _validate_constraint_limits,
+    _validate_objective_sources,
+)
 from .client import AsyncClient, Client, DeepMedChemError
 from .databases import resolve_database
 from .models import (
@@ -176,6 +184,7 @@ def _constraints(value: Any) -> dict[str, Any] | None:
         raise ValueError("constraints.properties must be a list of typed property conditions")
     if "structures" in data and not isinstance(data["structures"], dict):
         raise ValueError("constraints.structures must be an object with all/any/none groups")
+    _validate_constraint_limits(data)
     # Return a detached snapshot, including nested data, for resumable specifications.
     return json.loads(json.dumps(data, allow_nan=False))
 
@@ -196,6 +205,7 @@ def _objectives(value: Objectives | None) -> list[dict[str, Any]] | None:
         if not isinstance(term, Mapping):
             raise ValueError(f"objectives[{index}] must be Maximize, Minimize, or a mapping")
         terms.append(_json_object(term, "objective term"))
+    _validate_objective_sources(terms)
     return json.loads(json.dumps(terms, allow_nan=False))
 
 
@@ -1870,7 +1880,7 @@ def optimize(
     and the catalog constraints/objectives flags before creating a campaign.
     The callback should compute the custom objective, such as docking or your own model.
 
-    ``objectives=[Maximize("rdkit.qed", scale=Scale(lower=0, upper=1))]`` declares
+    ``objectives=[Maximize("rdkit.qed", scale=(0, 1))]`` declares
     normalized built-in terms and, for mixed runs, an ``ExternalScore`` term.
     Omit ``score`` for built-in-only runs. These aggregates are maximized; legacy
     external-only calls must explicitly declare ``direction``.

@@ -241,10 +241,13 @@ dmc.normalize_scores(batch, scores) -> list[dict]     # the submission rows tell
   dmc.RequireStructure("alpha-amino-acid/v1")]`. All listed constraints must hold.
   Use `ExcludeStructure(smarts=...)`, `RequireAnyStructure([...], minimum=1)` and
   `PredictedPropertyRange(endpoint, units=units, max=threshold)` as needed.
-- Prefer `objectives=[dmc.Maximize("rdkit.qed", scale=dmc.Scale(lower=0, upper=1))]`.
+- Prefer `objectives=[dmc.Maximize("rdkit.qed", scale=(0, 1))]`.
   `Minimize` reverses desirability; `weight` defaults to 1. Sources can also be
   `PredictedProperty(endpoint, units=units)`, `Similarity(reference_smiles)` or `ExternalScore()`.
+  Scales accept `(lower, upper)` tuples or `Scale(lower=..., upper=...)` objects.
   Scales normalize preferences; constraint bounds enforce eligibility.
+  Duplicate sources (after canonicalization), all-external objectives, and oversized groups
+  fail locally. Exclusions require `min_count >= 1` and reject `max_count`.
 - `direction`: `"minimize"` or `"maximize"`, required for standalone callbacks. With objective
   terms, aggregate direction defaults to `"maximize"`. Omit the callback for built-in-only
   runs; mixed runs must include an `ExternalScore` term.
@@ -324,3 +327,10 @@ argument. Only database id, a `-DMCH` reference id, and SMILES reach the vendor 
   `DEEPMEDCHEM_API_URL`, `DEEPMEDCHEM_WEB_URL`, and `DEEPMEDCHEM_PROFILE` override them.
 - Every request sends `X-DMC-Client`, `X-DMC-Client-Version`, and `X-DMC-SDK-Version`; set
   `application` and `application_version` on the client when embedding the SDK in a product.
+
+### Shared typed chemistry
+
+`Selection.where(PropertyRange(...))` and search `where=PropertyRange(...)` reuse descriptor
+bounds. `Selection.constrain(*constraints)` accepts all typed constraints, retaining existing
+conditions. Search `require=RequireStructure(...)` and `exclude=ExcludeStructure(...)` accept
+registered pattern IDs or inline queries. Lists and legacy filters continue to work.

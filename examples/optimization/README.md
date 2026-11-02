@@ -114,19 +114,19 @@ Contradictions are errors. RDKit is optional
 on the client. The server validates registry IDs and the worker compiles chemistry queries
 before proposing. Unsupported constraints fail instead of falling back to a callback.
 
-For the CLI, keep using the wire-format JSON. For example, save this in `constraints.json`:
-
-```json
-{"structures": {"all": [{"pattern_id": "alpha-amino-acid/v1"}],
-                "none": [{"query": {"format": "smarts", "value": "[N+](=O)[O-]"}}]}}
-```
-
-Then run:
+The CLI can express the same common constraints directly:
 
 ```bash
 dmc optimize run constrained-docking -d enamine --minimize --property MolWt=:400 \
-    --constraints constraints.json --score-cmd './dock.sh {input} {output}'
+    --require-pattern alpha-amino-acid/v1 --exclude-smarts '[N+](=O)[O-]' \
+    --score-cmd './dock.sh {input} {output}'
 ```
+
+`--require-pattern`, `--exclude-pattern`, `--require-smarts` and `--exclude-smarts` are
+repeatable. They append to conditions from an optional `--constraints constraints.json`;
+the combined request is validated before submission. JSON remains useful for ADMET and
+alternative structure groups. `ExcludeStructure` always rejects at least `min_count` matches
+(default 1, must be positive); it rejects `max_count` to avoid letting more frequent motifs pass.
 
 The constraint specification is part of resume identity. Changing it requires a new run name.
 Internal rejections do not consume the external scoring budget. Seed evidence remains audited
@@ -134,8 +134,8 @@ under the existing seed policy; imported measured seeds are not newly proposed m
 
 ## Built-in and mixed objectives
 
-Use `Maximize` or `Minimize` with `scale=Scale(lower=..., upper=...)` and an optional
-positive `weight` (default 1).
+Use `Maximize` or `Minimize` with `scale=(lower, upper)` and an optional
+positive `weight` (default 1). Named `Scale(lower=..., upper=...)` objects also work.
 The service clips `(value - lower) / (upper - lower)` to [0, 1], reverses it for `minimize`, and
 maximizes the weighted arithmetic mean. Thus units are never added directly. Bounds on an
 objective normalize a preference; use constraints to enforce eligibility.
@@ -145,8 +145,8 @@ result = dmc.optimize(
     docking_score, database="enamine", budget=500, batch_size=50,
     constraints=[dmc.PropertyRange("MolWt", max=400)],
     objectives=[
-        dmc.Minimize(dmc.ExternalScore(), scale=dmc.Scale(lower=-12, upper=-4), weight=2),
-        dmc.Maximize("rdkit.qed", scale=dmc.Scale(lower=0, upper=1)),
+        dmc.Minimize(dmc.ExternalScore(), scale=(-12, -4), weight=2),
+        dmc.Maximize("rdkit.qed", scale=(0, 1)),
     ],
 )
 ```
@@ -158,13 +158,13 @@ Those metric names are reserved for internal provenance. For imported seeds in a
 provide raw external scores; the engine computes the internal components before ingestion.
 
 For similarity use a term such as
-`dmc.Maximize(dmc.Similarity("CCO"), scale=dmc.Scale(lower=0, upper=1))` alongside a structure constraint. This guides ranking inside the
+`dmc.Maximize(dmc.Similarity("CCO"), scale=(0, 1))` alongside a structure constraint. This guides ranking inside the
 eligible tuple branches. It does not decompose an arbitrary reference into an in-space seed.
 
 For an advertised ADMET endpoint use
 `dmc.PredictedPropertyRange(endpoint, units=advertised_units, max=threshold)` in `constraints`,
 or `dmc.Minimize(dmc.PredictedProperty(endpoint, units=advertised_units),
-scale=dmc.Scale(lower=3, upper=8))` in `objectives`. Use model-appropriate units and thresholds.
+scale=(3, 8))` in `objectives`. Use model-appropriate units and thresholds.
 
 A built-in-only run omits the callback and finishes on the worker. Its budget counts internally
 scored products; rejected candidates do not consume that molecule budget. Hosted deployments

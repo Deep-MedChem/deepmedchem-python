@@ -41,7 +41,6 @@ def main():
         Minimize,
         PropertyRange,
         RequireStructure,
-        Scale,
         optimize,
     )
 
@@ -142,10 +141,10 @@ def main():
                 assert len(results) == len(batch.molecules) + 1
                 drive_worker = True
                 for mixed in (False, True):
-                    terms = [Maximize("rdkit.qed", scale=Scale(lower=0, upper=1))]
+                    terms = [Maximize("rdkit.qed", scale=(0, 1))]
                     if mixed:
                         terms.append(
-                            Minimize(ExternalScore(), scale=Scale(lower=-10, upper=0))
+                            Minimize(ExternalScore(), scale=(-10, 0))
                         )
                     result = optimize(
                         (lambda smiles: [-8.0] * len(smiles)) if mixed else None,

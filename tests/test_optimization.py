@@ -1468,6 +1468,11 @@ def test_typed_callback_contract_is_checked_before_constructing_client(monkeypat
     {"objectives": [None]},
     {"objectives": "rdkit.qed"},
     {"objectives": TYPED_OBJECTIVES * 17},
+    {"objectives": [dmc.Maximize("MolWt", scale=(0, 500)),
+                    dmc.Maximize("mw", scale=(0, 500))]},
+    {"objectives": [dmc.Minimize(dmc.ExternalScore(), scale=(-12, -4))]},
+    {"constraints": [dmc.PropertyRange("MolWt", max=400)] * 33},
+    {"constraints": [dmc.RequireStructure(smarts="C")] * 17},
     {"objectives": TYPED_OBJECTIVES, "direction": "minimize"},
 ])
 def test_typed_invalid_requests_fail_before_sync_and_async_http(server, kwargs):

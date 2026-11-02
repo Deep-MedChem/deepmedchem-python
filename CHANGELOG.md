@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Accept `(lower, upper)` objective scales and validate duplicate objective sources, external-only
+  objective lists, and service collection caps locally. Exclusions require positive match counts
+  and disallow upper count bounds so extra matches cannot bypass an exclusion.
+- Reuse typed chemistry in `Selection.constrain`, `Selection.where`, and search `where`, `require`
+  and `exclude` filters. Add repeatable optimization CLI structure flags alongside JSON constraints.
+- Accept descriptor aliases `MolLogP`, `NumHDonors`, `NumHAcceptors`, `NumRotatableBonds`,
+  `FractionCSP3` and `NumAromaticRings` in property ranges, selection `where`, and CLI `--where`.
+  Text filters now accept digits in descriptor names, including `FractionCSP3` and `fsp3`.
+
 - Add immutable, validated chemistry objects for optimization: property and ADMET ranges,
   required/excluded/alternative structures, normalization scales, and maximize/minimize
   objectives over properties, predictions, similarity or external scores.

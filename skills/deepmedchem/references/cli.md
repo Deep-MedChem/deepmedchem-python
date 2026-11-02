@@ -146,8 +146,11 @@ dmc order shape_hits.csv --get-quote --amount-mg 5 --no-open
 
 ### Optimization chemistry constraints
 
-`dmc optimize run ... --constraints constraints.json --property MolWt=:400` sends the JSON
-constraint object alongside the custom `--score-cmd`. Check optimization catalog support first.
+`dmc optimize run ... --property MolWt=:400 --require-pattern alpha-amino-acid/v1
+--exclude-smarts '[N+](=O)[O-]'` declares common constraints without a JSON file.
+`--require-pattern`, `--exclude-pattern`, `--require-smarts` and `--exclude-smarts` are repeatable
+and append to an optional `--constraints constraints.json`. Combined caps are validated locally.
+Check optimization catalog support first.
 The object accepts typed `properties`, `structures` (`all`, `any`, `none`) and advertised
 `predicted_properties`. Guided tuple acquisition precedes final product verification. Reusing
 a name with changed constraints or objective terms fails.

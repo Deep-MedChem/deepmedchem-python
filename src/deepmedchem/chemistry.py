@@ -188,7 +188,23 @@ class RequireStructure(_Value):
 
 
 class ExcludeStructure(RequireStructure):
-    """Reject products matching this pattern/query and its specified match counts."""
+    """Reject products with at least min_count matches (default 1).
+
+    min_count must be positive. max_count is not supported: additional matches
+    must never make an excluded structure eligible again.
+    """
+
+    min_count: int = Field(default=1, strict=True, ge=1, le=1000)
+    max_count: None = None
+
+    def __init__(
+        self, pattern_id: str | None = None, *, smarts: str | None = None,
+        smiles: str | None = None, min_count: int = 1, max_count: None = None,
+    ):
+        super().__init__(
+            pattern_id, smarts=smarts, smiles=smiles,
+            min_count=min_count, max_count=max_count,
+        )
 
 
 class RequireAnyStructure(_Value):
@@ -249,10 +265,19 @@ class _Objective(_Value):
         self,
         source: str | PredictedProperty | Similarity | ExternalScore,
         *,
-        scale: Scale,
+        scale: Scale | tuple[float, float],
         weight: float = 1,
     ):
         super().__init__(source=source, scale=scale, weight=weight)
+
+    @field_validator("scale", mode="before")
+    @classmethod
+    def _tuple_scale(cls, value):
+        if isinstance(value, tuple):
+            if len(value) != 2:
+                raise ValueError("scale must be a (lower, upper) pair")
+            return Scale(lower=value[0], upper=value[1])
+        return value
 
     def _to_wire(self) -> dict[str, Any]:
         source = self.source
@@ -306,4 +331,42 @@ def _constraints_to_wire(constraints: Sequence[Constraint]) -> dict[str, Any]:
             }
         else:
             raise ValueError(f"constraints[{index}] must be a typed chemistry constraint")
+    _validate_constraint_limits(data)
     return data
+
+
+def _validate_constraint_limits(data: Mapping[str, Any]) -> None:
+    """Enforce service collection caps for both typed and legacy requests."""
+    for key in ("properties", "predicted_properties"):
+        if len(data.get(key, [])) > 32:
+            raise ValueError(f"constraints.{key} supports at most 32 conditions")
+    structures = data.get("structures", {})
+    for key in ("all", "none"):
+        if key in structures:
+            if not isinstance(structures[key], list):
+                raise ValueError(f"constraints.structures.{key} must be a list")
+            if len(structures[key]) > 16:
+                raise ValueError(f"constraints.structures.{key} supports at most 16 conditions")
+    if "any" in structures:
+        group = structures["any"]
+        if not isinstance(group, Mapping) or not isinstance(group.get("conditions", []), list):
+            raise ValueError("constraints.structures.any must be an object with a conditions list")
+        if len(group.get("conditions", [])) > 16:
+            raise ValueError("constraints.structures.any supports at most 16 conditions")
+
+
+def _validate_objective_sources(terms: Sequence[Mapping[str, Any]]) -> None:
+    keys = set()
+    for term in terms:
+        key = term.get("property_id") or term.get("endpoint_id") or term.get("type")
+        if isinstance(key, str):
+            if term.get("type") == "property":
+                key = _property(key)[0]
+            if key in keys:
+                raise ValueError(f"objective sources must be unique; duplicate source {key!r}")
+            keys.add(key)
+    if all(term.get("type") == "external" for term in terms):
+        raise ValueError(
+            "external-only scores use score= with direction=; omit objectives "
+            "unless combining external and built-in objectives"
+        )

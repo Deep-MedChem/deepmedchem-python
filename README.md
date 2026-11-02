@@ -238,8 +238,8 @@ available without another API request. Databases without price estimates return 
 ## Optimize with explicit chemistry and optional custom scores
 
 Put structures and property limits in `constraints=`, and preferences in `objectives=`.
-Use immutable, validated Python objects with named bounds and IDE completion. Navigator guides synthon tuple generation and ranking, then
-verifies assembled products. Docking and proprietary models remain callbacks.
+The immutable Python objects provide named bounds, local validation and IDE completion.
+Navigator guides synthon tuple generation and ranking, then verifies assembled products. Docking and proprietary models remain callbacks.
 
 ```python
 import deepmedchem as dmc
@@ -255,15 +255,16 @@ result = dmc.optimize(
         dmc.RequireStructure("alpha-amino-acid/v1"),
     ],
     objectives=[
-        dmc.Maximize("rdkit.qed", scale=dmc.Scale(lower=0, upper=1)),
+        dmc.Maximize("rdkit.qed", scale=(0, 1)),
     ],
 )
 result.to_csv("qed_demo.csv")
 ```
 
 All constraints in the list must hold. `min` and `max` are inclusive; omit either for an
-open end. `Scale` controls how objective values are normalized, **not** which molecules are
-eligible. Each objective has an optional positive `weight` (default 1). The aggregate is
+open end. `scale=(lower, upper)` normalizes objective values; it does not set eligibility
+limits. Use `scale=dmc.Scale(lower=0, upper=1)` when named bounds are clearer. Tuples are
+validated and stored as immutable `Scale` objects. Each objective has an optional positive `weight` (default 1). The aggregate is
 maximized automatically, even when individual terms use `Minimize`.
 
 | Intent | Python object |
@@ -274,10 +275,10 @@ maximized automatically, even when individual terms use `Minimize`.
 | Excluded inline SMARTS | `ExcludeStructure(smarts="[N+](=O)[O-]")` |
 | At least one of several patterns | `RequireAnyStructure([RequireStructure(smarts="C(=O)N"), RequireStructure(smarts="C(=O)O")])` |
 | ADMET bounds | `PredictedPropertyRange(endpoint, units=units, max=6)` |
-| Descriptor objective | `Maximize("rdkit.qed", scale=Scale(lower=0, upper=1))` |
-| ADMET objective | `Minimize(PredictedProperty(endpoint, units=units), scale=Scale(lower=3, upper=8))` |
-| Similarity objective | `Maximize(Similarity("CCO"), scale=Scale(lower=0, upper=1))` |
-| Callback in a mixed run | `Minimize(ExternalScore(), scale=Scale(lower=-12, upper=-4))` |
+| Descriptor objective | `Maximize("rdkit.qed", scale=(0, 1))` |
+| ADMET objective | `Minimize(PredictedProperty(endpoint, units=units), scale=(3, 8))` |
+| Similarity objective | `Maximize(Similarity("CCO"), scale=(0, 1))` |
+| Callback in a mixed run | `Minimize(ExternalScore(), scale=(-12, -4))` |
 
 All names above are available from `deepmedchem` (use the `dmc.` prefix with the import above).
 The objects are frozen Pydantic models: invalid bounds, nonfinite numbers, blank IDs and
@@ -285,6 +286,16 @@ misspelled fields fail locally. Known descriptor aliases such as `MolWt`, `mw` a
 `rdkit.mol_wt` share units; a custom property ID needs explicit `units` in `PropertyRange`.
 The service validates ID availability and chemistry. Only one `RequireAnyStructure` group
 is supported per specification; its `minimum` defaults to 1.
+`ExcludeStructure` rejects products with at least `min_count` matches (default 1).
+Exclusions require a positive `min_count` and do not accept an upper count bound, so more
+matches can never make an excluded product pass. Use `RequireStructure(..., max_count=...)`
+when you want an inclusive match-count window.
+
+Objective sources must be unique after alias resolution. There can be at most one external
+score and one similarity objective, even with different reference molecules. An external-only
+run uses a callback and `direction=` without `objectives`. Local validation enforces the
+service limits: 16 objectives, 32 descriptor and 32 ADMET conditions, and 16 structures per
+group (`all`, `any`, `none`).
 
 Existing `properties=` dictionaries, structured `constraints=` dictionaries and objective
 dictionaries remain supported. An objective list can mix typed objects and dictionaries;
@@ -317,8 +328,10 @@ result = dmc.optimize(
 A callback takes a SMILES list and returns one score per molecule, optionally with metrics.
 `name=` resumes an unchanged specification; local score journals prevent repeated external
 scoring after an interrupted upload. The sync/async create APIs support the same parameters.
-The CLI accepts `--constraints constraints.json` and `--objectives objectives.json`; omit
-`--score-cmd` for built-in-only runs. See [optimization examples](examples/optimization/README.md)
+The CLI provides repeatable `--require-pattern`, `--exclude-pattern`, `--require-smarts` and
+`--exclude-smarts` flags. Combine them with `--property MolWt=:400` for common constraints;
+`--constraints constraints.json` remains available for advanced conditions. Use
+`--objectives objectives.json` and omit `--score-cmd` for built-in-only runs. See [optimization examples](examples/optimization/README.md)
 for normalized mixed objectives, molecular similarity, ADMET and docking.
 
 ADMET availability is specific to the database and its installed release. With a client,
@@ -343,7 +356,7 @@ with dmc.Client() as client:
         objectives=[
             dmc.Minimize(
                 dmc.PredictedProperty(endpoint, units=units),
-                scale=dmc.Scale(lower=3, upper=8),
+                scale=(3, 8),
             ),
         ],
     )
@@ -357,6 +370,29 @@ before a campaign is created. Adding an external docking term keeps docking in t
 callback while the same internal ADMET guidance and checks remain active.
 
 
+
+## Reuse chemistry constraints in search and selections
+
+Use the same objects across workflows:
+
+```python
+mw = dmc.PropertyRange("MolWt", max=400)
+amino_acid = dmc.RequireStructure("alpha-amino-acid/v1")
+no_nitro = dmc.ExcludeStructure(smarts="[N+](=O)[O-]")
+
+hits = dmc.search(
+    "CC(=O)Oc1ccccc1C(=O)O", database="enamine",
+    where=mw, require=amino_acid, exclude=no_nitro,
+)
+selection = dmc.Selection.from_database("enamine").constrain(mw, amino_acid, no_nitro)
+# Selection.where(mw) also accepts a PropertyRange.
+```
+
+`Selection.constrain(*constraints)` accepts descriptor/ADMET ranges and required, excluded or
+alternative structures. It returns a new selection, retaining existing conditions.
+Search `where=` accepts a `PropertyRange` or a list mixed with existing text filters;
+`require=` and `exclude=` accept matching typed structure objects or existing SMARTS strings.
+Legacy `Pattern` and `PropertyCondition` objects remain supported.
 
 ## Filters and virtual subsets
 
@@ -675,8 +711,8 @@ molecules. Invalid seeds pause the run with a reason and preserve its checkpoint
 operations. `dmc optimize run` and `dmc.optimize()` accept a hit threshold (`--hit-threshold` /
 `hit_threshold`). See [the seed example](examples/optimization/05_seed_and_harvest.py).
 
-Custom `constraints=[dmc.PropertyRange("MolWt", max=350)]` windows are checked on assembled products by the
-upgraded worker, including when combined with `filters="druglike"`. Check the catalog's
+Descriptor bounds such as `constraints=[dmc.PropertyRange("MolWt", max=350)]` are checked
+on assembled products, including when combined with `filters="druglike"`. Check the catalog's
 optimization property capabilities before requesting them.
 
 ### Long-running optimizations

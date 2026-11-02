@@ -458,3 +458,82 @@ def test_registry_patterns_parse_and_match_their_intent():
     assert not matches("acrylamides", "O=C1C=CC(=O)N1")  # maleimide ring
     assert matches("covalent-warheads", "ClCC(=O)Nc1ccccc1")
     assert matches("covalent-warheads", "O=S(=O)(F)c1ccccc1")
+
+
+def test_property_range_reused_in_where_filters_and_selection():
+    bounds = deepmedchem.PropertyRange("MolWt", min=100, max=400)
+    expected = Selection.from_database("enamine").where("mw", range=(100, 400)).to_dict()
+    assert Selection.from_database("enamine").where(bounds).to_dict() == expected
+    filtered = Filters.build(where=bounds).apply(Selection.from_database("enamine"))
+    assert filtered.to_dict() == expected
+    assert Filters.build(where=[bounds, "hbd<=3"]).describe() == ["100 <= mw <= 400", "hbd <= 3"]
+
+
+@pytest.mark.parametrize("text", ["FractionCSP3>=0.2", "fractioncsp3=0.2..0.8",
+                                 "0.2<=fractioncsp3<=0.8", "fsp3>=0.2",
+                                 "rdkit.fraction_csp3>=0.2"])
+def test_digit_bearing_descriptor_names_parse(text):
+    assert parse_condition(text).property_id == "rdkit.fraction_csp3"
+
+
+def test_typed_selection_constraints_retain_existing_filters_and_do_not_mutate():
+    original = Selection.from_database("enamine").where("hbd", lte=3)
+    constraints = [
+        deepmedchem.PropertyRange("MolWt", max=400),
+        deepmedchem.RequireStructure("alpha-amino-acid/v1"),
+        deepmedchem.ExcludeStructure(smarts="N", min_count=2),
+        deepmedchem.RequireAnyStructure([
+            deepmedchem.RequireStructure(smiles="CCO"), deepmedchem.RequireStructure(smarts="C=O"),
+        ]),
+        deepmedchem.PredictedPropertyRange("herg", units="pChEMBL", max=6),
+    ]
+    selection = original.constrain(*constraints)
+    body = selection.to_dict()["constraints"]
+    assert len(original.to_dict()["constraints"]["properties"]) == 1
+    assert len(body["properties"]) == 2
+    assert body["structures"]["all"][0]["pattern_id"] == "alpha-amino-acid/v1"
+    assert body["structures"]["none"][0]["count"] == {"min": 2}
+    assert body["structures"]["any"]["minimum"] == 1
+    assert body["predicted_properties"][0]["value"] == 6
+    with pytest.raises(ValueError, match="one require-any"):
+        selection.constrain(constraints[3])
+    assert selection.to_dict()["constraints"] == body
+    with pytest.raises(ValueError, match="at most 32"):
+        original.constrain(*[deepmedchem.PropertyRange("MolWt", max=400)] * 32)
+
+
+def test_sync_and_async_search_reuse_typed_chemistry():
+    seen = []
+    options = dict(
+        database="enamine", where=deepmedchem.PropertyRange("MolWt", max=400),
+        require=[deepmedchem.RequireStructure("alpha-amino-acid/v1"),
+                 deepmedchem.RequireStructure(smiles="CCO")],
+        exclude=deepmedchem.ExcludeStructure(smarts="N", min_count=2),
+    )
+    with Client(api_key="token", api_url="https://api.example.test",
+                transport=_transport(seen)) as client:
+        client.search(QUERY, **options)
+    sync = _sent(seen)
+    seen.clear()
+
+    async def run():
+        async with AsyncClient(api_key="token", api_url="https://api.example.test",
+                               transport=_transport(seen)) as client:
+            await client.search(QUERY, **options)
+
+    asyncio.run(run())
+    assert _sent(seen) == sync
+    assert sync["constraints"]["properties"][0]["value"] == 400
+    assert sync["constraints"]["structures"]["none"][0]["count"] == {"min": 2}
+    descriptions = Filters.build(**{k: v for k, v in options.items() if k != "database"}).describe()
+    assert "contains alpha-amino-acid/v1" in descriptions
+    assert "does not contain >=2x N" in descriptions
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"require": deepmedchem.ExcludeStructure(smarts="N")},
+    {"exclude": deepmedchem.RequireStructure(smarts="N")},
+])
+def test_search_filter_slots_reject_inverted_typed_structure_meanings(kwargs):
+    with pytest.raises(ValueError, match="use RequireStructure"):
+        Filters.build(**kwargs)

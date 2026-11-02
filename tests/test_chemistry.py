@@ -281,3 +281,86 @@ def test_legacy_json_remains_unchanged_and_detached():
 @pytest.mark.parametrize("constraints", [[], ()])
 def test_empty_constraints_are_equivalent_to_omitting_them(constraints):
     assert "constraints" not in specification(direction="minimize", constraints=constraints)
+
+
+@pytest.mark.parametrize("kwargs", [{"min_count": 0}, {"max_count": 3}])
+def test_exclusions_reject_count_traps(kwargs):
+    with pytest.raises(ValueError):
+        dmc.ExcludeStructure(smarts="C", **kwargs)
+
+
+def test_exclusions_never_admit_more_frequent_matches():
+    spec = specification(direction="minimize", constraints=[
+        dmc.ExcludeStructure(smarts="C", min_count=2),
+    ])
+    assert spec["constraints"]["structures"]["none"] == [
+        {"query": {"format": "smarts", "value": "C"}, "count": {"min": 2}},
+    ]
+    assert dmc.RequireStructure("x") != dmc.ExcludeStructure("x")
+
+
+def test_tuple_scale_is_validated_and_normalized_to_immutable_scale():
+    assert dmc.Minimize("MolWt", scale=(100, 500)) == dmc.Minimize(
+        "MolWt", scale=dmc.Scale(lower=100, upper=500)
+    )
+    assert isinstance(dmc.Maximize("rdkit.qed", scale=(0, 1)).scale, dmc.Scale)
+
+
+@pytest.mark.parametrize("scale", [(), (0,), (0, 1, 2), (1, 1), (2, 1),
+                                  (True, 1), (0, float("inf")), (float("nan"), 1), ("0", 1)])
+def test_invalid_tuple_scales_fail_locally(scale):
+    with pytest.raises(ValueError):
+        dmc.Maximize("rdkit.qed", scale=scale)
+
+
+@pytest.mark.parametrize("objectives", [
+    [dmc.Maximize("MolWt", scale=(0, 500)), dmc.Minimize("mw", scale=(0, 500))],
+    [dmc.Maximize("rdkit.qed", scale=(0, 1)),
+     dmc.Minimize(dmc.ExternalScore(), scale=(-12, -4)),
+     dmc.Maximize(dmc.ExternalScore(), scale=(-12, -4))],
+    [dmc.Maximize(dmc.Similarity("CCO"), scale=(0, 1)),
+     dmc.Maximize(dmc.Similarity("CCC"), scale=(0, 1))],
+    [dmc.Maximize(dmc.PredictedProperty("herg", units="pChEMBL"), scale=(3, 8)),
+     dmc.Minimize(dmc.PredictedProperty("herg", units="pChEMBL"), scale=(3, 8))],
+    [dmc.Maximize("MolWt", scale=(0, 500)),
+     {"type": "property", "property_id": "rdkit.mol_wt", "lower": 0, "upper": 500}],
+])
+def test_duplicate_sources_rejected_after_canonicalization(objectives):
+    with pytest.raises(ValueError, match="unique"):
+        specification(objectives=objectives)
+
+
+@pytest.mark.parametrize("objective", [
+    dmc.Minimize(dmc.ExternalScore(), scale=(-12, -4)),
+    {"type": "external", "lower": -12, "upper": -4},
+])
+def test_external_only_objectives_explain_callback_api(objective):
+    with pytest.raises(ValueError, match="external-only.*direction="):
+        specification(objectives=[objective])
+
+
+@pytest.mark.parametrize("factory,limit,path", [
+    (lambda: dmc.PropertyRange("MolWt", max=500), 32, "properties"),
+    (lambda: dmc.PredictedPropertyRange("herg", units="pChEMBL", max=6),
+     32, "predicted_properties"),
+    (lambda: dmc.RequireStructure(smarts="C"), 16, "structures.all"),
+    (lambda: dmc.ExcludeStructure(smarts="N"), 16, "structures.none"),
+])
+def test_constraint_caps_apply_to_typed_and_legacy_payloads(factory, limit, path):
+    constraints = [factory() for _ in range(limit)]
+    raw = specification(direction="minimize", constraints=constraints)["constraints"]
+    assert specification(direction="minimize", constraints=raw)["constraints"] == raw
+    with pytest.raises(ValueError, match=f"at most {limit}"):
+        specification(direction="minimize", constraints=[*constraints, factory()])
+    entries = raw
+    for component in path.split("."):
+        entries = entries[component]
+    entries.append(entries[0])
+    with pytest.raises(ValueError, match=f"at most {limit}"):
+        specification(direction="minimize", constraints=raw)
+
+
+def test_legacy_require_any_obeys_structure_cap():
+    raw = {"structures": {"any": {"minimum": 1, "conditions": [{"pattern_id": "x"}] * 17}}}
+    with pytest.raises(ValueError, match="at most 16"):
+        specification(direction="minimize", constraints=raw)

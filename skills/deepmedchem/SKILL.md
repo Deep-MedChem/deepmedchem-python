@@ -171,10 +171,16 @@ dmc optimize status [NAME] | results NAME --top 50 -o best.csv | cancel NAME | r
   Guided acquisition is the default: synthon anchors and additive property sampling precede
   exact product verification. Inspect `engine.constraint_acquisition` for actual execution/fallbacks.
 - Check `optimization.objectives.enabled` and advertised ADMET endpoints. Put supported
-  preferences in `objectives=[dmc.Maximize(..., scale=dmc.Scale(lower=..., upper=...))]`
+  preferences in `objectives=[dmc.Maximize(..., scale=(..., ...))]`
   (or `Minimize`), with optional positive `weight`. For ADMET, similarity and mixed callbacks,
   use `PredictedProperty`, `Similarity` and `ExternalScore` sources. Legacy dictionaries remain
-  supported; typed objects work in both sync and async create APIs.
+  supported; typed objects work in both sync and async create APIs. Scales accept `(lower, upper)`
+  or a named `Scale`. Exclusions require positive `min_count` and disallow `max_count`.
+- Reuse `PropertyRange` in search `where=` and `Selection.where`; use
+  `Selection.constrain(*constraints)` for a full typed constraint list. Search `require=` /
+  `exclude=` accept `RequireStructure` / `ExcludeStructure`.
+- CLI optimization supports repeatable `--require-pattern`, `--exclude-pattern`,
+  `--require-smarts` and `--exclude-smarts`, combined with `--property` or JSON constraints.
   Built-in-only runs omit the callback. Mixed runs include an `external` term and maximize the
   weighted mean desirability; the callback returns only its raw external score.
 - CP16 guides acquisition; pinned assembled-product teachers enforce ADMET thresholds and

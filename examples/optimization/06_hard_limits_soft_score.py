@@ -34,10 +34,10 @@ def main():
             dmc.PropertyRange("TPSA", min=args.tpsa[0], max=args.tpsa[1]),
         ],
         objectives=[
-            dmc.Maximize("rdkit.qed", scale=dmc.Scale(lower=0, upper=1), weight=0.7),
+            dmc.Maximize("rdkit.qed", scale=(0, 1), weight=0.7),
             dmc.Minimize(
                 "MolLogP",
-                scale=dmc.Scale(lower=args.logp_max - 4, upper=args.logp_max),
+                scale=(args.logp_max - 4, args.logp_max),
                 weight=0.3,
             ),
         ],

@@ -25,7 +25,7 @@ def main():
         name=args.name,
         filters="druglike",
         constraints=[dmc.PropertyRange("MolLogP", min=0, max=3)],
-        objectives=[dmc.Maximize("rdkit.qed", scale=dmc.Scale(lower=0, upper=1))],
+        objectives=[dmc.Maximize("rdkit.qed", scale=(0, 1))],
     )
     for row in result.top(10):
         print(row.score, row.metrics.get("objective_0"), row.smiles)
