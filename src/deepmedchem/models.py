@@ -58,6 +58,10 @@ class Hit(APIModel):
     properties: dict[str, float] | None = None
     predicted_properties: dict[str, float] | None = None
     acquisition: PredictedPropertyAcquisitionHit | None = None
+    database_id: str | None = None
+    database_release: str | None = None
+    canonical_smiles: str | None = None
+    sources: list[dict[str, Any]] | None = None
 
     @property
     def extra(self) -> Mapping[str, Any]:
@@ -72,6 +76,10 @@ class Hit(APIModel):
             "properties",
             "predicted_properties",
             "acquisition",
+            "database_id",
+            "database_release",
+            "canonical_smiles",
+            "sources",
         }
         return {key: value for key, value in self.raw.items() if key not in common}
 
@@ -100,6 +108,9 @@ class SearchResult(APIModel, Sequence[str]):
     metric: str | None = None
     counts: dict[str, Any] = Field(default_factory=dict)
     timing_ms: dict[str, float] = Field(default_factory=dict)
+    routing: dict[str, Any] | None = None
+    all_sources_searched: bool | None = None
+    search_complete: bool | None = None
 
     @property
     def method(self) -> str | None:

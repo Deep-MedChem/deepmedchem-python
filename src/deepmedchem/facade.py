@@ -41,6 +41,10 @@ def search(
     exclude=None,
     max_price: float | None = None,
     keep_unpriced: bool = False,
+    availability: str | None = None,
+    scope: str = "orderable",
+    databases: list[str] | None = None,
+    timeout_seconds: int = 30,
     api_key: str | None = None,
     api_url: str | None = None,
     profile: str | None = None,
@@ -77,6 +81,10 @@ def search(
             exclude=exclude,
             max_price=max_price,
             keep_unpriced=keep_unpriced,
+            availability=availability,
+            scope=scope,
+            databases=databases,
+            timeout_seconds=timeout_seconds,
         )
 
 
@@ -88,6 +96,9 @@ def substructure(
     limit: int = 100,
     timeout_seconds: int = 30,
     include_synthons: bool = False,
+    availability: str | None = None,
+    scope: str = "orderable",
+    databases: list[str] | None = None,
     api_key: str | None = None,
     api_url: str | None = None,
     profile: str | None = None,
@@ -114,6 +125,9 @@ def substructure(
             limit=limit,
             timeout_seconds=timeout_seconds,
             include_synthons=include_synthons,
+            availability=availability,
+            scope=scope,
+            databases=databases,
         )
 
 
