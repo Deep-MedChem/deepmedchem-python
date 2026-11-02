@@ -1,6 +1,6 @@
 """Official Python client for the DeepMedChem platform API."""
 
-__version__ = "0.4.0b6"
+__version__ = "0.4.0b7.dev0"
 
 from . import aio, subsets
 from .batch import BatchQuery, BatchQueryResult, BatchResult, read_queries
@@ -45,6 +45,7 @@ from .models import (
     SelectionResult,
     SubmitReceipt,
     SubstructureResult,
+    SynthesisEstimate,
     Usage,
 )
 from .optimization import (
@@ -111,6 +112,7 @@ __all__ = [
     "SubmitReceipt",
     "Subset",
     "SubstructureResult",
+    "SynthesisEstimate",
     "Usage",
     "__version__",
     "aio",

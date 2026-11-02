@@ -342,3 +342,14 @@ argument. Only database id, a `-DMCH` reference id, and SMILES reach the vendor 
 bounds. `Selection.constrain(*constraints)` accepts all typed constraints, retaining existing
 conditions. Search `require=RequireStructure(...)` and `exclude=ExcludeStructure(...)` accept
 registered pattern IDs or inline queries. Lists and legacy filters continue to work.
+
+## Synthesis and automatic source selection
+
+`search(query)` defaults to `database="auto"`, selecting orderable synthon spaces.
+`synthesis="7d"` (or integer `7`) applies the vendor-declared synthesis upper bound in
+business days. `include_catalogues=True` also admits orderable in-stock/enumerated sources;
+use it with `availability="in_stock"`. `scope="all"` separately opts into research sources.
+Sync/async clients, module helpers, auto substructure and `client.plan_search` forward these
+options to the server. Explicit databases with synthesis limits use a one-source auto plan.
+`hit.synthesis` exposes typed min/max/unit/day_basis/source/as_of metadata; missing estimates
+remain unknown. Duration does not include shipping. SDK optimization routing is unchanged.

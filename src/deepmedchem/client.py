@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 
 from . import __version__
-from .auto import auto_options, require_auto, similarity_plan
+from .auto import auto_options, require_auto, routing_database, similarity_plan
 from .config import (
     DEFAULT_API_URL,
     CredentialSource,
@@ -433,7 +433,7 @@ class Client:
         self,
         smiles: str,
         *,
-        database: str,
+        database: str = "auto",
         method: str = "morgan",
         limit: int = 20,
         include_synthons: bool = False,
@@ -443,6 +443,8 @@ class Client:
         exclude=None,
         max_price: float | None = None,
         keep_unpriced: bool = False,
+        synthesis: str | int | None = None,
+        include_catalogues: bool = False,
         availability: str | None = None,
         scope: str = "orderable",
         databases: list[str] | None = None,
@@ -470,6 +472,10 @@ class Client:
             max_price=max_price,
             keep_unpriced=keep_unpriced,
         )
+        database, databases, include_catalogues = routing_database(
+            database, synthesis=synthesis, include_catalogues=include_catalogues,
+            databases=databases,
+        )
         require_auto(database, availability=availability, scope=scope, databases=databases)
         if database == "auto":
             selection = similarity_selection(
@@ -479,7 +485,8 @@ class Client:
             return SearchResult.model_validate(self._request(
                 "POST", "/api/v2/search_auto", json={
                     "selection": selection.to_dict(),
-                    **auto_options(availability=availability, scope=scope, databases=databases,
+                    **auto_options(synthesis=synthesis, include_catalogues=include_catalogues,
+                                   availability=availability, scope=scope, databases=databases,
                                    timeout_seconds=timeout_seconds),
                 },
             ))
@@ -638,11 +645,17 @@ class Client:
         limit: int = 100,
         timeout_seconds: int = 30,
         include_synthons: bool = False,
+        synthesis: str | int | None = None,
+        include_catalogues: bool = False,
         availability: str | None = None,
         scope: str = "orderable",
         databases: list[str] | None = None,
     ) -> SubstructureResult:
         database_id = resolve_database(database)
+        database_id, databases, include_catalogues = routing_database(
+            database_id, synthesis=synthesis, include_catalogues=include_catalogues,
+            databases=databases,
+        )
         require_auto(database_id, availability=availability, scope=scope, databases=databases)
         if database_id == "auto":
             return SubstructureResult.model_validate(self._request(
@@ -650,9 +663,11 @@ class Client:
                     "substructure": {
                         "query": {"format": query_format, "value": query},
                         "database_id": "auto", "limit": limit,
+                        "timeout_seconds": timeout_seconds,
                         "include_synthons": include_synthons,
                     },
-                    **auto_options(availability=availability, scope=scope, databases=databases,
+                    **auto_options(synthesis=synthesis, include_catalogues=include_catalogues,
+                                   availability=availability, scope=scope, databases=databases,
                                    timeout_seconds=timeout_seconds),
                 },
             ))
@@ -956,7 +971,7 @@ class AsyncClient:
         if method not in {"morgan", "shape", "esp"}:
             raise ValueError("method must be one of: 'morgan', 'shape', 'esp'")
         database, filters = search_filters(
-            kwargs.pop("database"),
+            kwargs.pop("database", "auto"),
             subset=kwargs.pop("subset", None),
             where=kwargs.pop("where", None),
             require=kwargs.pop("require", None),
@@ -964,10 +979,16 @@ class AsyncClient:
             max_price=kwargs.pop("max_price", None),
             keep_unpriced=kwargs.pop("keep_unpriced", False),
         )
+        synthesis = kwargs.pop("synthesis", None)
+        include_catalogues = kwargs.pop("include_catalogues", False)
         availability = kwargs.pop("availability", None)
         scope = kwargs.pop("scope", "orderable")
         databases = kwargs.pop("databases", None)
         timeout_seconds = kwargs.pop("timeout_seconds", 30)
+        database, databases, include_catalogues = routing_database(
+            database, synthesis=synthesis, include_catalogues=include_catalogues,
+            databases=databases,
+        )
         require_auto(database, availability=availability, scope=scope, databases=databases)
         if database == "auto":
             selection = similarity_selection(
@@ -980,7 +1001,8 @@ class AsyncClient:
             return SearchResult.model_validate(await self._request(
                 "POST", "/api/v2/search_auto", json={
                     "selection": selection.to_dict(),
-                    **auto_options(availability=availability, scope=scope, databases=databases,
+                    **auto_options(synthesis=synthesis, include_catalogues=include_catalogues,
+                                   availability=availability, scope=scope, databases=databases,
                                    timeout_seconds=timeout_seconds),
                 },
             ))
@@ -1038,9 +1060,15 @@ class AsyncClient:
 
     async def search_substructure(self, query: str, **kwargs) -> SubstructureResult:
         database_id = resolve_database(kwargs.pop("database"))
+        synthesis = kwargs.pop("synthesis", None)
+        include_catalogues = kwargs.pop("include_catalogues", False)
         availability = kwargs.pop("availability", None)
         scope = kwargs.pop("scope", "orderable")
         databases = kwargs.pop("databases", None)
+        database_id, databases, include_catalogues = routing_database(
+            database_id, synthesis=synthesis, include_catalogues=include_catalogues,
+            databases=databases,
+        )
         require_auto(database_id, availability=availability, scope=scope, databases=databases)
         payload = {
             "query": {"format": kwargs.pop("query_format", "smarts"), "value": query},
@@ -1055,7 +1083,8 @@ class AsyncClient:
             return SubstructureResult.model_validate(await self._request(
                 "POST", "/api/v2/search_auto", json={
                     "substructure": payload,
-                    **auto_options(availability=availability, scope=scope, databases=databases,
+                    **auto_options(synthesis=synthesis, include_catalogues=include_catalogues,
+                                   availability=availability, scope=scope, databases=databases,
                                    timeout_seconds=payload["timeout_seconds"]),
                 },
             ))

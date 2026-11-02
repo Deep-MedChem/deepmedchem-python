@@ -19,6 +19,7 @@ from typing import Any
 
 from . import __version__
 from .auth import LoginError, browser_login, can_open_browser
+from .auto import routing_database, synthesis_days
 from .chemistry import ExcludeStructure, RequireStructure
 from .client import Client, DeepMedChemError
 from .config import (
@@ -35,7 +36,14 @@ from .config import (
 )
 from .databases import DATABASE_DETAILS, DATABASE_DISPLAY_ORDER, resolve_database
 from .export import FORMATS, check_export_dependencies, infer_format, write_result
-from .models import Batch, OptimizationResource, OptimizationResult, SearchResult, Usage
+from .models import (
+    Batch,
+    OptimizationResource,
+    OptimizationResult,
+    SearchResult,
+    SynthesisEstimate,
+    Usage,
+)
 from .optimization import _constraints, _drive, _filename, _objectives, normalize_scores
 from .ordering import open_order_drafts, prepare_order, procurement_contacts
 from .subsets import (
@@ -215,7 +223,19 @@ def _result_summary(result: SearchResult, library: dict[str, Any] | None) -> lis
         return [f"Random sample of {count} from {space}."]
     if meta.method == "substructure":
         return [f"Searched {space}{elapsed}.", f"{count} exact substructure matches returned."]
-    lines = [f"Searched {space}{elapsed}."]
+    if result.database_id == "auto":
+        routing = result.routing or {}
+        reports = routing.get("sources", [])
+        completed = sum(item.get("status") == "succeeded" for item in reports)
+        selected = len(routing.get("selected", reports))
+        lines = [f"Automatic search: {completed}/{selected} selected databases completed{elapsed}."]
+        maximum = routing.get("max_synthesis_days")
+        if maximum is not None:
+            lines.append(f"Synthesis limit: {maximum} business days; unknown estimates excluded.")
+        if result.all_sources_searched is False:
+            lines.append("Partial results: some sources or catalogue records were unavailable.")
+    else:
+        lines = [f"Searched {space}{elapsed}."]
     scores = [score for score in result.scores if score is not None]
     if scores:
         metric = meta.metric or meta.method or "similarity"
@@ -223,24 +243,44 @@ def _result_summary(result: SearchResult, library: dict[str, Any] | None) -> lis
     return lines
 
 
+def _synthesis_label(hit, library=None) -> str:
+    # An auto row's timing and price belong to its representative source, not an
+    # arbitrary alternative in sources. Never mix offers when displaying a row.
+    availability = hit.availability or (library or {}).get("availability")
+    if availability == "in_stock":
+        return "in stock"
+    estimate = hit.synthesis
+    if estimate is None and (library or {}).get("synthesis"):
+        estimate = SynthesisEstimate.model_validate(library["synthesis"])
+    return estimate.label if estimate else "unknown"
+
+
 def _print_result_table(result: SearchResult, *, library: dict[str, Any] | None = None) -> None:
     method = result.meta.method
-    if method == "substructure":
-        headers = ["rank", "match", "price", "smiles"]
-        rows = [[hit.rank, "exact", _price(hit.price), hit.smiles] for hit in result.hits]
-        right = [True, False, True, False]
-    elif method == "sample":
-        headers = ["rank", "price", "smiles"]
-        rows = [[hit.rank, _price(hit.price), hit.smiles] for hit in result.hits]
-        right = [True, True, False]
-    else:
-        headers = ["rank", "score", "price", "smiles"]
-        rows = [[hit.rank, _score(hit.score), _price(hit.price), hit.smiles] for hit in result.hits]
-        right = [True, True, True, False]
+    auto = result.database_id == "auto"
+    headers = ["rank"] + (["database"] if auto else [])
+    right = [True] + ([False] if auto else [])
+    if method != "sample":
+        headers += ["match" if method == "substructure" else "score"]
+        right += [method != "substructure"]
+    headers += ["price", "synthesis", "smiles"]
+    right += [True, False, False]
+    rows = []
+    for hit in result.hits:
+        row = [hit.rank]
+        if auto:
+            database = hit.database_id or "unknown"
+            row += [DATABASE_DETAILS.get(database, {}).get("abbreviation", database)]
+        if method != "sample":
+            row += ["exact" if method == "substructure" else _score(hit.score)]
+        row += [_price(hit.price), _synthesis_label(hit, library), hit.smiles]
+        rows.append(row)
     print(_format_table(headers, rows, align_right=right))
     print()
     for line in _result_summary(result, library):
         print(line)
+    print("Synthesis: vendor-declared estimates; days are business days unless stated otherwise.")
+    print("Shipping is additional; in-stock status reflects the catalogue snapshot.")
 
 
 # --- Argument parsing ----------------------------------------------------------
@@ -340,8 +380,7 @@ def _add_filter_options(parser: argparse.ArgumentParser, *, structures: bool = T
     group.add_argument(
         "--explain",
         action="store_true",
-        help="Print the selection document and the server's validation and estimate, "
-        "without running it (no credit)",
+        help="Explain source routing or validate the selection without searching (no credit)",
     )
 
 
@@ -394,7 +433,7 @@ def _parser() -> argparse.ArgumentParser:
     search = commands.add_parser("search", help="Similarity search for a SMILES query")
     search.add_argument("smiles", nargs="?", help="Query molecule as SMILES")
     search.add_argument(
-        "-d", "--database", help="Database abbreviation or full ID, see `databases` (required)"
+        "-d", "--database", help="Database abbreviation or full ID (default: auto, synthon spaces)"
     )
     search.add_argument(
         "-m", "--method", choices=SEARCH_METHODS, default="morgan", help="Similarity method"
@@ -402,6 +441,19 @@ def _parser() -> argparse.ArgumentParser:
     search.add_argument(
         "-n", "--limit", type=int, default=20, help="Number of hits (per query with --input)"
     )
+    search.add_argument(
+        "--synthesis", type=synthesis_days, metavar="DAYS",
+        help="Maximum vendor-declared synthesis time in business days, e.g. 7d",
+    )
+    search.add_argument(
+        "--all", dest="include_catalogues", action="store_true",
+        help="Also search orderable in-stock and enumerated catalogues",
+    )
+    search.add_argument(
+        "--availability", choices=("in_stock", "make_on_demand"),
+        help="Restrict vendor availability (use --all for in-stock catalogues)",
+    )
+    search.add_argument("--timeout-seconds", type=int, default=30, help="Auto search time budget")
     batch = search.add_argument_group(
         "batch search", "search many query molecules from a file, each separately"
     )
@@ -800,7 +852,7 @@ def _emit_result(args, result: SearchResult, client: Client | None = None) -> in
         for warning in result.warnings:
             print(f"warning: {warning.message or warning.code}", file=sys.stderr)
     library = None
-    if not args.json and client is not None:
+    if not args.json and client is not None and result.database_id != "auto":
         library = _catalog_entry(client, result.meta.database)
     if args.output:
         selected = args.format or infer_format(args.output)
@@ -840,16 +892,22 @@ def _search(args) -> int:
         )
     database, filters = _cli_filters(args) if args.database else (args.database, Filters())
     if args.resume or args.input:
-        if filters or args.explain:
+        if (filters or args.explain or args.synthesis is not None
+                or args.include_catalogues or args.availability or args.timeout_seconds != 30):
             raise ValueError(
-                "filters and --explain apply to one query; batch search (--input) does not "
-                "take them yet"
+                "routing options, filters and --explain apply to one query; "
+                "batch search (--input) does not take them yet"
             )
         # Batch accepts only .csv/.json, so it needs no RDKit check and keeps its
         # own, clearer message for anything else.
         return _search_many(args)
-    if not args.database:
-        raise ValueError("the following argument is required: -d/--database")
+    args.database = args.database or "auto"
+    database, filters = _cli_filters(args)
+    if (database == "auto" or args.synthesis is not None
+            or args.include_catalogues or args.availability):
+        return _auto_search(args, database, filters)
+    if args.timeout_seconds != 30:
+        raise ValueError("--timeout-seconds requires automatic database selection")
     if filters or args.explain:
         selection = similarity_selection(
             args.smiles,
@@ -872,6 +930,41 @@ def _search(args) -> int:
             include_synthons=args.include_synthons,
         )
         return _emit_result(args, result, client)
+
+
+def _auto_search(args, database, filters) -> int:
+    database, databases, include_catalogues = routing_database(
+        database, synthesis=args.synthesis, include_catalogues=args.include_catalogues,
+    )
+    if database != "auto":
+        raise ValueError("--availability requires automatic database selection")
+    options = dict(
+        method=args.method, limit=args.limit, include_synthons=args.include_synthons,
+        subset=list(filters.subsets), where=filters.where,
+        require=filters.require, exclude=filters.exclude,
+        max_price=filters.max_price, keep_unpriced=filters.keep_unpriced,
+        synthesis=args.synthesis, include_catalogues=include_catalogues,
+        availability=args.availability, databases=databases, timeout_seconds=args.timeout_seconds,
+    )
+    if not args.explain:
+        _check_output(args)
+    with _open_client(args) as client:
+        if args.explain:
+            plan = client.plan_search(args.smiles, **options)
+            if args.json:
+                print(json.dumps(plan, indent=2))
+            else:
+                rows = [[item["database_id"], "selected", ""] for item in plan["selected"]]
+                rows += [[item["database_id"], "excluded", item["reason"]]
+                         for item in plan["excluded"]]
+                print(_format_table(["database", "status", "reason"], rows))
+                print("Nothing was run and no search credit was used.")
+            return 0 if plan["selected"] else 1
+        result = client.search(args.smiles, database="auto", **options)
+        code = _emit_result(args, result, client)
+        if not args.json:
+            _print_filter_notes(result, filters, requested=args.limit)
+        return code
 
 
 def _cli_filters(args) -> tuple[str, Filters]:
