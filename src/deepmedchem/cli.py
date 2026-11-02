@@ -465,15 +465,20 @@ def _parser() -> argparse.ArgumentParser:
         "-n", "--limit", type=int, default=20, help="Number of hits (per query with --input)"
     )
     search.add_argument(
-        "--synthesis", type=synthesis_days, metavar="DAYS",
+        "--synthesis",
+        type=synthesis_days,
+        metavar="DAYS",
         help="Maximum vendor-declared synthesis time in business days, e.g. 7d",
     )
     search.add_argument(
-        "--all", dest="include_catalogues", action="store_true",
+        "--all",
+        dest="include_catalogues",
+        action="store_true",
         help="Also search orderable in-stock and enumerated catalogues",
     )
     search.add_argument(
-        "--availability", choices=("in_stock", "make_on_demand"),
+        "--availability",
+        choices=("in_stock", "make_on_demand"),
         help="Restrict vendor availability (use --all for in-stock catalogues)",
     )
     search.add_argument("--timeout-seconds", type=int, default=30, help="Auto search time budget")
@@ -934,8 +939,14 @@ def _search(args) -> int:
         )
     database, filters = _cli_filters(args) if args.database else (args.database, Filters())
     if args.resume or args.input:
-        if (filters or args.explain or args.synthesis is not None
-                or args.include_catalogues or args.availability or args.timeout_seconds != 30):
+        if (
+            filters
+            or args.explain
+            or args.synthesis is not None
+            or args.include_catalogues
+            or args.availability
+            or args.timeout_seconds != 30
+        ):
             raise ValueError(
                 "routing options, filters and --explain apply to one query; "
                 "batch search (--input) does not take them yet"
@@ -945,8 +956,12 @@ def _search(args) -> int:
         return _search_many(args)
     args.database = args.database or "auto"
     database, filters = _cli_filters(args)
-    if (database == "auto" or args.synthesis is not None
-            or args.include_catalogues or args.availability):
+    if (
+        database == "auto"
+        or args.synthesis is not None
+        or args.include_catalogues
+        or args.availability
+    ):
         return _auto_search(args, database, filters)
     if args.timeout_seconds != 30:
         raise ValueError("--timeout-seconds requires automatic database selection")
@@ -976,17 +991,28 @@ def _search(args) -> int:
 
 def _auto_search(args, database, filters) -> int:
     database, databases, include_catalogues = routing_database(
-        database, synthesis=args.synthesis, include_catalogues=args.include_catalogues,
+        database,
+        synthesis=args.synthesis,
+        include_catalogues=args.include_catalogues,
     )
     if database != "auto":
         raise ValueError("--availability requires automatic database selection")
     options = dict(
-        method=args.method, limit=args.limit, include_synthons=args.include_synthons,
-        subset=list(filters.subsets), where=filters.where,
-        require=filters.require, exclude=filters.exclude,
-        max_price=filters.max_price, keep_unpriced=filters.keep_unpriced,
-        synthesis=args.synthesis, include_catalogues=include_catalogues,
-        availability=args.availability, databases=databases, timeout_seconds=args.timeout_seconds,
+        method=args.method,
+        limit=args.limit,
+        include_synthons=args.include_synthons,
+        subset=list(filters.subsets),
+        where=filters.where,
+        require=filters.require,
+        exclude=filters.exclude,
+        max_price=filters.max_price,
+        keep_unpriced=filters.keep_unpriced,
+        structure_query=filters.structure_query,
+        synthesis=args.synthesis,
+        include_catalogues=include_catalogues,
+        availability=args.availability,
+        databases=databases,
+        timeout_seconds=args.timeout_seconds,
     )
     if not args.explain:
         _check_output(args)
@@ -997,8 +1023,9 @@ def _auto_search(args, database, filters) -> int:
                 print(json.dumps(plan, indent=2))
             else:
                 rows = [[item["database_id"], "selected", ""] for item in plan["selected"]]
-                rows += [[item["database_id"], "excluded", item["reason"]]
-                         for item in plan["excluded"]]
+                rows += [
+                    [item["database_id"], "excluded", item["reason"]] for item in plan["excluded"]
+                ]
                 print(_format_table(["database", "status", "reason"], rows))
                 print("Nothing was run and no search credit was used.")
             return 0 if plan["selected"] else 1
