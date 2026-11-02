@@ -687,3 +687,38 @@ result limit is required. Synchronous and asynchronous clients preserve server
 ordering, including exact isomeric identity ahead of equal-score fingerprint
 collisions. Existing filters still apply; a bounded search miss is not proof
 that a molecule is absent. Several supplier routes may produce the same molecule.
+
+### Automatic database selection
+
+```python
+hits = dmc.search(query, database="auto", availability="in_stock", limit=100)
+hits = dmc.search(query, database="auto", max_price=200, where="mw<=450")
+matches = dmc.substructure("C(=O)N", database="auto", limit=100)
+
+with dmc.Client() as client:
+    plan = client.plan_search(query, max_price=200)  # no search credits
+    print(plan["selected"], plan["excluded"])
+
+print(hits.routing)
+for hit in hits.hits:
+    print(hit.smiles, hit.sources)
+```
+
+Requires a backend with `/api/v2/search_auto`; older servers return an error and
+are not silently searched through a client-side fallback. Explicit database
+selection keeps its existing behavior. Sync/async clients and module-level search
+facades accept `auto`. `scope="orderable"` is the default; `scope="all"` includes
+research/hypothetical collections. An optional `databases=["enamine", "vast"]`
+restricts candidate sources. `availability` describes catalogue snapshots, not
+live stock or a delivery guarantee. Unsupported filters exclude sources with a
+reason in the routing report; the current enumerated runtime cannot apply prices.
+
+The global result limit applies after molecular deduplication. Each hit keeps its
+representative database/product/price together; `sources` retains alternatives
+retrieved by the search. CSV export preserves the per-hit database and serializes
+sources as JSON. `all_sources_searched` is separate from exhaustive molecular
+coverage; check `routing.sources` and warnings for failures and timeouts.
+
+One federated request costs one credit, independent of selected source count;
+all-source failure is refunded. The default shared execution deadline is 30 s.
+For `timeout_seconds=120`, configure a client HTTP `timeout` above 120 s too.
