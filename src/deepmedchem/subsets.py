@@ -32,6 +32,13 @@ _PROPERTY_ALIASES = {
     **{property_id: name for name, (property_id, _) in PROPERTIES.items()},
     **{property_id.removeprefix("rdkit."): name for name, (property_id, _) in PROPERTIES.items()},
     "molwt": "mw",
+    "mollogp": "logp",
+    "numhdonors": "hbd",
+    "numhacceptors": "hba",
+    "numrotatablebonds": "rotb",
+    "fractioncsp3": "fsp3",
+    "numaromaticrings": "arom",
+    "aromaticrings": "arom",
     "rotatable_bonds": "rotb",
     "aromatic_rings": "arom",
 }

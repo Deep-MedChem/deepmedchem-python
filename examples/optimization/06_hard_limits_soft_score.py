@@ -28,21 +28,18 @@ def main():
         budget=args.budget,
         batch_size=args.batch_size,
         name=args.name,
-        properties={
-            "MolWt": (None, args.mw_max),
-            "MolLogP": (None, args.logp_max),
-            "TPSA": args.tpsa,
-        },
+        constraints=[
+            dmc.PropertyRange("MolWt", max=args.mw_max),
+            dmc.PropertyRange("MolLogP", max=args.logp_max),
+            dmc.PropertyRange("TPSA", min=args.tpsa[0], max=args.tpsa[1]),
+        ],
         objectives=[
-            {"type": "property", "property_id": "rdkit.qed", "lower": 0, "upper": 1, "weight": 0.7},
-            {
-                "type": "property",
-                "property_id": "rdkit.crippen_logp",
-                "direction": "minimize",
-                "lower": args.logp_max - 4,
-                "upper": args.logp_max,
-                "weight": 0.3,
-            },
+            dmc.Maximize("rdkit.qed", scale=dmc.Scale(lower=0, upper=1), weight=0.7),
+            dmc.Minimize(
+                "MolLogP",
+                scale=dmc.Scale(lower=args.logp_max - 4, upper=args.logp_max),
+                weight=0.3,
+            ),
         ],
     )
     for row in result.top(10):

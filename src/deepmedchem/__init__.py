@@ -4,6 +4,23 @@ __version__ = "0.4.0b6"
 
 from . import aio, subsets
 from .batch import BatchQuery, BatchQueryResult, BatchResult, read_queries
+from .chemistry import (
+    Constraint,
+    Constraints,
+    ExcludeStructure,
+    ExternalScore,
+    Maximize,
+    Minimize,
+    Objective,
+    Objectives,
+    PredictedProperty,
+    PredictedPropertyRange,
+    PropertyRange,
+    RequireAnyStructure,
+    RequireStructure,
+    Scale,
+    Similarity,
+)
 from .client import (
     AsyncClient,
     AsyncDMCClient,
@@ -42,6 +59,21 @@ from .selection import Run, Selection
 from .subsets import SUBSETS, Filters, Pattern, PropertyCondition, Subset
 
 __all__ = [
+    "Constraint",
+    "Constraints",
+    "ExcludeStructure",
+    "ExternalScore",
+    "Maximize",
+    "Minimize",
+    "Objective",
+    "Objectives",
+    "PredictedProperty",
+    "PredictedPropertyRange",
+    "PropertyRange",
+    "RequireAnyStructure",
+    "RequireStructure",
+    "Scale",
+    "Similarity",
     "AsyncClient",
     "AsyncDMCClient",
     "AsyncOptimization",

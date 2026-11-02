@@ -163,7 +163,7 @@ dmc optimize status [NAME] | results NAME --top 50 -o best.csv | cancel NAME | r
   The same name with a different specification is a 409 `idempotency_conflict`.
 - **Report failures, never drop them.** Every proposed id needs exactly one row; the SDK fills
   ids a scorer did not return as `failed`. If the scorer raises, nothing is submitted.
-- Put supported hard requirements in `properties=` / `constraints=`, never in zero/penalty
+- Put supported hard requirements in `constraints=[dmc.PropertyRange(...), dmc.RequireStructure(...)]`, never in zero/penalty
   callback scores. Keep docking and proprietary models in the callback. Unknown hard
   requirements are unsupported; do not silently turn them into a soft preference.
 - Check `catalog()["optimization"]["constraints"]["enabled"]` before using typed structures.
@@ -171,14 +171,17 @@ dmc optimize status [NAME] | results NAME --top 50 -o best.csv | cancel NAME | r
   Guided acquisition is the default: synthon anchors and additive property sampling precede
   exact product verification. Inspect `engine.constraint_acquisition` for actual execution/fallbacks.
 - Check `optimization.objectives.enabled` and advertised ADMET endpoints. Put supported
-  preferences in `objectives=` with explicit normalization bounds, direction and weight.
+  preferences in `objectives=[dmc.Maximize(..., scale=dmc.Scale(lower=..., upper=...))]`
+  (or `Minimize`), with optional positive `weight`. For ADMET, similarity and mixed callbacks,
+  use `PredictedProperty`, `Similarity` and `ExternalScore` sources. Legacy dictionaries remain
+  supported; typed objects work in both sync and async create APIs.
   Built-in-only runs omit the callback. Mixed runs include an `external` term and maximize the
   weighted mean desirability; the callback returns only its raw external score.
 - CP16 guides acquisition; pinned assembled-product teachers enforce ADMET thresholds and
   score ADMET objectives. Neither value is a measurement. Unavailable models fail explicitly.
 - Keep supported descriptor limits and preferences out of custom callbacks. Internal objective
   raw values appear as `metrics.objective_N`, with ADMET provenance in `objective_N_model`.
-- `filters="druglike"` and `properties={"MolWt": (None, 500)}` restrict the space;
+- `filters="druglike"` and `constraints=[dmc.PropertyRange("MolWt", max=500)]` restrict the space;
   `strategy` picks a Navigator preset (`gamma_diversity_screening` default). Allowed databases,
   strategies, properties and limits are in `dmc.catalog()["optimization"]`.
 - `scorer={...}` is pinned at creation; a later submission with a different scorer is refused
