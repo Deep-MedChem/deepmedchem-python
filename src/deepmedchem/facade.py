@@ -7,6 +7,7 @@ from typing import Any
 from .client import Client
 from .config import CredentialSource
 from .models import SampleResult, SearchResult, SelectionResult, SubstructureResult, Usage
+from .query_schema import QueryNode, StructureQuery
 
 
 def _client_options(
@@ -45,7 +46,7 @@ def search(
     keep_unpriced: bool = False,
     synthesis: str | int | None = None,
     include_catalogues: bool = False,
-    structure_query=None,
+    structure_query: StructureQuery | QueryNode | dict[str, Any] | None = None,
     availability: str | None = None,
     scope: str = "orderable",
     databases: list[str] | None = None,
@@ -99,7 +100,7 @@ def search(
 
 
 def substructure(
-    query: str,
+    query: str | StructureQuery | QueryNode | dict[str, Any],
     *,
     database: str,
     format: str = "smarts",
@@ -167,7 +168,7 @@ def sample(
     where=None,
     max_price: float | None = None,
     keep_unpriced: bool = False,
-    structure_query=None,
+    structure_query: StructureQuery | QueryNode | dict[str, Any] | None = None,
     guest: bool = False,
     api_key: str | None = None,
     api_url: str | None = None,

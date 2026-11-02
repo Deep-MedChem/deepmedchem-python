@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from .client import AsyncClient
-from .models import SampleResult, SearchResult, SubstructureResult, Usage
+from .models import SampleResult, SearchResult, SelectionResult, SubstructureResult, Usage
+from .query_schema import QueryNode, StructureQuery
 
 
 async def search(
@@ -16,7 +17,8 @@ async def search(
 
 
 async def substructure(
-    query: str, *, database: str, format: str = "smarts", **kwargs
+    query: str | StructureQuery | QueryNode | dict[str, Any],
+    *, database: str, format: str = "smarts", **kwargs
 ) -> SubstructureResult:
     async with AsyncClient(**_connection_options(kwargs)) as client:
         return await client.search_substructure(
@@ -24,7 +26,7 @@ async def substructure(
         )
 
 
-async def sample(*, database: str, **kwargs) -> SampleResult:
+async def sample(*, database: str, **kwargs) -> SampleResult | SelectionResult:
     async with AsyncClient(**_connection_options(kwargs)) as client:
         return await client.sample(database=database, **kwargs)
 

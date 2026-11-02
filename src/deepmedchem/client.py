@@ -32,6 +32,7 @@ from .models import (
     SubstructureResult,
     Usage,
 )
+from .query_schema import QueryNode, StructureQuery
 from .selection import Run, Selection
 from .subsets import sample_selection, search_filters, similarity_selection
 
@@ -443,7 +444,7 @@ class Client:
         keep_unpriced: bool = False,
         synthesis: str | int | None = None,
         include_catalogues: bool = False,
-        structure_query=None,
+        structure_query: StructureQuery | QueryNode | dict[str, Any] | None = None,
         availability: str | None = None,
         scope: str = "orderable",
         databases: list[str] | None = None,
@@ -540,7 +541,7 @@ class Client:
             )
         )
 
-    def validate_query(self, query) -> dict[str, Any]:
+    def validate_query(self, query: StructureQuery | QueryNode | dict[str, Any]) -> dict[str, Any]:
         """Compile a native query on the service without searching or charging credits."""
         from .query_schema import as_structure_query
 
@@ -669,7 +670,7 @@ class Client:
 
     def search_substructure(
         self,
-        query: str,
+        query: str | StructureQuery | QueryNode | dict[str, Any],
         *,
         query_format: str = "smarts",
         where=None,
@@ -753,7 +754,7 @@ class Client:
         where=None,
         max_price: float | None = None,
         keep_unpriced: bool = False,
-        structure_query=None,
+        structure_query: StructureQuery | QueryNode | dict[str, Any] | None = None,
     ) -> SampleResult | SelectionResult:
         """Draw random molecules, optionally restricted to a property subset or price."""
 
@@ -1107,7 +1108,9 @@ class AsyncClient:
             await self._request("POST", "/api/v2/search", json=payload)
         )
 
-    async def validate_query(self, query) -> dict[str, Any]:
+    async def validate_query(
+        self, query: StructureQuery | QueryNode | dict[str, Any]
+    ) -> dict[str, Any]:
         """Compile a native query on the service without searching or charging credits."""
         from .query_schema import as_structure_query
 
@@ -1141,7 +1144,9 @@ class AsyncClient:
             await self._request("POST", "/api/v2/search_cheese", json=payload)
         )
 
-    async def search_substructure(self, query: str, **kwargs) -> SubstructureResult:
+    async def search_substructure(
+        self, query: str | StructureQuery | QueryNode | dict[str, Any], **kwargs
+    ) -> SubstructureResult:
         database_id = resolve_database(kwargs.pop("database"))
         synthesis = kwargs.pop("synthesis", None)
         include_catalogues = kwargs.pop("include_catalogues", False)
@@ -1193,7 +1198,7 @@ class AsyncClient:
             await self._request("POST", "/api/v2/search_substructure", json=payload)
         )
 
-    async def sample(self, **kwargs) -> SampleResult:
+    async def sample(self, **kwargs) -> SampleResult | SelectionResult:
         database, filters = search_filters(
             kwargs.pop("database"),
             subset=kwargs.pop("subset", None),
