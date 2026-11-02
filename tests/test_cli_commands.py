@@ -303,6 +303,5 @@ def test_catalog_display_order_and_unavailable_enamine_prices(capsys):
         lines = capsys.readouterr().out.splitlines()[2:10]
         assert [line.split()[0] for line in lines] == expected
         if not detailed:
-            assert lines[0].split() == ["enamine", "1.0K", "-", "info@enamine.net"]
+            assert lines[0].split() == ["enamine", "1K", "-", "info@enamine.net"]
     assert json.dumps(catalog) == original
-

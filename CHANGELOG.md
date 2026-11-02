@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep search summaries to the searched population and similarity range. Automatic search
+  sums catalogue populations of successfully searched releases, using compact K/M/B/T counts.
 - Default single-query similarity searches to automatic routing over orderable synthon
   spaces. `--all` / `include_catalogues=True` also admits orderable enumerated/in-stock
   catalogues; research/hypothetical scope remains a separate explicit choice.

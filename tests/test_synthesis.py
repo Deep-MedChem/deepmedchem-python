@@ -1,6 +1,7 @@
 import asyncio
 import csv
 import json
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -26,10 +27,19 @@ def install(monkeypatch):
     def handle(request):
         body = json.loads(request.content or "{}")
         seen.append((request.url.path, body))
+        if request.url.path.endswith("/catalog"):
+            return httpx.Response(200, json={"libraries": [{
+                "database_id": "onepot-core-2-lite",
+                "release_id": "test-release",
+                "product_count": 12_500_000_000,
+            }]})
         plan = {
             "selected": [{"database_id": "onepot-core-2-lite", "synthesis": ESTIMATE}],
             "excluded": [{"database_id": "enamine-real-v5a", "reason": "synthesis_time_unknown"}],
-            "sources": [{"database_id": "onepot-core-2-lite", "status": "succeeded"}],
+            "sources": [{
+                "database_id": "onepot-core-2-lite", "release_id": "test-release",
+                "status": "succeeded",
+            }],
             "max_synthesis_days": body.get("max_synthesis_days"),
         }
         if request.url.path.endswith(":plan"):
@@ -131,10 +141,45 @@ def test_cli_auto_table_full_smiles_and_explicit_units(monkeypatch, capsys):
     assert SMILES in out
     assert "5–7 days" in out and "onepot" in out
     assert "..." not in out and " bd" not in out
-    assert "business days" in out and "Shipping is additional" in out
-    assert len(seen) == 1  # no catalogue request for an 'auto' pseudo-library
+    assert out.split("\n\n")[1].splitlines() == [
+        "Searched 12.5B molecules (automatic search).",
+        "Similarity range: 0.70-0.70 ECFP4 Tanimoto.",
+    ]
+    assert len(seen) == 2  # source populations come from the catalogue
     assert seen[0][1]["max_synthesis_days"] == 7
     assert seen[0][1]["include_catalogues"] is False
+
+
+@pytest.mark.parametrize("total,label", [(15_000_000_000, "15B"), (121_000_000_000_000, "121T")])
+def test_auto_summary_sums_only_searched_releases(total, label):
+    libraries = [
+        {"database_id": "a", "release_id": "1", "product_count": total - 1_000_000_000},
+        {"database_id": "b", "release_id": "1", "product_count": 1_000_000_000},
+        {"database_id": "failed", "release_id": "1", "product_count": 99_000_000_000_000},
+        {"database_id": "excluded", "release_id": "1", "product_count": 99_000_000_000_000},
+    ]
+    client = SimpleNamespace(catalog=lambda: {"libraries": libraries})
+    result = dmc.SearchResult(
+        database_id="auto", scorer="morgan", metric="ECFP4 Tanimoto",
+        timing_ms={"total": 1143}, results=[{"smiles": "C", "score": 0.49}],
+        all_sources_searched=False,
+        routing={"sources": [
+            {"database_id": "a", "release_id": "1", "status": "succeeded"},
+            {"database_id": "b", "release_id": "1", "status": "succeeded"},
+            {"database_id": "a", "release_id": "1", "status": "succeeded"},
+            {"database_id": "failed", "release_id": "1", "status": "failed"},
+        ]},
+    )
+    summary = cli._auto_catalog_entry(client, result)
+    assert cli._result_summary(result, summary) == [
+        f"Searched {label} molecules (automatic search, partial results) in 1143 ms.",
+        "Similarity range: 0.49-0.49 ECFP4 Tanimoto.",
+    ]
+    libraries[0]["release_id"] = "new-release"
+    assert "product_count" not in cli._auto_catalog_entry(client, result)
+    libraries[0]["release_id"] = "1"
+    libraries[0]["product_count"] = None
+    assert "product_count" not in cli._auto_catalog_entry(client, result)
 
 
 def test_cli_all_and_filters_do_not_bypass_auto(monkeypatch, capsys):
