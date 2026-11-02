@@ -96,7 +96,7 @@ def _human_count(value: Any) -> str:
         return "-"
     for suffix, scale in (("T", 1e12), ("B", 1e9), ("M", 1e6), ("K", 1e3)):
         if number >= scale:
-            return f"{number / scale:.1f}{suffix}"
+            return f"{number / scale:.1f}".rstrip("0").rstrip(".") + suffix
     return f"{int(number)}"
 
 
@@ -209,11 +209,47 @@ def _catalog_entry(client: Client, database_id: str | None) -> dict[str, Any] | 
     return None
 
 
+def _auto_catalog_entry(client: Client, result: SearchResult) -> dict[str, Any]:
+    """Sum the catalogue populations of successfully searched database releases."""
+
+    summary = {"name": "automatic search"}
+    if result.all_sources_searched is False:
+        summary["name"] += ", partial results"
+    sources = {
+        (source["database_id"], source.get("release_id"))
+        for source in (result.routing or {}).get("sources", [])
+        if source.get("status") == "succeeded"
+    }
+    if not sources:
+        return summary
+    try:
+        catalog = client.catalog()
+    except DeepMedChemError:
+        return summary
+    libraries = {
+        (library["database_id"], library.get("release_id")): library
+        for library in catalog.get("libraries", [])
+    }
+    matched = [libraries.get(source, {}) for source in sources]
+    counts = [library.get("product_count") for library in matched]
+    if any(type(count) is not int or count < 0 for count in counts):
+        return summary
+    summary["product_count"] = sum(counts)
+    populations = [library["population"] for library in matched if library.get("population")]
+    if populations:
+        summary["population"] = {
+            "count_is_estimate": any(p.get("count_is_estimate") for p in populations)
+        }
+    return summary
+
+
 def _result_summary(result: SearchResult, library: dict[str, Any] | None) -> list[str]:
     """Short, human sentences about what was searched and how the hits scored."""
 
     meta = result.meta
-    name = (library or {}).get("name") or meta.database or "the database"
+    name = (library or {}).get("name") or (
+        "automatic search" if meta.database == "auto" else meta.database or "the database"
+    )
     size = _library_count(library) if library else "-"
     unit = "source combinations" if (library or {}).get("population") else "molecules"
     space = f"{size} {unit} ({name})" if size != "-" else str(name)
@@ -223,19 +259,7 @@ def _result_summary(result: SearchResult, library: dict[str, Any] | None) -> lis
         return [f"Random sample of {count} from {space}."]
     if meta.method == "substructure":
         return [f"Searched {space}{elapsed}.", f"{count} exact substructure matches returned."]
-    if result.database_id == "auto":
-        routing = result.routing or {}
-        reports = routing.get("sources", [])
-        completed = sum(item.get("status") == "succeeded" for item in reports)
-        selected = len(routing.get("selected", reports))
-        lines = [f"Automatic search: {completed}/{selected} selected databases completed{elapsed}."]
-        maximum = routing.get("max_synthesis_days")
-        if maximum is not None:
-            lines.append(f"Synthesis limit: {maximum} business days; unknown estimates excluded.")
-        if result.all_sources_searched is False:
-            lines.append("Partial results: some sources or catalogue records were unavailable.")
-    else:
-        lines = [f"Searched {space}{elapsed}."]
+    lines = [f"Searched {space}{elapsed}."]
     scores = [score for score in result.scores if score is not None]
     if scores:
         metric = meta.metric or meta.method or "similarity"
@@ -279,8 +303,6 @@ def _print_result_table(result: SearchResult, *, library: dict[str, Any] | None 
     print()
     for line in _result_summary(result, library):
         print(line)
-    print("Synthesis: vendor-declared estimates; days are business days unless stated otherwise.")
-    print("Shipping is additional; in-stock status reflects the catalogue snapshot.")
 
 
 # --- Argument parsing ----------------------------------------------------------
@@ -852,8 +874,12 @@ def _emit_result(args, result: SearchResult, client: Client | None = None) -> in
         for warning in result.warnings:
             print(f"warning: {warning.message or warning.code}", file=sys.stderr)
     library = None
-    if not args.json and client is not None and result.database_id != "auto":
-        library = _catalog_entry(client, result.meta.database)
+    if not args.json and client is not None:
+        library = (
+            _auto_catalog_entry(client, result)
+            if result.database_id == "auto"
+            else _catalog_entry(client, result.meta.database)
+        )
     if args.output:
         selected = args.format or infer_format(args.output)
         written = write_result(result, args.output, format=selected, html_limit=args.html_limit)
