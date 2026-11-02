@@ -768,3 +768,84 @@ result limit is required. Synchronous and asynchronous clients preserve server
 ordering, including exact isomeric identity ahead of equal-score fingerprint
 collisions. Existing filters still apply; a bounded search miss is not proof
 that a molecule is absent. Several supplier routes may produce the same molecule.
+
+### Automatic database selection
+
+```python
+hits = dmc.search(query, database="auto", availability="in_stock", limit=100)
+hits = dmc.search(
+    query, database="auto", max_price=200, where=dmc.PropertyRange("MolWt", max=450)
+)
+matches = dmc.substructure("C(=O)N", database="auto", limit=100)
+
+with dmc.Client() as client:
+    plan = client.plan_search(query, max_price=200)  # no search credits
+    print(plan["selected"], plan["excluded"])
+
+print(hits.routing)
+for hit in hits.hits:
+    print(hit.smiles, hit.sources)
+```
+
+Requires a backend with `/api/v2/search_auto`; older servers return an error and
+are not silently searched through a client-side fallback. Explicit database
+selection keeps its existing behavior. Sync/async clients and module-level search
+facades accept `auto`. `scope="orderable"` is the default; `scope="all"` includes
+research/hypothetical collections. An optional `databases=["enamine", "vast"]`
+restricts candidate sources. `availability` describes catalogue snapshots, not
+live stock or a delivery guarantee. Unsupported filters exclude sources with a
+reason in the routing report; the current enumerated runtime cannot apply prices.
+
+The global result limit applies after molecular deduplication. Each hit keeps its
+representative database/product/price together; `sources` retains alternatives
+retrieved by the search. CSV export preserves the per-hit database and serializes
+sources as JSON. `all_sources_searched` is separate from exhaustive molecular
+coverage; check `routing.sources` and warnings for failures and timeouts.
+
+One federated request costs one credit, independent of selected source count;
+all-source failure is refunded. The default shared execution deadline is 30 s.
+For `timeout_seconds=120`, configure a client HTTP `timeout` above 120 s too.
+
+### Adaptive optimization across databases
+
+```python
+result = dmc.optimize(
+    docking_score,
+    database="auto",
+    databases=["enamine", "freedom"],  # optional candidate allowlist
+    availability="make_on_demand",
+    direction="minimize",
+    budget=1000,
+    batch_size=40,
+    name="multi-space-docking",
+    constraints=[dmc.PropertyRange("MolWt", max=400)],
+)
+result.to_csv("candidates.csv")  # includes source routes as JSON
+```
+
+The backend selects up to eight eligible spaces, pins their releases, and runs
+one resumable campaign with one total evaluation budget. Each space keeps its
+own Navigator state. The coordinator explores each source, then uses observed
+score ranks with an exploration allowance to allocate later proposals. Scores
+are reused for duplicate canonical isomeric molecules across sources; different
+salts, tautomers and stereoisomers remain distinct. Failed evaluations also use
+the budget. Source IDs, releases and product routes are retained in each
+observation's `sources` and in exports.
+
+`client.optimizations.create` and its async equivalent accept the same routing
+options. `scope="orderable"` is the default. Existing property/structure
+constraints exclude spaces that cannot enforce them. Inspect
+`result.optimization.specification["resolved_databases"]` for the pinned selection
+and `result.optimization.engine["constraint_acquisition"]` for evaluation counts.
+Resuming the same named intent retains its original releases.
+
+Requires the matching backend and worker implementation. Auto optimization
+currently supports external scoring callbacks only; built-in multi-objective
+runs and seed import are unsupported. Price filters are available for auto
+search, not optimization. Exhausting child proposal budgets can stop a campaign
+before the global budget; it does not prove exhaustion of the chemical union.
+
+In local real-Navigator benchmarks (two small amide spaces, three seeds, 24
+evaluations), adaptive allocation raised mean top-five QED from 0.816 to 0.875
+and tied equal allocation on a target-molecular-weight objective. These are
+small-space checks, not evidence of docking or trillion-scale performance.

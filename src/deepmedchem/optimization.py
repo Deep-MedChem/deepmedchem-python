@@ -32,6 +32,7 @@ from urllib.parse import quote
 
 import httpx
 
+from .auto import auto_options, require_auto
 from .chemistry import (
     Constraints,
     Maximize,
@@ -250,6 +251,9 @@ def build_specification(
     properties: Mapping[str, Any] | None = None,
     constraints: Constraints | None = None,
     objectives: Objectives | None = None,
+    databases: list[str] | None = None,
+    availability: str | None = None,
+    scope: str = "orderable",
     seed: int | None = None,
     scorer: Mapping[str, Any] | None = None,
     metadata: Mapping[str, Any] | None = None,
@@ -284,6 +288,15 @@ def build_specification(
         "budget": budget,
         "batch_size": batch_size,
     }
+    require_auto(spec["database"], availability=availability, scope=scope, databases=databases)
+    if spec["database"] == "auto":
+        if objectives:
+            raise ValueError("auto optimization currently requires an external score callback")
+        options = auto_options(availability=availability, scope=scope, databases=databases)
+        options.pop("timeout_seconds")
+        if databases is not None and len(databases) > 8:
+            raise ValueError("auto optimization supports at most 8 databases")
+        spec["auto"] = options
     if start_paused:
         spec["start_paused"] = True
     if _check_name(name) is not None:
@@ -724,6 +737,9 @@ class Optimizations:
         properties: Mapping[str, Any] | None = None,
         constraints: Constraints | None = None,
         objectives: Objectives | None = None,
+        databases: list[str] | None = None,
+        availability: str | None = None,
+        scope: str = "orderable",
         seed: int | None = None,
         scorer: Mapping[str, Any] | None = None,
         metadata: Mapping[str, Any] | None = None,
@@ -751,6 +767,9 @@ class Optimizations:
             properties=properties,
             constraints=constraints,
             objectives=objectives,
+            databases=databases,
+            availability=availability,
+            scope=scope,
             seed=seed,
             scorer=scorer,
             metadata=metadata,
@@ -1195,6 +1214,9 @@ class AsyncOptimizations:
         properties: Mapping[str, Any] | None = None,
         constraints: Constraints | None = None,
         objectives: Objectives | None = None,
+        databases: list[str] | None = None,
+        availability: str | None = None,
+        scope: str = "orderable",
         seed: int | None = None,
         scorer: Mapping[str, Any] | None = None,
         metadata: Mapping[str, Any] | None = None,
@@ -1216,6 +1238,9 @@ class AsyncOptimizations:
             properties=properties,
             constraints=constraints,
             objectives=objectives,
+            databases=databases,
+            availability=availability,
+            scope=scope,
             seed=seed,
             scorer=scorer,
             metadata=metadata,
@@ -1858,6 +1883,9 @@ def optimize(
     properties: Mapping[str, Any] | None = None,
     constraints: Constraints | None = None,
     objectives: Objectives | None = None,
+    databases: list[str] | None = None,
+    availability: str | None = None,
+    scope: str = "orderable",
     seed: int | None = None,
     scorer: Mapping[str, Any] | None = None,
     metadata: Mapping[str, Any] | None = None,
@@ -1923,6 +1951,9 @@ def optimize(
             properties=properties,
             constraints=constraints,
             objectives=objectives,
+            databases=databases,
+            availability=availability,
+            scope=scope,
             seed=seed,
             scorer=scorer,
             metadata=metadata,

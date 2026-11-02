@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 
 from . import __version__
+from .auto import auto_options, require_auto, similarity_plan
 from .config import (
     DEFAULT_API_URL,
     CredentialSource,
@@ -400,6 +401,10 @@ class Client:
         exclude=None,
         max_price: float | None = None,
         keep_unpriced: bool = False,
+        availability: str | None = None,
+        scope: str = "orderable",
+        databases: list[str] | None = None,
+        timeout_seconds: int = 30,
     ) -> SearchResult:
         """Rank molecules of ``database`` by similarity to ``smiles``.
 
@@ -423,6 +428,21 @@ class Client:
             max_price=max_price,
             keep_unpriced=keep_unpriced,
         )
+        require_auto(database, availability=availability, scope=scope, databases=databases)
+        if database == "auto":
+            selection = similarity_selection(
+                smiles, database=database, filters=filters, method=method, limit=limit,
+                include_synthons=include_synthons,
+            )
+            return SearchResult.model_validate(self._request(
+                "POST", "/api/v2/search_auto", json={
+                    "selection": selection.to_dict(),
+                    **auto_options(availability=availability, scope=scope, databases=databases,
+                                   timeout_seconds=timeout_seconds),
+                },
+            ))
+        if timeout_seconds != 30:
+            raise ValueError("search timeout_seconds requires database='auto'")
         if filters:
             return self.selections.create(
                 similarity_selection(
@@ -455,6 +475,11 @@ class Client:
                 },
             )
         )
+
+    def plan_search(self, smiles: str, **kwargs) -> dict[str, Any]:
+        """Preview automatic source selection and credit cost without searching."""
+        return self._request("POST", "/api/v2/search_auto:plan",
+                             json=similarity_plan(smiles, **kwargs))
 
     def search_many(
         self,
@@ -544,6 +569,9 @@ class Client:
         limit: int = 20,
         include_synthons: bool = False,
     ) -> SearchResult:
+        if database == "auto":
+            return self.search(smiles, database=database, method=scorer, limit=limit,
+                               include_synthons=include_synthons)
         database_id = resolve_database(database)
         return SearchResult.model_validate(
             self._request(
@@ -568,8 +596,24 @@ class Client:
         limit: int = 100,
         timeout_seconds: int = 30,
         include_synthons: bool = False,
+        availability: str | None = None,
+        scope: str = "orderable",
+        databases: list[str] | None = None,
     ) -> SubstructureResult:
         database_id = resolve_database(database)
+        require_auto(database_id, availability=availability, scope=scope, databases=databases)
+        if database_id == "auto":
+            return SubstructureResult.model_validate(self._request(
+                "POST", "/api/v2/search_auto", json={
+                    "substructure": {
+                        "query": {"format": query_format, "value": query},
+                        "database_id": "auto", "limit": limit,
+                        "include_synthons": include_synthons,
+                    },
+                    **auto_options(availability=availability, scope=scope, databases=databases,
+                                   timeout_seconds=timeout_seconds),
+                },
+            ))
         return SubstructureResult.model_validate(
             self._request(
                 "POST",
@@ -871,6 +915,28 @@ class AsyncClient:
             max_price=kwargs.pop("max_price", None),
             keep_unpriced=kwargs.pop("keep_unpriced", False),
         )
+        availability = kwargs.pop("availability", None)
+        scope = kwargs.pop("scope", "orderable")
+        databases = kwargs.pop("databases", None)
+        timeout_seconds = kwargs.pop("timeout_seconds", 30)
+        require_auto(database, availability=availability, scope=scope, databases=databases)
+        if database == "auto":
+            selection = similarity_selection(
+                smiles, database=database, filters=filters, method=method,
+                limit=kwargs.pop("limit", 20),
+                include_synthons=kwargs.pop("include_synthons", False),
+            )
+            if kwargs:
+                raise TypeError(f"unexpected search arguments: {sorted(kwargs)}")
+            return SearchResult.model_validate(await self._request(
+                "POST", "/api/v2/search_auto", json={
+                    "selection": selection.to_dict(),
+                    **auto_options(availability=availability, scope=scope, databases=databases,
+                                   timeout_seconds=timeout_seconds),
+                },
+            ))
+        if timeout_seconds != 30:
+            raise ValueError("search timeout_seconds requires database='auto'")
         if filters:
             selection = similarity_selection(
                 smiles,
@@ -898,7 +964,14 @@ class AsyncClient:
             await self._request("POST", "/api/v2/search", json=payload)
         )
 
+    async def plan_search(self, smiles: str, **kwargs) -> dict[str, Any]:
+        """Preview automatic source selection and credit cost without searching."""
+        return await self._request("POST", "/api/v2/search_auto:plan",
+                                   json=similarity_plan(smiles, **kwargs))
+
     async def search_cheese(self, smiles: str, **kwargs) -> SearchResult:
+        if kwargs.get("database") == "auto":
+            return await self.search(smiles, method=kwargs.pop("scorer"), **kwargs)
         database_id = resolve_database(kwargs.pop("database"))
         scorer = kwargs.pop("scorer")
         payload = {
@@ -916,6 +989,10 @@ class AsyncClient:
 
     async def search_substructure(self, query: str, **kwargs) -> SubstructureResult:
         database_id = resolve_database(kwargs.pop("database"))
+        availability = kwargs.pop("availability", None)
+        scope = kwargs.pop("scope", "orderable")
+        databases = kwargs.pop("databases", None)
+        require_auto(database_id, availability=availability, scope=scope, databases=databases)
         payload = {
             "query": {"format": kwargs.pop("query_format", "smarts"), "value": query},
             "database_id": database_id,
@@ -925,6 +1002,14 @@ class AsyncClient:
         }
         if kwargs:
             raise TypeError(f"unexpected substructure arguments: {sorted(kwargs)}")
+        if database_id == "auto":
+            return SubstructureResult.model_validate(await self._request(
+                "POST", "/api/v2/search_auto", json={
+                    "substructure": payload,
+                    **auto_options(availability=availability, scope=scope, databases=databases,
+                                   timeout_seconds=payload["timeout_seconds"]),
+                },
+            ))
         return SubstructureResult.model_validate(
             await self._request("POST", "/api/v2/search_substructure", json=payload)
         )
