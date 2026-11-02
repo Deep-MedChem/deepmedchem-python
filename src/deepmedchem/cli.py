@@ -247,6 +247,9 @@ def _print_result_table(result: SearchResult, *, library: dict[str, Any] | None 
 
 
 def _add_connection_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--guest", action="store_true", help="Use guest access, ignoring saved keys"
+    )
     parser.add_argument("--profile", help="Named profile (default: active profile)")
     parser.add_argument("--api-url", help=argparse.SUPPRESS)
     parser.add_argument("--json", action="store_true", help="Print the raw JSON response")
@@ -646,7 +649,10 @@ def _profile(args, config) -> str:
 def _open_client(args) -> Client:
     config = load_config()
     profile = _profile(args, config)
-    return Client(profile=profile, api_url=getattr(args, "api_url", None))
+    return Client(
+        profile=profile, api_url=getattr(args, "api_url", None),
+        **({"guest": True} if getattr(args, "guest", False) else {}),
+    )
 
 
 def _login(args) -> int:
@@ -789,6 +795,10 @@ def _check_output(args) -> None:
 
 
 def _emit_result(args, result: SearchResult, client: Client | None = None) -> int:
+    if result.mode == "guest" and not args.json:
+        print("Guest access. Sign in with `dmc login` for account features.", file=sys.stderr)
+        for warning in result.warnings:
+            print(f"warning: {warning.message or warning.code}", file=sys.stderr)
     library = None
     if not args.json and client is not None:
         library = _catalog_entry(client, result.meta.database)

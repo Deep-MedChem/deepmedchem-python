@@ -105,15 +105,46 @@ def _credentials(
     credential_provider: CredentialSource | None = None,
     *,
     profile: str = "default",
-) -> str:
-    value = resolve_api_key(api_key, credential_provider, profile=profile)
-    if not value:
+    guest: bool = False,
+) -> str | None:
+    if guest:
+        if api_key is not None or credential_provider is not None:
+            raise ValueError("guest=True cannot be combined with api_key or credential_provider")
+        return None
+    return resolve_api_key(api_key, credential_provider, profile=profile) or None
+
+
+_GUEST_ROUTES = {
+    ("GET", "/api/v2/catalog"),
+    ("POST", "/api/v2/search"),
+    ("POST", "/api/v2/search_cheese"),
+    ("POST", "/api/v2/sample"),
+}
+
+
+def _check_guest_access(is_guest: bool, method: str, path: str) -> None:
+    if is_guest and (method, path) not in _GUEST_ROUTES:
         raise DeepMedChemError(
-            f"No DeepMedChem credential is configured for profile {profile!r}. "
-            f"Run `dmc login --profile {profile}` or set DEEPMEDCHEM_API_KEY.",
+            "This operation requires an API key. Guest access supports catalog, "
+            "unfiltered single-database similarity search and sampling. "
+            "Run `dmc login` or set DEEPMEDCHEM_API_KEY, then create a new client "
+            "without guest=True.",
             code="missing_api_key",
         )
-    return value
+
+
+def _should_retry(response: httpx.Response) -> bool:
+    if response.status_code not in {429, 503, 504}:
+        return False
+    # An exhausted hourly/daily guest budget cannot recover during our short retries.
+    if response.status_code == 429:
+        try:
+            error = response.json().get("error", {})
+            if isinstance(error, dict) and error.get("code") == "guest_limit":
+                return False
+        except (ValueError, AttributeError):
+            pass
+    return True
 
 
 def _raise_api_error(response: httpx.Response) -> None:
@@ -284,11 +315,18 @@ class _SyncRuns:
 
 
 class Client:
+    """Synchronous API client. With no key, use the server's limited guest tier.
+
+    Set ``guest=True`` to skip saved/environment credentials. Account-only operations
+    require a configured key. ``is_guest`` reports the resolved authentication mode.
+    """
+
     def __init__(
         self,
         api_key: str | None = None,
         *,
         api_url: str | None = None,
+        guest: bool = False,
         profile: str | None = None,
         timeout: float = 45.0,
         transport=None,
@@ -306,12 +344,15 @@ class Client:
         selected_profile = resolve_profile(profile, config)
         selected = config.profile(selected_profile)
         configured_url = api_url or selected.api_url or DEFAULT_API_URL
-        token = _credentials(api_key, credential_provider, profile=selected_profile)
+        token = _credentials(
+            api_key, credential_provider, profile=selected_profile, guest=guest
+        )
+        self.is_guest = token is None
         client_version = application_version or __version__
         self._client = httpx.Client(
             base_url=configured_url.rstrip("/"),
             headers={
-                "x-api-key": token,
+                **({"x-api-key": token} if token is not None else {}),
                 "x-dmc-client": application,
                 "x-dmc-client-version": client_version,
                 "x-dmc-sdk-version": __version__,
@@ -346,11 +387,12 @@ class Client:
     ) -> tuple[Any, httpx.Response]:
         """Send one request with retries; return the decoded JSON and the final response."""
 
+        _check_guest_access(self.is_guest, method, path)
         for attempt in range(self._max_retries + 1):
             response = None
             try:
                 response = self._client.request(method, path, **kwargs)
-                if response.status_code in {429, 503, 504} and attempt < self._max_retries:
+                if _should_retry(response) and attempt < self._max_retries:
                     time.sleep(_retry_delay(response, attempt, self._retry_backoff))
                     continue
                 if response.is_error:
@@ -800,11 +842,14 @@ class _AsyncRuns:
 
 
 class AsyncClient:
+    """Async counterpart of :class:`Client`, including automatic/explicit guest access."""
+
     def __init__(
         self,
         api_key: str | None = None,
         *,
         api_url: str | None = None,
+        guest: bool = False,
         profile: str | None = None,
         timeout: float = 45.0,
         transport=None,
@@ -822,12 +867,15 @@ class AsyncClient:
         selected_profile = resolve_profile(profile, config)
         selected = config.profile(selected_profile)
         configured_url = api_url or selected.api_url or DEFAULT_API_URL
-        token = _credentials(api_key, credential_provider, profile=selected_profile)
+        token = _credentials(
+            api_key, credential_provider, profile=selected_profile, guest=guest
+        )
+        self.is_guest = token is None
         client_version = application_version or __version__
         self._client = httpx.AsyncClient(
             base_url=configured_url.rstrip("/"),
             headers={
-                "x-api-key": token,
+                **({"x-api-key": token} if token is not None else {}),
                 "x-dmc-client": application,
                 "x-dmc-client-version": client_version,
                 "x-dmc-sdk-version": __version__,
@@ -861,11 +909,12 @@ class AsyncClient:
     ) -> tuple[Any, httpx.Response]:
         """Send one request with retries; return the decoded JSON and the final response."""
 
+        _check_guest_access(self.is_guest, method, path)
         for attempt in range(self._max_retries + 1):
             response = None
             try:
                 response = await self._client.request(method, path, **kwargs)
-                if response.status_code in {429, 503, 504} and attempt < self._max_retries:
+                if _should_retry(response) and attempt < self._max_retries:
                     await asyncio.sleep(_retry_delay(response, attempt, self._retry_backoff))
                     continue
                 if response.is_error:

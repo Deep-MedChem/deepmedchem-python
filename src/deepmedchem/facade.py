@@ -11,6 +11,7 @@ from .models import SampleResult, SearchResult, SelectionResult, SubstructureRes
 
 def _client_options(
     *,
+    guest: bool,
     api_key: str | None,
     api_url: str | None,
     profile: str | None,
@@ -19,6 +20,7 @@ def _client_options(
     transport: Any,
 ) -> dict[str, Any]:
     return {
+        "guest": guest,
         "api_key": api_key,
         "api_url": api_url,
         "profile": profile,
@@ -45,6 +47,7 @@ def search(
     scope: str = "orderable",
     databases: list[str] | None = None,
     timeout_seconds: int = 30,
+    guest: bool = False,
     api_key: str | None = None,
     api_url: str | None = None,
     profile: str | None = None,
@@ -61,6 +64,7 @@ def search(
 
     with Client(
         **_client_options(
+            guest=guest,
             api_key=api_key,
             api_url=api_url,
             profile=profile,
@@ -99,6 +103,7 @@ def substructure(
     availability: str | None = None,
     scope: str = "orderable",
     databases: list[str] | None = None,
+    guest: bool = False,
     api_key: str | None = None,
     api_url: str | None = None,
     profile: str | None = None,
@@ -110,6 +115,7 @@ def substructure(
 
     with Client(
         **_client_options(
+            guest=guest,
             api_key=api_key,
             api_url=api_url,
             profile=profile,
@@ -141,6 +147,7 @@ def sample(
     where=None,
     max_price: float | None = None,
     keep_unpriced: bool = False,
+    guest: bool = False,
     api_key: str | None = None,
     api_url: str | None = None,
     profile: str | None = None,
@@ -152,6 +159,7 @@ def sample(
 
     with Client(
         **_client_options(
+            guest=guest,
             api_key=api_key,
             api_url=api_url,
             profile=profile,
@@ -174,6 +182,7 @@ def sample(
 
 def catalog(
     *,
+    guest: bool = False,
     api_key: str | None = None,
     api_url: str | None = None,
     profile: str | None = None,
@@ -185,6 +194,7 @@ def catalog(
 
     with Client(
         **_client_options(
+            guest=guest,
             api_key=api_key,
             api_url=api_url,
             profile=profile,
@@ -198,6 +208,7 @@ def catalog(
 
 def usage(
     *,
+    guest: bool = False,
     api_key: str | None = None,
     api_url: str | None = None,
     profile: str | None = None,
@@ -209,6 +220,7 @@ def usage(
 
     with Client(
         **_client_options(
+            guest=guest,
             api_key=api_key,
             api_url=api_url,
             profile=profile,

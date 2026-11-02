@@ -102,6 +102,7 @@ class SearchResult(APIModel, Sequence[str]):
 
     results: list[dict[str, Any]] = Field(default_factory=list)
     warnings: tuple[WarningMessage, ...] = ()
+    mode: str | None = None
     request_id: str | None = None
     database_id: str | None = None
     database_release: str | None = None

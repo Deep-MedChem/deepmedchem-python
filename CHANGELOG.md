@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Allow guest catalog, unfiltered similarity search and sampling when no credentials are
+  configured; add explicit `guest=True` to sync/async clients and convenience functions,
+  and `--guest` to CLI operations. Account-only operations fail locally without a key.
+- Expose response `mode`, preserve guest warnings and budget/login details, and avoid
+  retrying exhausted guest budgets or downgrading invalid credentials to guest access.
+  Guest availability and limits remain controlled by the selected API deployment.
+
 - Accept `(lower, upper)` objective scales and validate duplicate objective sources, external-only
   objective lists, and service collection caps locally. Exclusions require positive match counts
   and disallow upper count bounds so extra matches cannot bypass an exclusion.

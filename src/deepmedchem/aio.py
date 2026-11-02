@@ -38,5 +38,7 @@ async def usage(**kwargs) -> Usage:
 
 
 def _connection_options(kwargs: dict[str, Any]) -> dict[str, Any]:
-    names = {"api_key", "api_url", "profile", "credential_provider", "timeout", "transport"}
+    names = {
+        "guest", "api_key", "api_url", "profile", "credential_provider", "timeout", "transport"
+    }
     return {name: kwargs.pop(name) for name in tuple(kwargs) if name in names}
