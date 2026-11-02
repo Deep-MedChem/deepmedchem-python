@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .chemistry import Constraint, PropertyRange, _constraints_to_wire, _validate_constraint_limits
 from .databases import resolve_database
+from .query_schema import combine_queries
 
 
 class PredictedPropertyRankQuantileAcquisition(BaseModel):
@@ -19,9 +20,7 @@ class PredictedPropertyRankQuantileAcquisition(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["predicted_property_rank_quantile"] = (
-        "predicted_property_rank_quantile"
-    )
+    type: Literal["predicted_property_rank_quantile"] = "predicted_property_rank_quantile"
     endpoint_id: str = Field(min_length=1, max_length=256)
     direction: Literal["minimize", "maximize"]
     keep_fraction: float = Field(gt=0, le=1)
@@ -367,13 +366,22 @@ class Selection:
                 ("predicted_properties", "predicted_property", "pinned_assembled_product_teacher"),
             ):
                 for condition in added.get(key, []):
-                    target.setdefault(key, []).append({
-                        "type": kind, "required_fidelity": fidelity, "missing": "reject",
-                        **condition,
-                    })
+                    target.setdefault(key, []).append(
+                        {
+                            "type": kind,
+                            "required_fidelity": fidelity,
+                            "missing": "reject",
+                            **condition,
+                        }
+                    )
             if "structures" in added:
                 structures = self._structures(payload)
                 for group, conditions in added["structures"].items():
+                    if group == "query":
+                        structures["query"] = combine_queries(
+                            structures.get("query"), conditions
+                        ).model_dump(mode="json", exclude_none=True)
+                        continue
                     if group == "any":
                         if structures["any"]["conditions"]:
                             raise ValueError("a selection has one require-any group")
@@ -383,10 +391,15 @@ class Selection:
                         structures["any"]["conditions"] if group == "any" else structures[group]
                     )
                     for condition in conditions:
-                        destination.append({
-                            "type": "structure", "relation": "contains", "count": {"min": 1},
-                            "id": self._structure_id(structures, group), **condition,
-                        })
+                        destination.append(
+                            {
+                                "type": "structure",
+                                "relation": "contains",
+                                "count": {"min": 1},
+                                "id": self._structure_id(structures, group),
+                                **condition,
+                            }
+                        )
             _validate_constraint_limits(target)
 
         return self._changed(update)
@@ -414,8 +427,10 @@ class Selection:
                 raise ValueError("pass either a PropertyRange or property_id with an operator")
             condition = property_id._to_wire()
             return self.where(
-                condition["property_id"], units=condition["units"],
-                fidelity=fidelity, missing=missing,
+                condition["property_id"],
+                units=condition["units"],
+                fidelity=fidelity,
+                missing=missing,
                 **{condition["operator"]: condition["value"]},
             )
         if not isinstance(property_id, PropertyCondition) and not operator_value:
@@ -524,9 +539,7 @@ class Selection:
     def max_per_scaffold(self, value: int) -> Selection:
         if value < 1:
             raise ValueError("max_per_scaffold must be positive")
-        return self._changed(
-            lambda payload: payload["portfolio"].update(max_per_scaffold=value)
-        )
+        return self._changed(lambda payload: payload["portfolio"].update(max_per_scaffold=value))
 
     def include(self, *values: str) -> Selection:
         def update(payload):
@@ -559,9 +572,7 @@ class RunModel(BaseModel):
     def validate_kind(self):
         if self.kind == "selection" and self.selection is None:
             raise ValueError("selection run requires selection")
-        if self.kind == "selection_batch" and (
-            self.selection_template is None or not self.items
-        ):
+        if self.kind == "selection_batch" and (self.selection_template is None or not self.items):
             raise ValueError("selection_batch requires a template and items")
         ids = [item.get("id") for item in self.items]
         if len(ids) != len(set(ids)):

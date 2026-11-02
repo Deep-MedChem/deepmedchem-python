@@ -428,6 +428,7 @@ class Filters:
     exclude: tuple[Pattern | RequireStructure, ...] = ()
     max_price: float | None = None
     keep_unpriced: bool = False
+    structure_query: object = None
 
     @property
     def _resolved(self) -> tuple[Subset, ...]:
@@ -443,6 +444,7 @@ class Filters:
         exclude=None,
         max_price=None,
         keep_unpriced=False,
+        structure_query=None,
     ) -> Filters:
         names = _names(subset)
         return cls(
@@ -452,16 +454,24 @@ class Filters:
             exclude=_patterns(exclude, exclude=True),
             max_price=_price(max_price, keep_unpriced),
             keep_unpriced=bool(keep_unpriced),
+            structure_query=structure_query,
         )
 
     def __bool__(self) -> bool:
         return bool(
-            self.subsets or self.where or self.require or self.exclude or self.max_price is not None
+            self.structure_query is not None
+            or self.subsets
+            or self.where
+            or self.require
+            or self.exclude
+            or self.max_price is not None
         )
 
     @property
     def structural(self) -> bool:
-        return bool(self.require or self.exclude) or any(s.structural for s in self._resolved)
+        return bool(self.structure_query is not None or self.require or self.exclude) or any(
+            s.structural for s in self._resolved
+        )
 
     def validate(self) -> None:
         from .chemistry import RequireStructure
@@ -482,6 +492,10 @@ class Filters:
 
         from .chemistry import RequireStructure
 
+        if self.structure_query is not None:
+            from .query_schema import as_structure_query
+
+            selection = selection.constrain(as_structure_query(self.structure_query))
         for subset in self._resolved:
             selection = selection.subset(subset.name)
         for condition in self.where:
@@ -558,11 +572,13 @@ def search_filters(
     exclude=None,
     max_price=None,
     keep_unpriced=False,
+    structure_query=None,
 ) -> tuple[str, Filters]:
     """Resolve ``DATABASE:SUBSET`` and keyword filters into a database and filters."""
 
     database, named = split_database(database)
     filters = Filters.build(
+        structure_query=structure_query,
         subset=merge_subsets(named, subset),
         where=where,
         require=require,

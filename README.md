@@ -929,3 +929,77 @@ In local real-Navigator benchmarks (two small amide spaces, three seeds, 24
 evaluations), adaptive allocation raised mean top-five QED from 0.816 to 0.875
 and tied equal allocation on a target-molecular-weight objective. These are
 small-space checks, not evidence of docking or trillion-scale performance.
+
+## Reusable chemical queries
+
+The same immutable query works in substructure search, filtered similarity, selections,
+and optimization. The SDK validates the document without requiring RDKit; the service
+checks chemistry and database capabilities before executing it.
+
+```python
+import deepmedchem as dmc
+
+query = dmc.StructureQuery(
+    expression=dmc.AllOf(conditions=(
+        dmc.Contains(pattern_id="alpha-amino-acid/v1"),
+        dmc.AnyOf(conditions=(dmc.Contains(smarts="c1ccccc1"), dmc.Contains(smarts="C1CCCCC1"))),
+        dmc.Not(condition=dmc.Contains(smarts="[N+](=O)[O-]")),
+    )),
+)
+
+hits = dmc.substructure(query, database="enamine")
+neighbours = dmc.search("NCC(=O)O", database="enamine", structure_query=query)
+result = dmc.optimize(
+    database="enamine", name="amino-acid-qed", budget=500, batch_size=50,
+    constraints=[query, dmc.PropertyRange("MolWt", max=400)],
+    objectives=[dmc.Maximize("rdkit.qed", scale=(0, 1))],
+)
+```
+
+`Selection.constrain(query)` and both `Client` and `AsyncClient` accept these objects.
+`client.validate_query(query)` checks chemistry without running a search. Automatic
+routing (`database="auto"`) retains the complete query and excludes incompatible sources.
+
+Mapped atoms make attachment positions explicit:
+
+```python
+linker = dmc.Linker(
+    scaffold="[N:1].[O:2]", start=1, end=2,
+    min_length=2, max_length=4, atom_smarts="[#6]", bond_types=("single",),
+)
+r_groups = dmc.RGroups(
+    scaffold="[c:1]1cc[c:2]cc1",
+    groups=(dmc.RGroup(site=1, label="R1"), dmc.RGroup(site=2, label="R1")),
+)
+```
+
+Linker lengths count internal atoms; `length_unit="bonds"` counts bonds instead.
+`path="any"` accepts any allowed path; `path="shortest"` requires the molecular
+shortest-path length. `allow_ring_atoms=False` excludes ring atoms from the interior.
+R groups are pendant substituents rooted at the first atom of their `smarts` pattern.
+`allow_hydrogen=True` permits H at that position. Equal labels require identical whole
+rooted substituents. `exact=True` prohibits additional substituents elsewhere on the
+scaffold; bridging groups use `Linker`. `MatchRelation` expresses disjoint, overlapping,
+directly connected or shared mapped-site matches. Independent conditions may overlap.
+
+Stereo is honored by default. Use `StructureQuery(..., stereo="ignore")` explicitly
+for relaxed matching. Queries do not change product charge, tautomer or protection state.
+Exact hit validity does not imply exhaustive search: inspect completeness and timeout
+metadata. Complexity limits fail explicitly, including inside exclusions.
+
+Save and reuse the document with the CLI:
+
+```python
+from pathlib import Path
+Path("query.json").write_text(query.model_dump_json(indent=2))
+```
+
+```sh
+dmc substructure -d enamine --query-file query.json
+dmc search 'NCC(=O)O' -d enamine --query-file query.json
+dmc optimize run amino-acid-qed -d enamine --query-file query.json --objectives objectives.json
+```
+
+The query format is `structure-query/1`. Synthon sampling does not support structural
+constraints; catalogue sampling can use them through a selection. These features require
+a compatible server and remain subject to the account/guest capabilities it advertises.

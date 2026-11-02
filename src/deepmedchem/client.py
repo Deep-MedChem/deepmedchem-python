@@ -344,9 +344,7 @@ class Client:
         selected_profile = resolve_profile(profile, config)
         selected = config.profile(selected_profile)
         configured_url = api_url or selected.api_url or DEFAULT_API_URL
-        token = _credentials(
-            api_key, credential_provider, profile=selected_profile, guest=guest
-        )
+        token = _credentials(api_key, credential_provider, profile=selected_profile, guest=guest)
         self.is_guest = token is None
         client_version = application_version or __version__
         self._client = httpx.Client(
@@ -445,6 +443,7 @@ class Client:
         keep_unpriced: bool = False,
         synthesis: str | int | None = None,
         include_catalogues: bool = False,
+        structure_query=None,
         availability: str | None = None,
         scope: str = "orderable",
         databases: list[str] | None = None,
@@ -471,25 +470,41 @@ class Client:
             exclude=exclude,
             max_price=max_price,
             keep_unpriced=keep_unpriced,
+            structure_query=structure_query,
         )
         database, databases, include_catalogues = routing_database(
-            database, synthesis=synthesis, include_catalogues=include_catalogues,
+            database,
+            synthesis=synthesis,
+            include_catalogues=include_catalogues,
             databases=databases,
         )
         require_auto(database, availability=availability, scope=scope, databases=databases)
         if database == "auto":
             selection = similarity_selection(
-                smiles, database=database, filters=filters, method=method, limit=limit,
+                smiles,
+                database=database,
+                filters=filters,
+                method=method,
+                limit=limit,
                 include_synthons=include_synthons,
             )
-            return SearchResult.model_validate(self._request(
-                "POST", "/api/v2/search_auto", json={
-                    "selection": selection.to_dict(),
-                    **auto_options(synthesis=synthesis, include_catalogues=include_catalogues,
-                                   availability=availability, scope=scope, databases=databases,
-                                   timeout_seconds=timeout_seconds),
-                },
-            ))
+            return SearchResult.model_validate(
+                self._request(
+                    "POST",
+                    "/api/v2/search_auto",
+                    json={
+                        "selection": selection.to_dict(),
+                        **auto_options(
+                            synthesis=synthesis,
+                            include_catalogues=include_catalogues,
+                            availability=availability,
+                            scope=scope,
+                            databases=databases,
+                            timeout_seconds=timeout_seconds,
+                        ),
+                    },
+                )
+            )
         if timeout_seconds != 30:
             raise ValueError("search timeout_seconds requires database='auto'")
         if filters:
@@ -525,10 +540,21 @@ class Client:
             )
         )
 
+    def validate_query(self, query) -> dict[str, Any]:
+        """Compile a native query on the service without searching or charging credits."""
+        from .query_schema import as_structure_query
+
+        return self._request(
+            "POST",
+            "/api/v2/structure_queries:validate",
+            json=as_structure_query(query).model_dump(mode="json"),
+        )
+
     def plan_search(self, smiles: str, **kwargs) -> dict[str, Any]:
         """Preview automatic source selection and credit cost without searching."""
-        return self._request("POST", "/api/v2/search_auto:plan",
-                             json=similarity_plan(smiles, **kwargs))
+        return self._request(
+            "POST", "/api/v2/search_auto:plan", json=similarity_plan(smiles, **kwargs)
+        )
 
     def search_many(
         self,
@@ -619,8 +645,13 @@ class Client:
         include_synthons: bool = False,
     ) -> SearchResult:
         if database == "auto":
-            return self.search(smiles, database=database, method=scorer, limit=limit,
-                               include_synthons=include_synthons)
+            return self.search(
+                smiles,
+                database=database,
+                method=scorer,
+                limit=limit,
+                include_synthons=include_synthons,
+            )
         database_id = resolve_database(database)
         return SearchResult.model_validate(
             self._request(
@@ -641,6 +672,11 @@ class Client:
         query: str,
         *,
         query_format: str = "smarts",
+        where=None,
+        require=None,
+        exclude=None,
+        max_price=None,
+        keep_unpriced=False,
         database: str,
         limit: int = 100,
         timeout_seconds: int = 30,
@@ -651,32 +687,53 @@ class Client:
         scope: str = "orderable",
         databases: list[str] | None = None,
     ) -> SubstructureResult:
+        query_payload = _substructure_query(
+            query,
+            query_format,
+            where=where,
+            require=require,
+            exclude=exclude,
+            max_price=max_price,
+            keep_unpriced=keep_unpriced,
+        )
         database_id = resolve_database(database)
         database_id, databases, include_catalogues = routing_database(
-            database_id, synthesis=synthesis, include_catalogues=include_catalogues,
+            database_id,
+            synthesis=synthesis,
+            include_catalogues=include_catalogues,
             databases=databases,
         )
         require_auto(database_id, availability=availability, scope=scope, databases=databases)
         if database_id == "auto":
-            return SubstructureResult.model_validate(self._request(
-                "POST", "/api/v2/search_auto", json={
-                    "substructure": {
-                        "query": {"format": query_format, "value": query},
-                        "database_id": "auto", "limit": limit,
-                        "timeout_seconds": timeout_seconds,
-                        "include_synthons": include_synthons,
+            return SubstructureResult.model_validate(
+                self._request(
+                    "POST",
+                    "/api/v2/search_auto",
+                    json={
+                        "substructure": {
+                            **query_payload,
+                            "database_id": "auto",
+                            "limit": limit,
+                            "timeout_seconds": timeout_seconds,
+                            "include_synthons": include_synthons,
+                        },
+                        **auto_options(
+                            synthesis=synthesis,
+                            include_catalogues=include_catalogues,
+                            availability=availability,
+                            scope=scope,
+                            databases=databases,
+                            timeout_seconds=timeout_seconds,
+                        ),
                     },
-                    **auto_options(synthesis=synthesis, include_catalogues=include_catalogues,
-                                   availability=availability, scope=scope, databases=databases,
-                                   timeout_seconds=timeout_seconds),
-                },
-            ))
+                )
+            )
         return SubstructureResult.model_validate(
             self._request(
                 "POST",
                 "/api/v2/search_substructure",
                 json={
-                    "query": {"format": query_format, "value": query},
+                    **query_payload,
                     "database_id": database_id,
                     "limit": limit,
                     "timeout_seconds": timeout_seconds,
@@ -696,6 +753,7 @@ class Client:
         where=None,
         max_price: float | None = None,
         keep_unpriced: bool = False,
+        structure_query=None,
     ) -> SampleResult | SelectionResult:
         """Draw random molecules, optionally restricted to a property subset or price."""
 
@@ -705,6 +763,7 @@ class Client:
             where=where,
             max_price=max_price,
             keep_unpriced=keep_unpriced,
+            structure_query=structure_query,
         )
         if filters:
             return self.selections.create(
@@ -882,9 +941,7 @@ class AsyncClient:
         selected_profile = resolve_profile(profile, config)
         selected = config.profile(selected_profile)
         configured_url = api_url or selected.api_url or DEFAULT_API_URL
-        token = _credentials(
-            api_key, credential_provider, profile=selected_profile, guest=guest
-        )
+        token = _credentials(api_key, credential_provider, profile=selected_profile, guest=guest)
         self.is_guest = token is None
         client_version = application_version or __version__
         self._client = httpx.AsyncClient(
@@ -978,6 +1035,7 @@ class AsyncClient:
             exclude=kwargs.pop("exclude", None),
             max_price=kwargs.pop("max_price", None),
             keep_unpriced=kwargs.pop("keep_unpriced", False),
+            structure_query=kwargs.pop("structure_query", None),
         )
         synthesis = kwargs.pop("synthesis", None)
         include_catalogues = kwargs.pop("include_catalogues", False)
@@ -986,26 +1044,40 @@ class AsyncClient:
         databases = kwargs.pop("databases", None)
         timeout_seconds = kwargs.pop("timeout_seconds", 30)
         database, databases, include_catalogues = routing_database(
-            database, synthesis=synthesis, include_catalogues=include_catalogues,
+            database,
+            synthesis=synthesis,
+            include_catalogues=include_catalogues,
             databases=databases,
         )
         require_auto(database, availability=availability, scope=scope, databases=databases)
         if database == "auto":
             selection = similarity_selection(
-                smiles, database=database, filters=filters, method=method,
+                smiles,
+                database=database,
+                filters=filters,
+                method=method,
                 limit=kwargs.pop("limit", 20),
                 include_synthons=kwargs.pop("include_synthons", False),
             )
             if kwargs:
                 raise TypeError(f"unexpected search arguments: {sorted(kwargs)}")
-            return SearchResult.model_validate(await self._request(
-                "POST", "/api/v2/search_auto", json={
-                    "selection": selection.to_dict(),
-                    **auto_options(synthesis=synthesis, include_catalogues=include_catalogues,
-                                   availability=availability, scope=scope, databases=databases,
-                                   timeout_seconds=timeout_seconds),
-                },
-            ))
+            return SearchResult.model_validate(
+                await self._request(
+                    "POST",
+                    "/api/v2/search_auto",
+                    json={
+                        "selection": selection.to_dict(),
+                        **auto_options(
+                            synthesis=synthesis,
+                            include_catalogues=include_catalogues,
+                            availability=availability,
+                            scope=scope,
+                            databases=databases,
+                            timeout_seconds=timeout_seconds,
+                        ),
+                    },
+                )
+            )
         if timeout_seconds != 30:
             raise ValueError("search timeout_seconds requires database='auto'")
         if filters:
@@ -1035,10 +1107,21 @@ class AsyncClient:
             await self._request("POST", "/api/v2/search", json=payload)
         )
 
+    async def validate_query(self, query) -> dict[str, Any]:
+        """Compile a native query on the service without searching or charging credits."""
+        from .query_schema import as_structure_query
+
+        return await self._request(
+            "POST",
+            "/api/v2/structure_queries:validate",
+            json=as_structure_query(query).model_dump(mode="json"),
+        )
+
     async def plan_search(self, smiles: str, **kwargs) -> dict[str, Any]:
         """Preview automatic source selection and credit cost without searching."""
-        return await self._request("POST", "/api/v2/search_auto:plan",
-                                   json=similarity_plan(smiles, **kwargs))
+        return await self._request(
+            "POST", "/api/v2/search_auto:plan", json=similarity_plan(smiles, **kwargs)
+        )
 
     async def search_cheese(self, smiles: str, **kwargs) -> SearchResult:
         if kwargs.get("database") == "auto":
@@ -1066,12 +1149,21 @@ class AsyncClient:
         scope = kwargs.pop("scope", "orderable")
         databases = kwargs.pop("databases", None)
         database_id, databases, include_catalogues = routing_database(
-            database_id, synthesis=synthesis, include_catalogues=include_catalogues,
+            database_id,
+            synthesis=synthesis,
+            include_catalogues=include_catalogues,
             databases=databases,
         )
         require_auto(database_id, availability=availability, scope=scope, databases=databases)
         payload = {
-            "query": {"format": kwargs.pop("query_format", "smarts"), "value": query},
+            **_substructure_query(
+                query,
+                kwargs.pop("query_format", "smarts"),
+                **{
+                    key: kwargs.pop(key, None)
+                    for key in ("where", "require", "exclude", "max_price", "keep_unpriced")
+                },
+            ),
             "database_id": database_id,
             "limit": kwargs.pop("limit", 100),
             "timeout_seconds": kwargs.pop("timeout_seconds", 30),
@@ -1080,14 +1172,23 @@ class AsyncClient:
         if kwargs:
             raise TypeError(f"unexpected substructure arguments: {sorted(kwargs)}")
         if database_id == "auto":
-            return SubstructureResult.model_validate(await self._request(
-                "POST", "/api/v2/search_auto", json={
-                    "substructure": payload,
-                    **auto_options(synthesis=synthesis, include_catalogues=include_catalogues,
-                                   availability=availability, scope=scope, databases=databases,
-                                   timeout_seconds=payload["timeout_seconds"]),
-                },
-            ))
+            return SubstructureResult.model_validate(
+                await self._request(
+                    "POST",
+                    "/api/v2/search_auto",
+                    json={
+                        "substructure": payload,
+                        **auto_options(
+                            synthesis=synthesis,
+                            include_catalogues=include_catalogues,
+                            availability=availability,
+                            scope=scope,
+                            databases=databases,
+                            timeout_seconds=payload["timeout_seconds"],
+                        ),
+                    },
+                )
+            )
         return SubstructureResult.model_validate(
             await self._request("POST", "/api/v2/search_substructure", json=payload)
         )
@@ -1099,6 +1200,7 @@ class AsyncClient:
             where=kwargs.pop("where", None),
             max_price=kwargs.pop("max_price", None),
             keep_unpriced=kwargs.pop("keep_unpriced", False),
+            structure_query=kwargs.pop("structure_query", None),
         )
         if filters:
             selection = sample_selection(
@@ -1131,3 +1233,101 @@ class AsyncClient:
 DMCClient = Client
 AsyncDMCClient = AsyncClient
 DMCError = DeepMedChemError
+
+
+def _substructure_query(
+    query,
+    query_format,
+    *,
+    where=None,
+    require=None,
+    exclude=None,
+    max_price=None,
+    keep_unpriced=False,
+):
+    from .chemistry import RequireStructure
+    from .query_schema import Contains, Not, as_structure_query, combine_queries
+    from .subsets import Filters, Pattern
+
+    filters = Filters.build(
+        where=where,
+        require=require,
+        exclude=exclude,
+        max_price=max_price,
+        keep_unpriced=keep_unpriced,
+    )
+    if isinstance(query, str):
+        payload = {"query": {"format": query_format, "value": query}}
+        native = None
+    else:
+        native = as_structure_query(query)
+        payload = {}
+    for excluded, patterns in ((False, filters.require), (True, filters.exclude)):
+        for pattern in patterns:
+            if isinstance(pattern, Pattern):
+                node = Contains(
+                    **{pattern.format: pattern.smarts},
+                    min_count=pattern.min_count,
+                    max_count=pattern.max_count,
+                )
+            elif isinstance(pattern, RequireStructure):
+                node = Contains(**pattern.model_dump(exclude_none=True))
+            else:
+                raise TypeError("unsupported substructure condition")
+            native = combine_queries(native, Not(condition=node) if excluded else node)
+    if native is not None:
+        payload["structure_query"] = native.model_dump(mode="json", exclude_none=True)
+    names = {
+        "rdkit.mol_wt": "MolWt",
+        "rdkit.crippen_logp": "MolLogP",
+        "rdkit.hbd": "HBD",
+        "rdkit.hba": "HBA",
+        "rdkit.rotatable_bonds": "RotB",
+        "rdkit.tpsa": "TPSA",
+        "rdkit.fraction_csp3": "FractionCSP3",
+        "rdkit.aromatic_rings": "AromaticRings",
+    }
+    bounds = {}
+    for condition in filters.where:
+        name = names.get(condition.property_id)
+        if name is None:
+            raise ValueError("substructure property filters require a built-in RDKit descriptor")
+        entry = bounds.setdefault(name, {})
+        op, value = condition.operator, condition.value
+        updates = (
+            {"min": (value[0], True), "max": (value[1], True)}
+            if op == "range"
+            else {"min": (value, True), "max": (value, True)}
+            if op == "eq"
+            else {"min" if op in {"gt", "gte"} else "max": (value, op in {"gte", "lte"})}
+        )
+        for side, (number, inclusive) in updates.items():
+            previous = entry.get(side)
+            tighter = previous is None or (
+                number > previous if side == "min" else number < previous
+            )
+            if tighter:
+                entry[side], entry[side + "_inclusive"] = number, inclusive
+            elif number == previous:
+                entry[side + "_inclusive"] = entry[side + "_inclusive"] and inclusive
+        low, high = entry.get("min"), entry.get("max")
+        if (
+            low is not None
+            and high is not None
+            and (
+                low > high
+                or (
+                    low == high
+                    and not (entry.get("min_inclusive", True) and entry.get("max_inclusive", True))
+                )
+            )
+        ):
+            raise ValueError("contradictory substructure property bounds")
+    if bounds:
+        payload["property_constraints"] = bounds
+    if filters.max_price is not None:
+        payload["price"] = {
+            "max": filters.max_price,
+            "missing": "keep" if filters.keep_unpriced else "reject",
+        }
+    return payload
