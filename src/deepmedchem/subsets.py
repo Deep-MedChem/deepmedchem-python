@@ -636,16 +636,12 @@ def sample_selection(
     seed: int | None = None,
     include_synthons: bool = False,
 ):
-    """A random sample restricted by property and price filters."""
+    """A random sample restricted by filters supported by the selected release."""
 
     from .selection import Selection
 
-    if filters.structural:
-        raise ValueError(
-            "sampling with structure filters is not available: the API applies structure "
-            "constraints only to similarity searches. Use property subsets (ro5, druglike, "
-            "beyond-ro5, ro3) or property filters when sampling."
-        )
+    # Catalogue workers support exact structural sampling. Let the service check
+    # the selected release's capabilities; synthon workers reject it explicitly.
     filters.validate()
     selection = filters.apply(Selection.from_database(database).sample(seed=seed).limit(count))
     include = _include(filters, include_synthons)

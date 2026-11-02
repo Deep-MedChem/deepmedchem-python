@@ -98,3 +98,31 @@ def test_substructure_filters_keep_strict_bounds_and_compose():
     assert payload["structure_query"]["expression"]["type"] == "all"
     with pytest.raises(ValueError, match="contradictory"):
         _substructure_query("C", "smarts", where=["mw<100", "mw>=100"])
+
+
+def test_sync_async_native_catalogue_sampling_wire():
+    captured = []
+
+    def handler(request):
+        captured.append((request.url.path, json.loads(request.content)))
+        return httpx.Response(200, json={
+            "id": "selection-test", "object": "selection", "status": "completed",
+            "selection_hash": "test", "normalized_selection": json.loads(request.content),
+            "results": [],
+        })
+
+    options = dict(api_key="test", transport=httpx.MockTransport(handler))
+    with dmc.Client(**options) as client:
+        client.sample(database="mcule-aa", count=3, structure_query=native_query())
+
+    async def run():
+        async with dmc.AsyncClient(**options) as client:
+            await client.sample(database="mcule-aa", count=3, structure_query=native_query())
+
+    asyncio.run(run())
+    for path, payload in captured:
+        assert path == "/api/v2/selections"
+        assert payload["strategy"]["type"] == "sample"
+        assert payload["constraints"]["structures"]["query"] == native_query().model_dump(
+            mode="json", exclude_none=True
+        )

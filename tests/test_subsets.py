@@ -312,11 +312,10 @@ def test_sample_with_property_subset_sends_a_sample_selection(monkeypatch):
     }
 
 
-def test_sample_with_structure_subset_fails_before_any_request(monkeypatch, capsys):
+def test_catalogue_sample_with_structure_subset_reaches_capability_check(monkeypatch):
     seen = _install_client(monkeypatch)
-    assert cli.main(["sample", "-d", "synple:amino-acids"]) == 1
-    assert "sampling with structure filters is not available" in capsys.readouterr().err
-    assert seen == []
+    assert cli.main(["sample", "-d", "mcule-aa", "--subset", "amino-acids"]) == 0
+    assert _sent(seen)["constraints"]["structures"]["all"]
 
 
 def test_invalid_smarts_fails_before_any_request(monkeypatch, capsys):

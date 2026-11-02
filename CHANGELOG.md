@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Allow structural catalogue sampling through the sync/async sample helpers and CLI; the server checks each release's capabilities. Synthon sampling with structural constraints remains unsupported.
+
 - Keep search summaries to the searched population and similarity range. Automatic search
   sums catalogue populations of successfully searched releases, using compact K/M/B/T counts.
 - Default single-query similarity searches to automatic routing over orderable synthon
