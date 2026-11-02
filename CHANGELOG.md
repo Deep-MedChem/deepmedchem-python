@@ -12,6 +12,9 @@
 - Add the synthesis column (full unit words), per-hit database column in auto mode and
   typed `SynthesisEstimate` result metadata. Preserve full SMILES and same-source prices,
   timings and provenance in output and exports. Requires the matching backend release.
+- Reuse native chemical queries across search, substructure search, selections and optimization, including nested boolean/count filters, linker paths, R-group conditions and embedding relationships.
+- Add sync/async query validation and CLI `--query-file` support.
+
 
 - Allow guest catalog, unfiltered similarity search and sampling when no credentials are
   configured; add explicit `guest=True` to sync/async clients and convenience functions,

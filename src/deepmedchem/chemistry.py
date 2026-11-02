@@ -11,6 +11,7 @@ from typing import Any, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .query_schema import QueryValue, StructureQuery, combine_queries
 from .subsets import property_definition
 
 __all__ = [
@@ -198,12 +199,20 @@ class ExcludeStructure(RequireStructure):
     max_count: None = None
 
     def __init__(
-        self, pattern_id: str | None = None, *, smarts: str | None = None,
-        smiles: str | None = None, min_count: int = 1, max_count: None = None,
+        self,
+        pattern_id: str | None = None,
+        *,
+        smarts: str | None = None,
+        smiles: str | None = None,
+        min_count: int = 1,
+        max_count: None = None,
     ):
         super().__init__(
-            pattern_id, smarts=smarts, smiles=smiles,
-            min_count=min_count, max_count=max_count,
+            pattern_id,
+            smarts=smarts,
+            smiles=smiles,
+            min_count=min_count,
+            max_count=max_count,
         )
 
 
@@ -306,7 +315,9 @@ class Minimize(_Objective):
     """Prefer smaller values; the service reverses the normalized desirability."""
 
 
-Constraint = Union[PropertyRange, PredictedPropertyRange, RequireStructure, RequireAnyStructure]
+Constraint = Union[
+    PropertyRange, PredictedPropertyRange, RequireStructure, RequireAnyStructure, QueryValue
+]
 Constraints = Union[Mapping[str, Any], Sequence[Constraint]]
 Objective = Union[Maximize, Minimize]
 Objectives = Sequence[Union[Objective, Mapping[str, Any]]]
@@ -318,6 +329,11 @@ def _constraints_to_wire(constraints: Sequence[Constraint]) -> dict[str, Any]:
         if isinstance(constraint, (PropertyRange, PredictedPropertyRange)):
             key = "properties" if isinstance(constraint, PropertyRange) else "predicted_properties"
             data.setdefault(key, []).append(constraint._to_wire())
+        elif isinstance(constraint, QueryValue):
+            structures = data.setdefault("structures", {})
+            structures["query"] = combine_queries(structures.get("query"), constraint).model_dump(
+                mode="json", exclude_none=True
+            )
         elif isinstance(constraint, RequireStructure):
             key = "none" if isinstance(constraint, ExcludeStructure) else "all"
             data.setdefault("structures", {}).setdefault(key, []).append(constraint._to_wire())
@@ -341,6 +357,8 @@ def _validate_constraint_limits(data: Mapping[str, Any]) -> None:
         if len(data.get(key, [])) > 32:
             raise ValueError(f"constraints.{key} supports at most 32 conditions")
     structures = data.get("structures", {})
+    if "query" in structures:
+        StructureQuery.model_validate(structures["query"])
     for key in ("all", "none"):
         if key in structures:
             if not isinstance(structures[key], list):

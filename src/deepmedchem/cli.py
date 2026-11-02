@@ -350,6 +350,7 @@ def _count_range(text: str) -> tuple[int, int | None]:
 
 
 def _add_filter_options(parser: argparse.ArgumentParser, *, structures: bool = True) -> None:
+    parser.add_argument("--query-file", metavar="FILE.json", help="Reusable native structure query")
     group = parser.add_argument_group(
         "filters",
         "restrict results; every returned molecule satisfies all filters (see `dmc subsets`)",
@@ -464,15 +465,20 @@ def _parser() -> argparse.ArgumentParser:
         "-n", "--limit", type=int, default=20, help="Number of hits (per query with --input)"
     )
     search.add_argument(
-        "--synthesis", type=synthesis_days, metavar="DAYS",
+        "--synthesis",
+        type=synthesis_days,
+        metavar="DAYS",
         help="Maximum vendor-declared synthesis time in business days, e.g. 7d",
     )
     search.add_argument(
-        "--all", dest="include_catalogues", action="store_true",
+        "--all",
+        dest="include_catalogues",
+        action="store_true",
         help="Also search orderable in-stock and enumerated catalogues",
     )
     search.add_argument(
-        "--availability", choices=("in_stock", "make_on_demand"),
+        "--availability",
+        choices=("in_stock", "make_on_demand"),
         help="Restrict vendor availability (use --all for in-stock catalogues)",
     )
     search.add_argument("--timeout-seconds", type=int, default=30, help="Auto search time budget")
@@ -501,7 +507,10 @@ def _parser() -> argparse.ArgumentParser:
     _add_connection_options(search)
 
     substructure = commands.add_parser("substructure", help="Exact SMILES/SMARTS substructure")
-    substructure.add_argument("query", help="Substructure query")
+    substructure.add_argument("query", nargs="?", help="Substructure query")
+    substructure.add_argument(
+        "--query-file", metavar="FILE.json", help="Reusable native structure query"
+    )
     substructure.add_argument(
         "-d", "--database", required=True, help="Database abbreviation or full ID"
     )
@@ -517,6 +526,11 @@ def _parser() -> argparse.ArgumentParser:
     substructure.add_argument(
         "--timeout-seconds", type=int, default=30, help="Server-side search budget"
     )
+    substructure.add_argument("--where", action="append", help="Descriptor bound, e.g. mw<=400")
+    substructure.add_argument("--require", action="append", help="Required SMARTS (repeatable)")
+    substructure.add_argument("--exclude", action="append", help="Excluded SMARTS (repeatable)")
+    substructure.add_argument("--max-price", type=float, help="Maximum USD price")
+    substructure.add_argument("--keep-unpriced", action="store_true")
     _add_output_options(substructure)
     _add_connection_options(substructure)
 
@@ -613,6 +627,7 @@ def _add_optimize_parser(commands) -> None:
         metavar="NAME=MIN:MAX",
         help="Descriptor range, e.g. MolWt=:500 or TPSA=20:140 (repeatable)",
     )
+    run.add_argument("--query-file", metavar="FILE.json", help="Reusable native structure query")
     run.add_argument(
         "--constraints",
         metavar="FILE.json",
@@ -624,8 +639,13 @@ def _add_optimize_parser(commands) -> None:
         ("--require-smarts", "SMARTS", "Require an inline SMARTS pattern"),
         ("--exclude-smarts", "SMARTS", "Exclude an inline SMARTS pattern"),
     ):
-        run.add_argument(flag, action="append", default=[], metavar=metavar,
-                         help=f"{help} (repeatable; combined with --constraints)")
+        run.add_argument(
+            flag,
+            action="append",
+            default=[],
+            metavar=metavar,
+            help=f"{help} (repeatable; combined with --constraints)",
+        )
     run.add_argument(
         "--objectives", metavar="FILE.json", help="Built-in or mixed normalized objective terms"
     )
@@ -724,7 +744,8 @@ def _open_client(args) -> Client:
     config = load_config()
     profile = _profile(args, config)
     return Client(
-        profile=profile, api_url=getattr(args, "api_url", None),
+        profile=profile,
+        api_url=getattr(args, "api_url", None),
         **({"guest": True} if getattr(args, "guest", False) else {}),
     )
 
@@ -918,8 +939,14 @@ def _search(args) -> int:
         )
     database, filters = _cli_filters(args) if args.database else (args.database, Filters())
     if args.resume or args.input:
-        if (filters or args.explain or args.synthesis is not None
-                or args.include_catalogues or args.availability or args.timeout_seconds != 30):
+        if (
+            filters
+            or args.explain
+            or args.synthesis is not None
+            or args.include_catalogues
+            or args.availability
+            or args.timeout_seconds != 30
+        ):
             raise ValueError(
                 "routing options, filters and --explain apply to one query; "
                 "batch search (--input) does not take them yet"
@@ -929,8 +956,12 @@ def _search(args) -> int:
         return _search_many(args)
     args.database = args.database or "auto"
     database, filters = _cli_filters(args)
-    if (database == "auto" or args.synthesis is not None
-            or args.include_catalogues or args.availability):
+    if (
+        database == "auto"
+        or args.synthesis is not None
+        or args.include_catalogues
+        or args.availability
+    ):
         return _auto_search(args, database, filters)
     if args.timeout_seconds != 30:
         raise ValueError("--timeout-seconds requires automatic database selection")
@@ -960,17 +991,28 @@ def _search(args) -> int:
 
 def _auto_search(args, database, filters) -> int:
     database, databases, include_catalogues = routing_database(
-        database, synthesis=args.synthesis, include_catalogues=args.include_catalogues,
+        database,
+        synthesis=args.synthesis,
+        include_catalogues=args.include_catalogues,
     )
     if database != "auto":
         raise ValueError("--availability requires automatic database selection")
     options = dict(
-        method=args.method, limit=args.limit, include_synthons=args.include_synthons,
-        subset=list(filters.subsets), where=filters.where,
-        require=filters.require, exclude=filters.exclude,
-        max_price=filters.max_price, keep_unpriced=filters.keep_unpriced,
-        synthesis=args.synthesis, include_catalogues=include_catalogues,
-        availability=args.availability, databases=databases, timeout_seconds=args.timeout_seconds,
+        method=args.method,
+        limit=args.limit,
+        include_synthons=args.include_synthons,
+        subset=list(filters.subsets),
+        where=filters.where,
+        require=filters.require,
+        exclude=filters.exclude,
+        max_price=filters.max_price,
+        keep_unpriced=filters.keep_unpriced,
+        structure_query=filters.structure_query,
+        synthesis=args.synthesis,
+        include_catalogues=include_catalogues,
+        availability=args.availability,
+        databases=databases,
+        timeout_seconds=args.timeout_seconds,
     )
     if not args.explain:
         _check_output(args)
@@ -981,8 +1023,9 @@ def _auto_search(args, database, filters) -> int:
                 print(json.dumps(plan, indent=2))
             else:
                 rows = [[item["database_id"], "selected", ""] for item in plan["selected"]]
-                rows += [[item["database_id"], "excluded", item["reason"]]
-                         for item in plan["excluded"]]
+                rows += [
+                    [item["database_id"], "excluded", item["reason"]] for item in plan["excluded"]
+                ]
                 print(_format_table(["database", "status", "reason"], rows))
                 print("Nothing was run and no search credit was used.")
             return 0 if plan["selected"] else 1
@@ -1000,6 +1043,7 @@ def _cli_filters(args) -> tuple[str, Filters]:
         require.append(Pattern(smarts, low, high))
     return search_filters(
         args.database,
+        structure_query=_query_file(args),
         subset=args.subset,
         where=args.where,
         require=require,
@@ -1268,11 +1312,19 @@ def _print_batch_summary(result) -> None:
 
 
 def _substructure(args) -> int:
+    query = _query_file(args)
+    if (args.query is None) == (query is None):
+        raise ValueError("give exactly one of a query or --query-file")
     _check_output(args)
     with _open_client(args) as client:
         result = client.search_substructure(
-            args.query,
+            query if query is not None else args.query,
             query_format=args.query_format,
+            where=args.where,
+            require=args.require,
+            exclude=args.exclude,
+            max_price=args.max_price,
+            keep_unpriced=args.keep_unpriced,
             database=args.database,
             limit=args.limit,
             timeout_seconds=args.timeout_seconds,
@@ -1526,10 +1578,14 @@ def _print_observations(result: OptimizationResult, *, shown: int) -> None:
 
 
 def _optimization_constraints(args) -> dict[str, Any] | None:
-    data = _constraints(
-        json.loads(Path(args.constraints).read_text(encoding="utf-8"))
-        if args.constraints else None
-    ) or {}
+    data = (
+        _constraints(
+            json.loads(Path(args.constraints).read_text(encoding="utf-8"))
+            if args.constraints
+            else None
+        )
+        or {}
+    )
     flags = [
         *(RequireStructure(value) for value in args.require_pattern),
         *(ExcludeStructure(value) for value in args.exclude_pattern),
@@ -1540,7 +1596,24 @@ def _optimization_constraints(args) -> dict[str, Any] | None:
         structures = data.setdefault("structures", {})
         for group, conditions in _constraints(flags)["structures"].items():
             structures.setdefault(group, []).extend(conditions)
+    query = _query_file(args)
+    if query is not None:
+        from .query_schema import combine_queries
+
+        structures = data.setdefault("structures", {})
+        structures["query"] = combine_queries(structures.get("query"), query).model_dump(
+            mode="json"
+        )
     return _constraints(data)
+
+
+def _query_file(args):
+    path = getattr(args, "query_file", None)
+    if not path:
+        return None
+    from .query_schema import StructureQuery
+
+    return StructureQuery.model_validate_json(Path(path).read_text(encoding="utf-8"))
 
 
 def _optimize_run(args) -> int:
