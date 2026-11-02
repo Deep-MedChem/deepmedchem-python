@@ -588,6 +588,58 @@ def _toy(smiles):
     return [float(len(value)) for value in smiles]
 
 
+def test_auto_optimize_passes_routing_and_runs_shared_budget(server):
+    with _client(server) as client:
+        result = dmc.optimize(
+            _toy, direction="maximize", database="auto", databases=["enamine", "freedom"],
+            availability="make_on_demand", budget=10, batch_size=4, name="auto-test",
+            client=client, progress=False,
+        )
+    assert len(result) == 10
+    body = json.loads(server.requests[0].content)
+    assert body["auto"] == {
+        "scope": "orderable", "availability": "make_on_demand",
+        "databases": ["enamine-real-v5a", "freedom-space-5"],
+    }
+    assert body["budget"] == 10
+
+
+def test_async_auto_optimization_create(server):
+    async def run():
+        async with _async_client(server) as client:
+            return await client.optimizations.create(
+                database="auto", scope="all", databases=["enamine"],
+                direction="minimize", budget=10, batch_size=4,
+            )
+    asyncio.run(run())
+    assert json.loads(server.requests[0].content)["auto"] == {
+        "scope": "all", "databases": ["enamine-real-v5a"], "availability": None,
+    }
+
+
+def test_auto_provenance_export(tmp_path):
+    import csv
+
+    sources = [{"database_id": "enamine-real-v5a", "database_release": "v1", "product_id": "p"}]
+    result = OptimizationResult(observations=[{"id": "auto-x", "score": 1, "sources": sources}])
+    assert result.to_records()[0]["sources"] == sources
+    path = tmp_path / "results.csv"
+    result.to_csv(path)
+    with path.open() as stream:
+        assert json.loads(next(csv.DictReader(stream))["sources"]) == sources
+
+
+@pytest.mark.parametrize("options", [
+    {"database": "enamine", "databases": ["enamine"]},
+    {"database": "auto", "objectives": [{"type": "external", "name": "x"}]},
+    {"database": "auto", "databases": [str(i) for i in range(9)]},
+])
+def test_invalid_auto_optimization_options_fail_before_request(server, options):
+    with _client(server) as client, pytest.raises(ValueError):
+        client.optimizations.create(direction="maximize", budget=10, batch_size=4, **options)
+    assert not server.requests
+
+
 def test_optimize_runs_until_budget_and_reports_progress(server, capsys) -> None:
     with _client(server) as client:
         result = dmc.optimize(
