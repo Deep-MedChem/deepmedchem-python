@@ -1,5 +1,13 @@
 # `dmc` command reference
 
+Without configured credentials, catalog, unfiltered single-database similarity and sampling
+use guest access where the server enables it (currently the dev API). Python `guest=True`
+and CLI `--guest` ignore stored/environment keys. Exact substructure, filters, automatic
+routing, selections, batches and optimization still need an account. Guest results retain
+`mode="guest"` and server warnings; the default server cap is 20 results. `guest_limit`
+errors preserve `details.retry_after` / `details.login_url` and are not retried automatically.
+An invalid configured key is never downgraded to guest.
+
 The `dmc` command is installed with `pip install deepmedchem` and is also available as
 `deepmedchem`. Run `dmc <command> --help` for the authoritative flags of the installed version.
 
@@ -33,13 +41,17 @@ Use the `database_id` column verbatim as the `-d/--database` value below.
 
 ## Searching
 
-### `dmc search SMILES -d DATABASE [options]`
+### `dmc search SMILES [-d DATABASE] [options]`
 
 Ranked similarity search for one query molecule.
 
 | Flag | Meaning |
 | --- | --- |
-| `-d, --database ID` | Required database id. `ID:SUBSET[,SUBSET]` also applies named subsets. |
+| `-d, --database ID` | Database id; omitted means auto search of orderable synthon spaces. `ID:SUBSET[,SUBSET]` also applies named subsets. |
+| `--synthesis DAYS` | Maximum declared synthesis upper bound in business days, e.g. `7d` or `7 days`; unknown timing is excluded. Shipping additional. |
+| `--all` | Include orderable enumerated/in-stock catalogues in automatic search. Does not include research/hypothetical sources. |
+| `--availability {in_stock,make_on_demand}` | Restrict catalogue availability; use `--all` for in-stock catalogues. |
+| `--timeout-seconds N` | Auto-search time budget (default 30). |
 | `-m, --method {morgan,shape,esp}` | `morgan` (default) is ECFP4 Tanimoto; `shape` and `esp` are CHEESE 3D shape and electrostatic similarity. |
 | `-n, --limit N` | Number of hits (default 20; at most 200 with filters). |
 | `-o, --output FILE` | Save hits; format inferred from `.csv`, `.sdf`, `.smi`, `.json`. |
@@ -146,8 +158,11 @@ dmc order shape_hits.csv --get-quote --amount-mg 5 --no-open
 
 ### Optimization chemistry constraints
 
-`dmc optimize run ... --constraints constraints.json --property MolWt=:400` sends the JSON
-constraint object alongside the custom `--score-cmd`. Check optimization catalog support first.
+`dmc optimize run ... --property MolWt=:400 --require-pattern alpha-amino-acid/v1
+--exclude-smarts '[N+](=O)[O-]'` declares common constraints without a JSON file.
+`--require-pattern`, `--exclude-pattern`, `--require-smarts` and `--exclude-smarts` are repeatable
+and append to an optional `--constraints constraints.json`. Combined caps are validated locally.
+Check optimization catalog support first.
 The object accepts typed `properties`, `structures` (`all`, `any`, `none`) and advertised
 `predicted_properties`. Guided tuple acquisition precedes final product verification. Reusing
 a name with changed constraints or objective terms fails.
@@ -155,3 +170,8 @@ a name with changed constraints or objective terms fails.
 `--objectives objectives.json` supplies normalized built-in or mixed terms. With `--maximize`,
 omit `--score-cmd` for a built-in-only run. When mixing docking with built-ins, include an
 `external` term; the command returns raw docking scores while the service combines components.
+
+Automatic `--explain` prints source selection/exclusion without a search credit. Tables show
+synthesis with full unit words and untruncated SMILES; automatic results add a database column.
+Synthesis and price belong to the displayed supplier source. Account credentials and a compatible
+backend are required for auto search; append `--profile dev` for development testing.

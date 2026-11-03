@@ -1,11 +1,19 @@
 # `deepmedchem` Python API reference
 
+Without configured credentials, catalog, unfiltered single-database similarity and sampling
+use guest access where the server enables it (currently the dev API). Python `guest=True`
+and CLI `--guest` ignore stored/environment keys. Exact substructure, filters, automatic
+routing, selections, batches and optimization still need an account. Guest results retain
+`mode="guest"` and server warnings; the default server cap is 20 results. `guest_limit`
+errors preserve `details.retry_after` / `details.login_url` and are not retried automatically.
+An invalid configured key is never downgraded to guest.
+
 Full documentation: https://docs.deepmedchem.com/docs/guides/python/reference
 
 ## Module-level operations
 
 Each function creates a short-lived client, performs one request, and closes the transport.
-All accept `api_key`, `api_url`, `profile`, `credential_provider`, and `timeout` (seconds,
+All accept `guest`, `api_key`, `api_url`, `profile`, `credential_provider`, and `timeout` (seconds,
 default 45.0) as keyword arguments.
 
 ```python
@@ -40,7 +48,7 @@ dmc.usage() -> Usage
 ```python
 from deepmedchem import Client, AsyncClient
 
-Client(api_key=None, *, api_url=None, profile=None, timeout=45.0, transport=None,
+Client(api_key=None, *, api_url=None, guest=False, profile=None, timeout=45.0, transport=None,
        credential_provider=None, application="deepmedchem-python", application_version=None,
        max_retries=2, retry_backoff=0.25)
 ```
@@ -226,8 +234,9 @@ stops a run.
 ```python
 import deepmedchem as dmc
 
-dmc.optimize(score, *, direction, database="enamine", budget=1000, batch_size=100, name=None,
-             strategy=None, filters=None, properties=None, seed=None, scorer=None,
+dmc.optimize(score=None, *, direction=None, database="enamine", budget=1000, batch_size=100, name=None,
+             strategy=None, filters=None, properties=None, constraints=None, objectives=None,
+             seed=None, scorer=None,
              metadata=None, progress=True, client=None) -> OptimizationResult
 dmc.normalize_scores(batch, scores) -> list[dict]     # the submission rows tell()/optimize() send
 ```
@@ -236,8 +245,26 @@ dmc.normalize_scores(batch, scores) -> list[dict]     # the submission rows tell
   (failed), or `{"score": x, "status"?, "error"?, **metrics}`. NumPy scalars work; bool and
   strings are rejected. A mapping `{id: value}` is also accepted by `tell`/`normalize_scores`;
   missing ids become `failed` with `error="not returned by scorer"`.
-- `direction`: `"minimize"` or `"maximize"`, required. `filters`: `None` or `"druglike"`.
-  `properties`: `{"MolWt": (None, 500)}` or `{"MolWt": {"min": 200, "max": 500}}`.
+- Prefer `constraints=[dmc.PropertyRange("MolWt", max=500),
+  dmc.RequireStructure("alpha-amino-acid/v1")]`. All listed constraints must hold.
+  Use `ExcludeStructure(smarts=...)`, `RequireAnyStructure([...], minimum=1)` and
+  `PredictedPropertyRange(endpoint, units=units, max=threshold)` as needed.
+- Prefer `objectives=[dmc.Maximize("rdkit.qed", scale=(0, 1))]`.
+  `Minimize` reverses desirability; `weight` defaults to 1. Sources can also be
+  `PredictedProperty(endpoint, units=units)`, `Similarity(reference_smiles)` or `ExternalScore()`.
+  Scales accept `(lower, upper)` tuples or `Scale(lower=..., upper=...)` objects.
+  Scales normalize preferences; constraint bounds enforce eligibility.
+  Duplicate sources (after canonicalization), all-external objectives, and oversized groups
+  fail locally. Exclusions require `min_count >= 1` and reject `max_count`.
+- `direction`: `"minimize"` or `"maximize"`, required for standalone callbacks. With objective
+  terms, aggregate direction defaults to `"maximize"`. Omit the callback for built-in-only
+  runs; mixed runs must include an `ExternalScore` term.
+- The immutable objects validate locally; IDs and feature availability are checked by the
+  service. Known property names infer units; custom property ranges require explicit units.
+  `filters`: `None` or `"druglike"`. Legacy constraint/objective dictionaries and
+  `properties={"MolWt": (None, 500)}` remain supported. Typed property ranges serialize to
+  `constraints.properties`; migrating a differently shaped saved spec needs a new run name,
+  or use `dmc.resume(name)` to continue the saved specification.
   `database` accepts aliases (`enamine`, `freedom`, `cheminfinita`).
 - `name` is the idempotency/resume key; without it the SDK sends a random `Idempotency-Key` and
   prints the id. Progress goes to stderr. Unsubmitted scores are journaled under
@@ -250,7 +277,7 @@ dmc.normalize_scores(batch, scores) -> list[dict]     # the submission rows tell
 
 | Method | Request |
 | --- | --- |
-| `create(*, database, direction, budget, batch_size, name=None, strategy=None, filters=None, properties=None, seed=None, scorer=None, metadata=None, objective_name=None, units=None, idempotency_key=None) -> Optimization` | `POST /api/v2/optimizations` |
+| `create(*, database, budget, batch_size, direction=None, name=None, strategy=None, filters=None, properties=None, constraints=None, objectives=None, seed=None, scorer=None, metadata=None, objective_name=None, units=None, idempotency_key=None) -> Optimization` | `POST /api/v2/optimizations` |
 | `get(id_or_name) -> Optimization` | `opt_…` → `GET …/{id}`, else `GET …?name=` |
 | `list(*, status=None, name=None, limit=None) -> list[OptimizationResource]` | `GET /api/v2/optimizations` (follows cursors) |
 | `retrieve(id) -> OptimizationResource` | `GET …/{id}` |
@@ -308,3 +335,21 @@ argument. Only database id, a `-DMCH` reference id, and SMILES reach the vendor 
   `DEEPMEDCHEM_API_URL`, `DEEPMEDCHEM_WEB_URL`, and `DEEPMEDCHEM_PROFILE` override them.
 - Every request sends `X-DMC-Client`, `X-DMC-Client-Version`, and `X-DMC-SDK-Version`; set
   `application` and `application_version` on the client when embedding the SDK in a product.
+
+### Shared typed chemistry
+
+`Selection.where(PropertyRange(...))` and search `where=PropertyRange(...)` reuse descriptor
+bounds. `Selection.constrain(*constraints)` accepts all typed constraints, retaining existing
+conditions. Search `require=RequireStructure(...)` and `exclude=ExcludeStructure(...)` accept
+registered pattern IDs or inline queries. Lists and legacy filters continue to work.
+
+## Synthesis and automatic source selection
+
+`search(query)` defaults to `database="auto"`, selecting orderable synthon spaces.
+`synthesis="7d"` (or integer `7`) applies the vendor-declared synthesis upper bound in
+business days. `include_catalogues=True` also admits orderable in-stock/enumerated sources;
+use it with `availability="in_stock"`. `scope="all"` separately opts into research sources.
+Sync/async clients, module helpers, auto substructure and `client.plan_search` forward these
+options to the server. Explicit databases with synthesis limits use a one-source auto plan.
+`hit.synthesis` exposes typed min/max/unit/day_basis/source/as_of metadata; missing estimates
+remain unknown. Duration does not include shipping. SDK optimization routing is unchanged.

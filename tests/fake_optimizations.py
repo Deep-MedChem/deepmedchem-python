@@ -20,6 +20,7 @@ import httpx
 SCORE_STATUSES = ("valid", "failed", "timeout", "filtered", "cancelled")
 TERMINAL = {"completed", "failed", "cancelled"}
 _SPEC_FIELDS = {
+    "auto",
     "start_paused",
     "name",
     "database",

@@ -7,10 +7,12 @@ from typing import Any
 from .client import Client
 from .config import CredentialSource
 from .models import SampleResult, SearchResult, SelectionResult, SubstructureResult, Usage
+from .query_schema import QueryNode, StructureQuery
 
 
 def _client_options(
     *,
+    guest: bool,
     api_key: str | None,
     api_url: str | None,
     profile: str | None,
@@ -19,6 +21,7 @@ def _client_options(
     transport: Any,
 ) -> dict[str, Any]:
     return {
+        "guest": guest,
         "api_key": api_key,
         "api_url": api_url,
         "profile": profile,
@@ -31,7 +34,7 @@ def _client_options(
 def search(
     smiles: str,
     *,
-    database: str,
+    database: str = "auto",
     method: str = "morgan",
     limit: int = 20,
     include_synthons: bool = False,
@@ -41,6 +44,14 @@ def search(
     exclude=None,
     max_price: float | None = None,
     keep_unpriced: bool = False,
+    synthesis: str | int | None = None,
+    include_catalogues: bool = False,
+    structure_query: StructureQuery | QueryNode | dict[str, Any] | None = None,
+    availability: str | None = None,
+    scope: str = "orderable",
+    databases: list[str] | None = None,
+    timeout_seconds: int = 30,
+    guest: bool = False,
     api_key: str | None = None,
     api_url: str | None = None,
     profile: str | None = None,
@@ -57,6 +68,7 @@ def search(
 
     with Client(
         **_client_options(
+            guest=guest,
             api_key=api_key,
             api_url=api_url,
             profile=profile,
@@ -77,17 +89,35 @@ def search(
             exclude=exclude,
             max_price=max_price,
             keep_unpriced=keep_unpriced,
+            synthesis=synthesis,
+            include_catalogues=include_catalogues,
+            structure_query=structure_query,
+            availability=availability,
+            scope=scope,
+            databases=databases,
+            timeout_seconds=timeout_seconds,
         )
 
 
 def substructure(
-    query: str,
+    query: str | StructureQuery | QueryNode | dict[str, Any],
     *,
     database: str,
     format: str = "smarts",
+    where=None,
+    require=None,
+    exclude=None,
+    max_price=None,
+    keep_unpriced=False,
     limit: int = 100,
     timeout_seconds: int = 30,
     include_synthons: bool = False,
+    synthesis: str | int | None = None,
+    include_catalogues: bool = False,
+    availability: str | None = None,
+    scope: str = "orderable",
+    databases: list[str] | None = None,
+    guest: bool = False,
     api_key: str | None = None,
     api_url: str | None = None,
     profile: str | None = None,
@@ -99,6 +129,7 @@ def substructure(
 
     with Client(
         **_client_options(
+            guest=guest,
             api_key=api_key,
             api_url=api_url,
             profile=profile,
@@ -110,10 +141,20 @@ def substructure(
         return client.search_substructure(
             query,
             query_format=format,
+            where=where,
+            require=require,
+            exclude=exclude,
+            max_price=max_price,
+            keep_unpriced=keep_unpriced,
             database=database,
             limit=limit,
             timeout_seconds=timeout_seconds,
             include_synthons=include_synthons,
+            synthesis=synthesis,
+            include_catalogues=include_catalogues,
+            availability=availability,
+            scope=scope,
+            databases=databases,
         )
 
 
@@ -127,6 +168,8 @@ def sample(
     where=None,
     max_price: float | None = None,
     keep_unpriced: bool = False,
+    structure_query: StructureQuery | QueryNode | dict[str, Any] | None = None,
+    guest: bool = False,
     api_key: str | None = None,
     api_url: str | None = None,
     profile: str | None = None,
@@ -138,6 +181,7 @@ def sample(
 
     with Client(
         **_client_options(
+            guest=guest,
             api_key=api_key,
             api_url=api_url,
             profile=profile,
@@ -155,11 +199,13 @@ def sample(
             where=where,
             max_price=max_price,
             keep_unpriced=keep_unpriced,
+            structure_query=structure_query,
         )
 
 
 def catalog(
     *,
+    guest: bool = False,
     api_key: str | None = None,
     api_url: str | None = None,
     profile: str | None = None,
@@ -171,6 +217,7 @@ def catalog(
 
     with Client(
         **_client_options(
+            guest=guest,
             api_key=api_key,
             api_url=api_url,
             profile=profile,
@@ -184,6 +231,7 @@ def catalog(
 
 def usage(
     *,
+    guest: bool = False,
     api_key: str | None = None,
     api_url: str | None = None,
     profile: str | None = None,
@@ -195,6 +243,7 @@ def usage(
 
     with Client(
         **_client_options(
+            guest=guest,
             api_key=api_key,
             api_url=api_url,
             profile=profile,

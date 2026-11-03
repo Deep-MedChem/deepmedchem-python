@@ -80,8 +80,8 @@ def result_rows(result: SearchResult) -> list[dict[str, Any]]:
     records = []
     for hit in result.hits:
         record = dict(hit.raw)
-        record.setdefault("database_id", result.database_id)
-        record.setdefault("database_release", result.database_release)
+        record["database_id"] = record.get("database_id") or result.database_id
+        record["database_release"] = record.get("database_release") or result.database_release
         records.append(record)
     columns = result_columns(records)
     return [{column: _cell(record.get(column)) for column in columns} for record in records]

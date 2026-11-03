@@ -36,10 +36,15 @@ jobs:
           python -m venv /tmp/deepmedchem-wheel-smoke
           /tmp/deepmedchem-wheel-smoke/bin/python -m pip install dist/*.whl
           /tmp/deepmedchem-wheel-smoke/bin/python - <<'PY'
-          from deepmedchem import AsyncClient, Client, Run, Selection
+          from deepmedchem import (
+              AsyncClient, Client, Maximize, PropertyRange, RequireStructure, Run, Scale, Selection,
+          )
 
           selection = Selection.from_database("example").sample(seed=42).limit(10)
           assert Run.selection(selection).to_dict()["schema_version"] == "run/1"
           assert Client and AsyncClient
-          print("wheel import and builder smoke passed")
+          assert PropertyRange("MolWt", max=400).max == 400
+          assert RequireStructure("alpha-amino-acid/v1").min_count == 1
+          assert Maximize("rdkit.qed", scale=Scale(lower=0, upper=1)).weight == 1
+          print("wheel import, builder and typed chemistry smoke passed")
           PY

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
@@ -43,6 +44,27 @@ class PredictedPropertyAcquisitionResult(APIModel):
     candidates_after: int
 
 
+class SynthesisEstimate(APIModel):
+    """Vendor-declared duration, excluding shipping; not a delivery guarantee."""
+
+    min: int
+    max: int
+    unit: str = "days"
+    day_basis: str = "business"
+    source: str
+    as_of: str | None = None
+
+    @property
+    def label(self) -> str:
+        duration = str(self.max) if self.min == self.max else f"{self.min}–{self.max}"
+        unit = self.unit.removesuffix("s") if self.min == self.max == 1 else self.unit
+        if self.day_basis == "calendar":
+            unit = f"calendar {unit}"
+        elif self.day_basis == "unspecified":
+            unit = f"{unit} (basis unspecified)"
+        return f"{duration} {unit}"
+
+
 class Hit(APIModel):
     """One typed, immutable row in a molecular result."""
 
@@ -58,6 +80,12 @@ class Hit(APIModel):
     properties: dict[str, float] | None = None
     predicted_properties: dict[str, float] | None = None
     acquisition: PredictedPropertyAcquisitionHit | None = None
+    database_id: str | None = None
+    database_release: str | None = None
+    canonical_smiles: str | None = None
+    sources: list[dict[str, Any]] | None = None
+    synthesis: SynthesisEstimate | None = None
+    availability: str | None = None
 
     @property
     def extra(self) -> Mapping[str, Any]:
@@ -72,6 +100,12 @@ class Hit(APIModel):
             "properties",
             "predicted_properties",
             "acquisition",
+            "database_id",
+            "database_release",
+            "canonical_smiles",
+            "sources",
+            "synthesis",
+            "availability",
         }
         return {key: value for key, value in self.raw.items() if key not in common}
 
@@ -93,6 +127,7 @@ class SearchResult(APIModel, Sequence[str]):
 
     results: list[dict[str, Any]] = Field(default_factory=list)
     warnings: tuple[WarningMessage, ...] = ()
+    mode: str | None = None
     request_id: str | None = None
     database_id: str | None = None
     database_release: str | None = None
@@ -100,6 +135,9 @@ class SearchResult(APIModel, Sequence[str]):
     metric: str | None = None
     counts: dict[str, Any] = Field(default_factory=dict)
     timing_ms: dict[str, float] = Field(default_factory=dict)
+    routing: dict[str, Any] | None = None
+    all_sources_searched: bool | None = None
+    search_complete: bool | None = None
 
     @property
     def method(self) -> str | None:
@@ -474,6 +512,9 @@ class Observation(APIModel):
     round: int | None = None
     metrics: dict[str, Any] = Field(default_factory=dict)
     error: str | None = None
+    sources: list[dict[str, Any]] | None = None
+    synthesis: SynthesisEstimate | None = None
+    availability: str | None = None
 
     @field_validator("metrics", mode="before")
     @classmethod
@@ -613,6 +654,8 @@ class OptimizationResult(APIModel, Sequence[Observation]):
         records = []
         for observation in self.observations:
             record: dict[str, Any] = {key: getattr(observation, key) for key in base}
+            if observation.sources is not None:
+                record["sources"] = observation.sources
             for key, value in observation.metrics.items():
                 record[f"metric_{key}" if key in record else key] = value
             records.append(record)
@@ -630,7 +673,15 @@ class OptimizationResult(APIModel, Sequence[Observation]):
         with open(path, "w", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="ignore")
             writer.writeheader()
-            writer.writerows(records)
+            writer.writerows(
+                {
+                    key: (
+                        json.dumps(value) if key == "sources" and isinstance(value, list) else value
+                    )
+                    for key, value in record.items()
+                }
+                for record in records
+            )
         return len(records)
 
     def to_pandas(self):

@@ -5,16 +5,20 @@ from __future__ import annotations
 from typing import Any
 
 from .client import AsyncClient
-from .models import SampleResult, SearchResult, SubstructureResult, Usage
+from .models import SampleResult, SearchResult, SelectionResult, SubstructureResult, Usage
+from .query_schema import QueryNode, StructureQuery
 
 
-async def search(smiles: str, *, database: str, method: str = "morgan", **kwargs) -> SearchResult:
+async def search(
+    smiles: str, *, database: str = "auto", method: str = "morgan", **kwargs
+) -> SearchResult:
     async with AsyncClient(**_connection_options(kwargs)) as client:
         return await client.search(smiles, database=database, method=method, **kwargs)
 
 
 async def substructure(
-    query: str, *, database: str, format: str = "smarts", **kwargs
+    query: str | StructureQuery | QueryNode | dict[str, Any],
+    *, database: str, format: str = "smarts", **kwargs
 ) -> SubstructureResult:
     async with AsyncClient(**_connection_options(kwargs)) as client:
         return await client.search_substructure(
@@ -22,7 +26,7 @@ async def substructure(
         )
 
 
-async def sample(*, database: str, **kwargs) -> SampleResult:
+async def sample(*, database: str, **kwargs) -> SampleResult | SelectionResult:
     async with AsyncClient(**_connection_options(kwargs)) as client:
         return await client.sample(database=database, **kwargs)
 
@@ -38,5 +42,7 @@ async def usage(**kwargs) -> Usage:
 
 
 def _connection_options(kwargs: dict[str, Any]) -> dict[str, Any]:
-    names = {"api_key", "api_url", "profile", "credential_provider", "timeout", "transport"}
+    names = {
+        "guest", "api_key", "api_url", "profile", "credential_provider", "timeout", "transport"
+    }
     return {name: kwargs.pop(name) for name in tuple(kwargs) if name in names}
