@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0b7 (release candidate)
+## 0.4.0b7 — 2026-11-03
 
 - Allow structural catalogue sampling through the sync/async sample helpers and CLI; the server checks each release's capabilities. Synthon sampling with structural constraints remains unsupported.
 

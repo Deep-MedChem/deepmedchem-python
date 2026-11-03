@@ -43,12 +43,11 @@ to ignore saved/environment credentials explicitly; it cannot be combined with a
 ```python
 import deepmedchem as dmc
 
-# Guest access is currently enabled on the development API.
+# Use the production API without signing in.
 result = dmc.search(
     "CC(=O)Oc1ccccc1C(=O)O",
     database="enamine",
     guest=True,
-    api_url="https://api-dev.deepmedchem.com",
 )
 print(result.mode)       # "guest"
 print(result.warnings)   # server limit/field warnings, if any
@@ -64,16 +63,16 @@ and are returned immediately without automatic retries. Invalid keys remain auth
 errors; the SDK never retries them anonymously.
 
 ```bash
-dmc search "CCO" -d enamine --guest --profile dev -n 20
-dmc sample -d enamine --guest --profile dev -n 20
-dmc databases --guest --profile dev
+dmc search "CCO" -d enamine --guest -n 20
+dmc sample -d enamine --guest -n 20
+dmc databases --guest
 ```
 
 Exact substructure search, filtered/conditioned similarity, automatic multi-database
 routing, selections, batches and optimization require an account. Guest clients fail
 locally for these operations; sign in and create a client without `guest=True`.
-Guest access must also be enabled on the selected server. Production remains gated until
-its guest rollout; installing this SDK alone does not enable anonymous production access.
+Guest access is available on the production and development APIs. Other deployments must
+enable guest access explicitly; installing this SDK alone does not enable it on a server.
 
 ## Command line
 
