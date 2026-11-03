@@ -19,7 +19,7 @@ It contains no RDKit, models, databases, or proprietary search implementation.
 pip install deepmedchem
 ```
 
-Authenticate once, or set `DEEPMEDCHEM_API_KEY` in automation:
+For account features, authenticate once, or set `DEEPMEDCHEM_API_KEY` in automation:
 
 ```bash
 dmc login
@@ -32,6 +32,48 @@ on any device. Sign in or create a CHEESE account there, approve the connection,
 on its own. The key goes to the OS keyring when one is available, otherwise to a `credentials.json`
 file (mode 0600) next to the SDK config. Use `--no-browser` to force the print-only behaviour and
 `--token-stdin` to paste an existing key from a pipe.
+
+## Search without an account
+
+When no API key is configured, the SDK uses guest access for catalog, unfiltered
+single-database similarity search (Morgan, shape or ESP), and sampling. Pass `guest=True`
+to ignore saved/environment credentials explicitly; it cannot be combined with an explicit
+`api_key` or `credential_provider`.
+
+```python
+import deepmedchem as dmc
+
+# Guest access is currently enabled on the development API.
+result = dmc.search(
+    "CC(=O)Oc1ccccc1C(=O)O",
+    database="enamine",
+    guest=True,
+    api_url="https://api-dev.deepmedchem.com",
+)
+print(result.mode)       # "guest"
+print(result.warnings)   # server limit/field warnings, if any
+result.to_csv("guest_search.csv")
+```
+
+`Client(guest=True)`, `AsyncClient(guest=True)` and `dmc.aio.search(..., guest=True)`
+work the same way. `client.is_guest` reports whether the client has no credentials.
+The server enforces the guest policy: by default at most 20 results, no synthon/property
+acquisition, and per-IP/shared request budgets. Larger requests are clamped with warnings;
+`guest_limit` errors retain the server's `details` (including `retry_after` and `login_url`)
+and are returned immediately without automatic retries. Invalid keys remain authentication
+errors; the SDK never retries them anonymously.
+
+```bash
+dmc search "CCO" -d enamine --guest --profile dev -n 20
+dmc sample -d enamine --guest --profile dev -n 20
+dmc databases --guest --profile dev
+```
+
+Exact substructure search, filtered/conditioned similarity, automatic multi-database
+routing, selections, batches and optimization require an account. Guest clients fail
+locally for these operations; sign in and create a client without `guest=True`.
+Guest access must also be enabled on the selected server. Production remains gated until
+its guest rollout; installing this SDK alone does not enable anonymous production access.
 
 ## Command line
 
@@ -237,22 +279,73 @@ available without another API request. Databases without price estimates return 
 
 ## Optimize with explicit chemistry and optional custom scores
 
-Put supported structures and property limits in `constraints=` / `properties=`, and supported
-preferences in `objectives=`. Navigator guides synthon tuple generation and ranking, then
-verifies assembled products. Docking and proprietary models remain callbacks.
+Put structures and property limits in `constraints=`, and preferences in `objectives=`.
+The immutable Python objects provide named bounds, local validation and IDE completion.
+Navigator guides synthon tuple generation and ranking, then verifies assembled products. Docking and proprietary models remain callbacks.
 
 ```python
 import deepmedchem as dmc
 
 result = dmc.optimize(
-    database="enamine", budget=500, batch_size=50, name="qed-amino-acids",
-    properties={"MolWt": (None, 400), "MolLogP": (0, 3)},
-    constraints={"structures": {"all": [{"pattern_id": "alpha-amino-acid/v1"}]}},
-    objectives=[{"type": "property", "property_id": "rdkit.qed",
-                 "direction": "maximize", "lower": 0, "upper": 1}],
+    database="enamine",
+    name="qed-amino-acids",
+    budget=500,
+    batch_size=50,
+    constraints=[
+        dmc.PropertyRange("MolWt", max=400),
+        dmc.PropertyRange("MolLogP", min=0, max=3),
+        dmc.RequireStructure("alpha-amino-acid/v1"),
+    ],
+    objectives=[
+        dmc.Maximize("rdkit.qed", scale=(0, 1)),
+    ],
 )
 result.to_csv("qed_demo.csv")
 ```
+
+All constraints in the list must hold. `min` and `max` are inclusive; omit either for an
+open end. `scale=(lower, upper)` normalizes objective values; it does not set eligibility
+limits. Use `scale=dmc.Scale(lower=0, upper=1)` when named bounds are clearer. Tuples are
+validated and stored as immutable `Scale` objects. Each objective has an optional positive `weight` (default 1). The aggregate is
+maximized automatically, even when individual terms use `Minimize`.
+
+| Intent | Python object |
+| --- | --- |
+| Descriptor bounds | `PropertyRange("MolWt", max=400)` |
+| Required registered pattern | `RequireStructure("alpha-amino-acid/v1")` |
+| Required inline SMARTS | `RequireStructure(smarts="C(=O)N", min_count=1)` |
+| Excluded inline SMARTS | `ExcludeStructure(smarts="[N+](=O)[O-]")` |
+| At least one of several patterns | `RequireAnyStructure([RequireStructure(smarts="C(=O)N"), RequireStructure(smarts="C(=O)O")])` |
+| ADMET bounds | `PredictedPropertyRange(endpoint, units=units, max=6)` |
+| Descriptor objective | `Maximize("rdkit.qed", scale=(0, 1))` |
+| ADMET objective | `Minimize(PredictedProperty(endpoint, units=units), scale=(3, 8))` |
+| Similarity objective | `Maximize(Similarity("CCO"), scale=(0, 1))` |
+| Callback in a mixed run | `Minimize(ExternalScore(), scale=(-12, -4))` |
+
+All names above are available from `deepmedchem` (use the `dmc.` prefix with the import above).
+The objects are frozen Pydantic models: invalid bounds, nonfinite numbers, blank IDs and
+misspelled fields fail locally. Known descriptor aliases such as `MolWt`, `mw` and
+`rdkit.mol_wt` share units; a custom property ID needs explicit `units` in `PropertyRange`.
+The service validates ID availability and chemistry. Only one `RequireAnyStructure` group
+is supported per specification; its `minimum` defaults to 1.
+`ExcludeStructure` rejects products with at least `min_count` matches (default 1).
+Exclusions require a positive `min_count` and do not accept an upper count bound, so more
+matches can never make an excluded product pass. Use `RequireStructure(..., max_count=...)`
+when you want an inclusive match-count window.
+
+Objective sources must be unique after alias resolution. There can be at most one external
+score and one similarity objective, even with different reference molecules. An external-only
+run uses a callback and `direction=` without `objectives`. Local validation enforces the
+service limits: 16 objectives, 32 descriptor and 32 ADMET conditions, and 16 structures per
+group (`all`, `any`, `none`).
+
+Existing `properties=` dictionaries, structured `constraints=` dictionaries and objective
+dictionaries remain supported. An objective list can mix typed objects and dictionaries;
+a constraint list contains typed objects only. Both lists and tuples are accepted.
+Typed property ranges serialize to `constraints.properties`, and typed objectives include
+explicit direction and weight. When converting an existing campaign from a differently
+shaped legacy request, use a new name or `dmc.resume(old_name)` to continue its saved
+specification: resume identity is based on the serialized request.
 
 No callback or client RDKit installation is needed for built-in-only runs. Check
 `dmc.catalog()["optimization"]` for the deployment's enabled constraints, objectives and ADMET
@@ -264,15 +357,23 @@ its actual acquisition path and any fallback in `optimization.engine.constraint_
 For docking, keep the callback focused on docking:
 
 ```python
-result = dmc.optimize(docking_score, direction="minimize", database="enamine",
-                      budget=500, batch_size=50, properties={"MolWt": (None, 400)})
+result = dmc.optimize(
+    docking_score,
+    direction="minimize",
+    database="enamine",
+    budget=500,
+    batch_size=50,
+    constraints=[dmc.PropertyRange("MolWt", max=400)],
+)
 ```
 
 A callback takes a SMILES list and returns one score per molecule, optionally with metrics.
 `name=` resumes an unchanged specification; local score journals prevent repeated external
 scoring after an interrupted upload. The sync/async create APIs support the same parameters.
-The CLI accepts `--constraints constraints.json` and `--objectives objectives.json`; omit
-`--score-cmd` for built-in-only runs. See [optimization examples](examples/optimization/README.md)
+The CLI provides repeatable `--require-pattern`, `--exclude-pattern`, `--require-smarts` and
+`--exclude-smarts` flags. Combine them with `--property MolWt=:400` for common constraints;
+`--constraints constraints.json` remains available for advanced conditions. Use
+`--objectives objectives.json` and omit `--score-cmd` for built-in-only runs. See [optimization examples](examples/optimization/README.md)
 for normalized mixed objectives, molecular similarity, ADMET and docking.
 
 ADMET availability is specific to the database and its installed release. With a client,
@@ -291,15 +392,14 @@ with dmc.Client() as client:
     result = dmc.optimize(
         client=client,
         database="enamine",
-        direction="maximize",  # aggregate desirability
         budget=100,
         batch_size=20,
-        constraints={"predicted_properties": [
-            {"endpoint_id": endpoint, "operator": "lte", "value": 6, "units": units},
-        ]},
+        constraints=[dmc.PredictedPropertyRange(endpoint, units=units, max=6)],
         objectives=[
-            {"type": "predicted_property", "endpoint_id": endpoint, "units": units,
-             "direction": "minimize", "lower": 3, "upper": 8},
+            dmc.Minimize(
+                dmc.PredictedProperty(endpoint, units=units),
+                scale=(3, 8),
+            ),
         ],
     )
 ```
@@ -312,6 +412,29 @@ before a campaign is created. Adding an external docking term keeps docking in t
 callback while the same internal ADMET guidance and checks remain active.
 
 
+
+## Reuse chemistry constraints in search and selections
+
+Use the same objects across workflows:
+
+```python
+mw = dmc.PropertyRange("MolWt", max=400)
+amino_acid = dmc.RequireStructure("alpha-amino-acid/v1")
+no_nitro = dmc.ExcludeStructure(smarts="[N+](=O)[O-]")
+
+hits = dmc.search(
+    "CC(=O)Oc1ccccc1C(=O)O", database="enamine",
+    where=mw, require=amino_acid, exclude=no_nitro,
+)
+selection = dmc.Selection.from_database("enamine").constrain(mw, amino_acid, no_nitro)
+# Selection.where(mw) also accepts a PropertyRange.
+```
+
+`Selection.constrain(*constraints)` accepts descriptor/ADMET ranges and required, excluded or
+alternative structures. It returns a new selection, retaining existing conditions.
+Search `where=` accepts a `PropertyRange` or a list mixed with existing text filters;
+`require=` and `exclude=` accept matching typed structure objects or existing SMARTS strings.
+Legacy `Pattern` and `PropertyCondition` objects remain supported.
 
 ## Filters and virtual subsets
 
@@ -630,8 +753,8 @@ molecules. Invalid seeds pause the run with a reason and preserve its checkpoint
 operations. `dmc optimize run` and `dmc.optimize()` accept a hit threshold (`--hit-threshold` /
 `hit_threshold`). See [the seed example](examples/optimization/05_seed_and_harvest.py).
 
-Custom `properties={"MolWt": (None, 350)}` windows are checked on assembled products by the
-upgraded worker, including when combined with `filters="druglike"`. Check the catalog's
+Descriptor bounds such as `constraints=[dmc.PropertyRange("MolWt", max=350)]` are checked
+on assembled products, including when combined with `filters="druglike"`. Check the catalog's
 optimization property capabilities before requesting them.
 
 ### Long-running optimizations
@@ -687,3 +810,196 @@ result limit is required. Synchronous and asynchronous clients preserve server
 ordering, including exact isomeric identity ahead of equal-score fingerprint
 collisions. Existing filters still apply; a bounded search miss is not proof
 that a molecule is absent. Several supplier routes may produce the same molecule.
+
+### Automatic database selection
+
+Omit the database to search orderable **synthon spaces** automatically. Use `--all`
+(or Python `include_catalogues=True`) to also search orderable in-stock and enumerated
+catalogues. This is separate from `scope="all"`, which explicitly admits research and
+hypothetical sources. The default never admits those sources.
+
+```bash
+dmc search 'CC/C(/C1C=CC=CC=1)=C(/C1C=CC(OCCN(C)C)=CC=1)\C1C=CC=CC=1' --synthesis 7d -n 5
+dmc search 'CCO' --all --availability in_stock
+dmc search 'CCO' --synthesis '7 days' --max-price 300 --explain
+```
+
+`--synthesis 7d` means a maximum vendor-declared synthesis time of **7 business days**,
+excluding shipping. The planner compares the declaration's upper bound, excludes unknown
+or non-comparable estimates, and reports why each source was skipped. In-stock offers need
+no synthesis wait, but availability is a catalogue snapshot. Onepot CORE 2.0 Lite currently
+has a supplier-declared 5–7 business-day estimate; these are estimates, not guarantees.
+Calendar/unspecified timing and months are not silently converted into business days.
+
+The table always includes `synthesis` next to `price`, with full words such as `5–7 days`,
+`1–2 months`, `in stock` or `unknown`. Auto results also show the `database` immediately
+after rank. SMILES are printed in full. Database, price and timing refer to the same
+representative offer; other retrieved offers remain available in `hit.sources`.
+`hit.synthesis` is a typed `SynthesisEstimate` with bounds, units and declaration provenance;
+CSV/JSON retain that metadata. Timing for explicit single-database CLI results comes from
+the catalogue when available.
+
+```python
+hits = dmc.search(query, synthesis="7d", max_price=300)
+hits = dmc.search(query, include_catalogues=True, availability="in_stock")
+with dmc.Client() as client:
+    plan = client.plan_search(query, synthesis=7)  # no search credit
+```
+
+These additions need the matching backend synthesis-routing release. For development testing,
+append `--profile dev` or pass `profile="dev"`. An older server returns an error; the SDK
+never silently discards a requested filter or falls back to unfiltered search.
+
+
+```python
+hits = dmc.search(query, database="auto", include_catalogues=True, availability="in_stock", limit=100)
+hits = dmc.search(
+    query, database="auto", max_price=200, where=dmc.PropertyRange("MolWt", max=450)
+)
+matches = dmc.substructure("C(=O)N", database="auto", limit=100)
+
+with dmc.Client() as client:
+    plan = client.plan_search(query, max_price=200)  # no search credits
+    print(plan["selected"], plan["excluded"])
+
+print(hits.routing)
+for hit in hits.hits:
+    print(hit.smiles, hit.sources)
+```
+
+Requires a backend with `/api/v2/search_auto`; older servers return an error and
+are not silently searched through a client-side fallback. Explicit database
+selection keeps its existing behavior. Sync/async clients and module-level search
+facades accept `auto` (the default for similarity search). `scope="orderable"` is the default; `scope="all"` includes
+research/hypothetical collections. An optional `databases=["enamine", "vast"]`
+restricts candidate sources. `availability` describes catalogue snapshots, not
+live stock or a delivery guarantee. Unsupported filters exclude sources with a
+reason in the routing report; the current enumerated runtime cannot apply prices.
+
+The global result limit applies after molecular deduplication. Each hit keeps its
+representative database/product/price together; `sources` retains alternatives
+retrieved by the search. CSV export preserves the per-hit database and serializes
+sources as JSON. `all_sources_searched` is separate from exhaustive molecular
+coverage; check `routing.sources` and warnings for failures and timeouts.
+
+One federated request costs one credit, independent of selected source count;
+all-source failure is refunded. The default shared execution deadline is 30 s.
+For `timeout_seconds=120`, configure a client HTTP `timeout` above 120 s too.
+
+### Adaptive optimization across databases
+
+```python
+result = dmc.optimize(
+    docking_score,
+    database="auto",
+    databases=["enamine", "freedom"],  # optional candidate allowlist
+    availability="make_on_demand",
+    direction="minimize",
+    budget=1000,
+    batch_size=40,
+    name="multi-space-docking",
+    constraints=[dmc.PropertyRange("MolWt", max=400)],
+)
+result.to_csv("candidates.csv")  # includes source routes as JSON
+```
+
+The backend selects up to eight eligible spaces, pins their releases, and runs
+one resumable campaign with one total evaluation budget. Each space keeps its
+own Navigator state. The coordinator explores each source, then uses observed
+score ranks with an exploration allowance to allocate later proposals. Scores
+are reused for duplicate canonical isomeric molecules across sources; different
+salts, tautomers and stereoisomers remain distinct. Failed evaluations also use
+the budget. Source IDs, releases and product routes are retained in each
+observation's `sources` and in exports.
+
+`client.optimizations.create` and its async equivalent accept the same routing
+options. `scope="orderable"` is the default. Existing property/structure
+constraints exclude spaces that cannot enforce them. Inspect
+`result.optimization.specification["resolved_databases"]` for the pinned selection
+and `result.optimization.engine["constraint_acquisition"]` for evaluation counts.
+Resuming the same named intent retains its original releases.
+
+Requires the matching backend and worker implementation. Auto optimization
+currently supports external scoring callbacks only; built-in multi-objective
+runs and seed import are unsupported. Price filters are available for auto
+search, not optimization. Exhausting child proposal budgets can stop a campaign
+before the global budget; it does not prove exhaustion of the chemical union.
+
+In local real-Navigator benchmarks (two small amide spaces, three seeds, 24
+evaluations), adaptive allocation raised mean top-five QED from 0.816 to 0.875
+and tied equal allocation on a target-molecular-weight objective. These are
+small-space checks, not evidence of docking or trillion-scale performance.
+
+## Reusable chemical queries
+
+The same immutable query works in substructure search, filtered similarity, selections,
+and optimization. The SDK validates the document without requiring RDKit; the service
+checks chemistry and database capabilities before executing it.
+
+```python
+import deepmedchem as dmc
+
+query = dmc.StructureQuery(
+    expression=dmc.AllOf(conditions=(
+        dmc.Contains(pattern_id="alpha-amino-acid/v1"),
+        dmc.AnyOf(conditions=(dmc.Contains(smarts="c1ccccc1"), dmc.Contains(smarts="C1CCCCC1"))),
+        dmc.Not(condition=dmc.Contains(smarts="[N+](=O)[O-]")),
+    )),
+)
+
+hits = dmc.substructure(query, database="enamine")
+neighbours = dmc.search("NCC(=O)O", database="enamine", structure_query=query)
+result = dmc.optimize(
+    database="enamine", name="amino-acid-qed", budget=500, batch_size=50,
+    constraints=[query, dmc.PropertyRange("MolWt", max=400)],
+    objectives=[dmc.Maximize("rdkit.qed", scale=(0, 1))],
+)
+```
+
+`Selection.constrain(query)` and both `Client` and `AsyncClient` accept these objects.
+`client.validate_query(query)` checks chemistry without running a search. Automatic
+routing (`database="auto"`) retains the complete query and excludes incompatible sources.
+
+Mapped atoms make attachment positions explicit:
+
+```python
+linker = dmc.Linker(
+    scaffold="[N:1].[O:2]", start=1, end=2,
+    min_length=2, max_length=4, atom_smarts="[#6]", bond_types=("single",),
+)
+r_groups = dmc.RGroups(
+    scaffold="[c:1]1cc[c:2]cc1",
+    groups=(dmc.RGroup(site=1, label="R1"), dmc.RGroup(site=2, label="R1")),
+)
+```
+
+Linker lengths count internal atoms; `length_unit="bonds"` counts bonds instead.
+`path="any"` accepts any allowed path; `path="shortest"` requires the molecular
+shortest-path length. `allow_ring_atoms=False` excludes ring atoms from the interior.
+R groups are pendant substituents rooted at the first atom of their `smarts` pattern.
+`allow_hydrogen=True` permits H at that position. Equal labels require identical whole
+rooted substituents. `exact=True` prohibits additional substituents elsewhere on the
+scaffold; bridging groups use `Linker`. `MatchRelation` expresses disjoint, overlapping,
+directly connected or shared mapped-site matches. Independent conditions may overlap.
+
+Stereo is honored by default. Use `StructureQuery(..., stereo="ignore")` explicitly
+for relaxed matching. Queries do not change product charge, tautomer or protection state.
+Exact hit validity does not imply exhaustive search: inspect completeness and timeout
+metadata. Complexity limits fail explicitly, including inside exclusions.
+
+Save and reuse the document with the CLI:
+
+```python
+from pathlib import Path
+Path("query.json").write_text(query.model_dump_json(indent=2))
+```
+
+```sh
+dmc substructure -d enamine --query-file query.json
+dmc search 'NCC(=O)O' -d enamine --query-file query.json
+dmc optimize run amino-acid-qed -d enamine --query-file query.json --objectives objectives.json
+```
+
+The query format is `structure-query/1`. Synthon sampling does not support structural
+constraints; catalogue sampling can use them through a selection. These features require
+a compatible server and remain subject to the account/guest capabilities it advertises.

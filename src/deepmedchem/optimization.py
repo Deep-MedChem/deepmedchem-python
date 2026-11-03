@@ -23,7 +23,7 @@ import sys
 import tempfile
 import time
 import uuid
-from collections.abc import AsyncIterator, Callable, Iterator, Mapping
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from pathlib import Path
@@ -32,6 +32,16 @@ from urllib.parse import quote
 
 import httpx
 
+from .auto import auto_options, require_auto
+from .chemistry import (
+    Constraints,
+    Maximize,
+    Minimize,
+    Objectives,
+    _constraints_to_wire,
+    _validate_constraint_limits,
+    _validate_objective_sources,
+)
 from .client import AsyncClient, Client, DeepMedChemError
 from .databases import resolve_database
 from .models import (
@@ -158,6 +168,8 @@ def _properties(properties: Any) -> dict[str, dict[str, int | float]] | None:
 
 def _constraints(value: Any) -> dict[str, Any] | None:
     """Keep the client chemistry-free; the service validates IDs and query semantics."""
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        value = _constraints_to_wire(value)
     data = _json_object(value, "constraints", max_bytes=128 * 1024)
     if not data:
         return None
@@ -173,8 +185,29 @@ def _constraints(value: Any) -> dict[str, Any] | None:
         raise ValueError("constraints.properties must be a list of typed property conditions")
     if "structures" in data and not isinstance(data["structures"], dict):
         raise ValueError("constraints.structures must be an object with all/any/none groups")
+    _validate_constraint_limits(data)
     # Return a detached snapshot, including nested data, for resumable specifications.
     return json.loads(json.dumps(data, allow_nan=False))
+
+
+def _objectives(value: Objectives | None) -> list[dict[str, Any]] | None:
+    if value is None:
+        return None
+    if (
+        not isinstance(value, Sequence)
+        or isinstance(value, (str, bytes))
+        or not 1 <= len(value) <= 16
+    ):
+        raise ValueError("objectives must be a sequence of 1 to 16 objective terms")
+    terms = []
+    for index, term in enumerate(value):
+        if isinstance(term, (Maximize, Minimize)):
+            term = term._to_wire()
+        if not isinstance(term, Mapping):
+            raise ValueError(f"objectives[{index}] must be Maximize, Minimize, or a mapping")
+        terms.append(_json_object(term, "objective term"))
+    _validate_objective_sources(terms)
+    return json.loads(json.dumps(terms, allow_nan=False))
 
 
 def _json_object(
@@ -209,15 +242,18 @@ def _check_name(name: Any) -> str | None:
 def build_specification(
     *,
     database: str,
-    direction: str,
+    direction: str | None = None,
     budget: int,
     batch_size: int,
     name: str | None = None,
     strategy: str | None = None,
     filters: str | None = None,
     properties: Mapping[str, Any] | None = None,
-    constraints: Mapping[str, Any] | None = None,
-    objectives: list[Mapping[str, Any]] | None = None,
+    constraints: Constraints | None = None,
+    objectives: Objectives | None = None,
+    databases: list[str] | None = None,
+    availability: str | None = None,
+    scope: str = "orderable",
     seed: int | None = None,
     scorer: Mapping[str, Any] | None = None,
     metadata: Mapping[str, Any] | None = None,
@@ -234,6 +270,8 @@ def build_specification(
     batch_size = _positive_int(batch_size, "batch_size")
     if batch_size > budget:
         raise ValueError(f"batch_size ({batch_size}) must not exceed budget ({budget})")
+    if direction is None and objectives is not None:
+        direction = "maximize"
     objective: dict[str, Any] = {"direction": _check_direction(direction)}
     if hit_threshold is not None:
         if isinstance(hit_threshold, bool) or not math.isfinite(float(hit_threshold)):
@@ -250,6 +288,17 @@ def build_specification(
         "budget": budget,
         "batch_size": batch_size,
     }
+    require_auto(spec["database"], availability=availability, scope=scope, databases=databases)
+    if spec["database"] == "auto":
+        if objectives:
+            raise ValueError("auto optimization currently requires an external score callback")
+        options = auto_options(availability=availability, scope=scope, databases=databases)
+        # Search-specific filters are not part of the campaign routing contract.
+        for field in ("timeout_seconds", "max_synthesis_days", "include_catalogues"):
+            options.pop(field)
+        if databases is not None and len(databases) > 8:
+            raise ValueError("auto optimization supports at most 8 databases")
+        spec["auto"] = options
     if start_paused:
         spec["start_paused"] = True
     if _check_name(name) is not None:
@@ -262,12 +311,11 @@ def build_specification(
         if filters not in FILTERS:
             raise ValueError(f"filters must be None or 'druglike', got {filters!r}")
         spec["filters"] = filters
-    if objectives is not None:
-        if not isinstance(objectives, list) or not 1 <= len(objectives) <= 16:
-            raise ValueError("objectives must be a list of 1 to 16 objective terms")
+    normalized_objectives = _objectives(objectives)
+    if normalized_objectives is not None:
         if direction != "maximize":
             raise ValueError("normalized objectives require direction='maximize'")
-        spec["objectives"] = [_json_object(term, "objective term") for term in objectives]
+        spec["objectives"] = normalized_objectives
     normalized_constraints = _constraints(constraints)
     if normalized_constraints:
         spec["constraints"] = normalized_constraints
@@ -682,15 +730,18 @@ class Optimizations:
         self,
         *,
         database: str,
-        direction: str,
+        direction: str | None = None,
         budget: int,
         batch_size: int,
         name: str | None = None,
         strategy: str | None = None,
         filters: str | None = None,
         properties: Mapping[str, Any] | None = None,
-        constraints: Mapping[str, Any] | None = None,
-        objectives: list[Mapping[str, Any]] | None = None,
+        constraints: Constraints | None = None,
+        objectives: Objectives | None = None,
+        databases: list[str] | None = None,
+        availability: str | None = None,
+        scope: str = "orderable",
         seed: int | None = None,
         scorer: Mapping[str, Any] | None = None,
         metadata: Mapping[str, Any] | None = None,
@@ -700,7 +751,12 @@ class Optimizations:
         start_paused: bool = False,
         idempotency_key: str | None = None,
     ) -> Optimization:
-        """Create an optimization, or return the existing one with the same name and spec."""
+        """Create an optimization, or return the existing one with the same name and spec.
+
+        Accepts typed chemistry constraints/objectives or legacy dictionaries.
+        Objective terms infer aggregate direction="maximize"; standalone external
+        scores require an explicit direction. Typed property bounds are inclusive.
+        """
 
         spec = build_specification(
             database=database,
@@ -713,6 +769,9 @@ class Optimizations:
             properties=properties,
             constraints=constraints,
             objectives=objectives,
+            databases=databases,
+            availability=availability,
+            scope=scope,
             seed=seed,
             scorer=scorer,
             metadata=metadata,
@@ -1148,15 +1207,18 @@ class AsyncOptimizations:
         self,
         *,
         database: str,
-        direction: str,
+        direction: str | None = None,
         budget: int,
         batch_size: int,
         name: str | None = None,
         strategy: str | None = None,
         filters: str | None = None,
         properties: Mapping[str, Any] | None = None,
-        constraints: Mapping[str, Any] | None = None,
-        objectives: list[Mapping[str, Any]] | None = None,
+        constraints: Constraints | None = None,
+        objectives: Objectives | None = None,
+        databases: list[str] | None = None,
+        availability: str | None = None,
+        scope: str = "orderable",
         seed: int | None = None,
         scorer: Mapping[str, Any] | None = None,
         metadata: Mapping[str, Any] | None = None,
@@ -1166,6 +1228,7 @@ class AsyncOptimizations:
         start_paused: bool = False,
         idempotency_key: str | None = None,
     ) -> AsyncOptimization:
+        """Async equivalent of :meth:`Optimizations.create`, including typed chemistry."""
         spec = build_specification(
             database=database,
             direction=direction,
@@ -1177,6 +1240,9 @@ class AsyncOptimizations:
             properties=properties,
             constraints=constraints,
             objectives=objectives,
+            databases=databases,
+            availability=availability,
+            scope=scope,
             seed=seed,
             scorer=scorer,
             metadata=metadata,
@@ -1817,8 +1883,11 @@ def optimize(
     hit_threshold: float | None = None,
     filters: str | None = None,
     properties: Mapping[str, Any] | None = None,
-    constraints: Mapping[str, Any] | None = None,
-    objectives: list[Mapping[str, Any]] | None = None,
+    constraints: Constraints | None = None,
+    objectives: Objectives | None = None,
+    databases: list[str] | None = None,
+    availability: str | None = None,
+    scope: str = "orderable",
     seed: int | None = None,
     scorer: Mapping[str, Any] | None = None,
     metadata: Mapping[str, Any] | None = None,
@@ -1834,15 +1903,16 @@ def optimize(
     (or NaN) for a molecule it could not score, or a dict ``{"score": x, **metrics}``. If it
     raises, nothing is submitted and the batch stays pending.
 
-    Put supported hard requirements in ``properties=`` or ``constraints=`` rather than
-    returning penalty scores. The service verifies assembled products before asking your
+    Put hard requirements in ``constraints=[PropertyRange(...), RequireStructure(...)]``
+    rather than returning penalty scores. The service verifies assembled products before asking your
     callback to score them. Constraints guide synthon sampling before product verification;
     consult ``client.optimizations.capabilities(database)`` for native ADMET support
     and the catalog constraints/objectives flags before creating a campaign.
     The callback should compute the custom objective, such as docking or your own model.
 
-    ``objectives`` declares normalized built-in terms and, for mixed runs, an external
-    term. Omit ``score`` for built-in-only runs. These aggregates are maximized; legacy
+    ``objectives=[Maximize("rdkit.qed", scale=(0, 1))]`` declares
+    normalized built-in terms and, for mixed runs, an ``ExternalScore`` term.
+    Omit ``score`` for built-in-only runs. These aggregates are maximized; legacy
     external-only calls must explicitly declare ``direction``.
 
     ``name`` makes the call resumable: re-running it after Ctrl-C, a crash or a reboot
@@ -1855,11 +1925,7 @@ def optimize(
     best N observations. The default preserves collection of every observation.
     """
 
-    if objectives is not None and (
-        not isinstance(objectives, list) or not 1 <= len(objectives) <= 16
-        or not all(isinstance(term, Mapping) for term in objectives)
-    ):
-        raise ValueError("objectives must be a list of 1 to 16 objective mappings")
+    objectives = _objectives(objectives)
     needs_external = not objectives or any(term.get("type") == "external" for term in objectives)
     if needs_external and not callable(score):
         raise TypeError(
@@ -1887,6 +1953,9 @@ def optimize(
             properties=properties,
             constraints=constraints,
             objectives=objectives,
+            databases=databases,
+            availability=availability,
+            scope=scope,
             seed=seed,
             scorer=scorer,
             metadata=metadata,

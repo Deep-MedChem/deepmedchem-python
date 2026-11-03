@@ -1,6 +1,6 @@
 """Search a required motif directly, then rank the returned hits locally.
 
-Guided optimization can enforce the same requirement through constraints.structures,
+Guided optimization can enforce the same requirement through RequireStructure / ExcludeStructure,
 restricting synthon tuple generation before final product checks. This separate direct-search
 example is useful when you want a bounded hit list rather than an iterative campaign.
 

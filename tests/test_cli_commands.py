@@ -157,9 +157,9 @@ def test_search_prints_table_and_summary(monkeypatch, capsys) -> None:
     assert cli.main(["search", "CC(=O)Oc1ccccc1C(=O)O", "-d", "enamine-real-v5a", "-n", "2"]) == 0
     captured = capsys.readouterr()
     lines = captured.out.splitlines()
-    assert lines[0].split() == ["rank", "score", "price", "smiles"]
-    assert "   1  0.7037   $245  O=C(O)Oc1ccccc1C(=O)O" in lines
-    assert "   2  0.6667      -  COC(=O)Oc1ccccc1C(=O)O" in lines
+    assert lines[0].split() == ["rank", "score", "price", "synthesis", "smiles"]
+    assert "   1  0.7037   $245  unknown    O=C(O)Oc1ccccc1C(=O)O" in lines
+    assert "   2  0.6667      -  unknown    COC(=O)Oc1ccccc1C(=O)O" in lines
     assert "Searched 357.4B molecules (Enamine REAL v5a) in 12 ms." in lines
     assert "Similarity range: 0.67-0.70 ECFP4 Tanimoto." in lines
     assert "product_id" not in captured.out
@@ -225,10 +225,10 @@ def test_substructure_and_sample_reach_their_operations(monkeypatch, capsys) -> 
         "seed": 3,
     }
     out = capsys.readouterr().out
-    assert "rank  match  price  smiles" in out
-    assert "   1  exact   $245  O=C(O)Oc1ccccc1C(=O)O" in out
+    assert "rank  match  price  synthesis  smiles" in out
+    assert "   1  exact   $245  unknown    O=C(O)Oc1ccccc1C(=O)O" in out
     assert "1 exact substructure matches returned." in out
-    assert "rank  price  smiles" in out
+    assert "rank  price  synthesis  smiles" in out
     assert "Random sample of 2 from 357.4B molecules (Enamine REAL v5a)." in out
 
 
@@ -303,6 +303,5 @@ def test_catalog_display_order_and_unavailable_enamine_prices(capsys):
         lines = capsys.readouterr().out.splitlines()[2:10]
         assert [line.split()[0] for line in lines] == expected
         if not detailed:
-            assert lines[0].split() == ["enamine", "1.0K", "-", "info@enamine.net"]
+            assert lines[0].split() == ["enamine", "1K", "-", "info@enamine.net"]
     assert json.dumps(catalog) == original
-

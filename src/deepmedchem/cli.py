@@ -19,6 +19,8 @@ from typing import Any
 
 from . import __version__
 from .auth import LoginError, browser_login, can_open_browser
+from .auto import routing_database, synthesis_days
+from .chemistry import ExcludeStructure, RequireStructure
 from .client import Client, DeepMedChemError
 from .config import (
     FILE_STORE,
@@ -34,8 +36,15 @@ from .config import (
 )
 from .databases import DATABASE_DETAILS, DATABASE_DISPLAY_ORDER, resolve_database
 from .export import FORMATS, check_export_dependencies, infer_format, write_result
-from .models import Batch, OptimizationResource, OptimizationResult, SearchResult, Usage
-from .optimization import _drive, _filename, normalize_scores
+from .models import (
+    Batch,
+    OptimizationResource,
+    OptimizationResult,
+    SearchResult,
+    SynthesisEstimate,
+    Usage,
+)
+from .optimization import _constraints, _drive, _filename, _objectives, normalize_scores
 from .ordering import open_order_drafts, prepare_order, procurement_contacts
 from .subsets import (
     SUBSETS,
@@ -87,7 +96,7 @@ def _human_count(value: Any) -> str:
         return "-"
     for suffix, scale in (("T", 1e12), ("B", 1e9), ("M", 1e6), ("K", 1e3)):
         if number >= scale:
-            return f"{number / scale:.1f}{suffix}"
+            return f"{number / scale:.1f}".rstrip("0").rstrip(".") + suffix
     return f"{int(number)}"
 
 
@@ -200,11 +209,47 @@ def _catalog_entry(client: Client, database_id: str | None) -> dict[str, Any] | 
     return None
 
 
+def _auto_catalog_entry(client: Client, result: SearchResult) -> dict[str, Any]:
+    """Sum the catalogue populations of successfully searched database releases."""
+
+    summary = {"name": "automatic search"}
+    if result.all_sources_searched is False:
+        summary["name"] += ", partial results"
+    sources = {
+        (source["database_id"], source.get("release_id"))
+        for source in (result.routing or {}).get("sources", [])
+        if source.get("status") == "succeeded"
+    }
+    if not sources:
+        return summary
+    try:
+        catalog = client.catalog()
+    except DeepMedChemError:
+        return summary
+    libraries = {
+        (library["database_id"], library.get("release_id")): library
+        for library in catalog.get("libraries", [])
+    }
+    matched = [libraries.get(source, {}) for source in sources]
+    counts = [library.get("product_count") for library in matched]
+    if any(type(count) is not int or count < 0 for count in counts):
+        return summary
+    summary["product_count"] = sum(counts)
+    populations = [library["population"] for library in matched if library.get("population")]
+    if populations:
+        summary["population"] = {
+            "count_is_estimate": any(p.get("count_is_estimate") for p in populations)
+        }
+    return summary
+
+
 def _result_summary(result: SearchResult, library: dict[str, Any] | None) -> list[str]:
     """Short, human sentences about what was searched and how the hits scored."""
 
     meta = result.meta
-    name = (library or {}).get("name") or meta.database or "the database"
+    name = (library or {}).get("name") or (
+        "automatic search" if meta.database == "auto" else meta.database or "the database"
+    )
     size = _library_count(library) if library else "-"
     unit = "source combinations" if (library or {}).get("population") else "molecules"
     space = f"{size} {unit} ({name})" if size != "-" else str(name)
@@ -222,20 +267,38 @@ def _result_summary(result: SearchResult, library: dict[str, Any] | None) -> lis
     return lines
 
 
+def _synthesis_label(hit, library=None) -> str:
+    # An auto row's timing and price belong to its representative source, not an
+    # arbitrary alternative in sources. Never mix offers when displaying a row.
+    availability = hit.availability or (library or {}).get("availability")
+    if availability == "in_stock":
+        return "in stock"
+    estimate = hit.synthesis
+    if estimate is None and (library or {}).get("synthesis"):
+        estimate = SynthesisEstimate.model_validate(library["synthesis"])
+    return estimate.label if estimate else "unknown"
+
+
 def _print_result_table(result: SearchResult, *, library: dict[str, Any] | None = None) -> None:
     method = result.meta.method
-    if method == "substructure":
-        headers = ["rank", "match", "price", "smiles"]
-        rows = [[hit.rank, "exact", _price(hit.price), hit.smiles] for hit in result.hits]
-        right = [True, False, True, False]
-    elif method == "sample":
-        headers = ["rank", "price", "smiles"]
-        rows = [[hit.rank, _price(hit.price), hit.smiles] for hit in result.hits]
-        right = [True, True, False]
-    else:
-        headers = ["rank", "score", "price", "smiles"]
-        rows = [[hit.rank, _score(hit.score), _price(hit.price), hit.smiles] for hit in result.hits]
-        right = [True, True, True, False]
+    auto = result.database_id == "auto"
+    headers = ["rank"] + (["database"] if auto else [])
+    right = [True] + ([False] if auto else [])
+    if method != "sample":
+        headers += ["match" if method == "substructure" else "score"]
+        right += [method != "substructure"]
+    headers += ["price", "synthesis", "smiles"]
+    right += [True, False, False]
+    rows = []
+    for hit in result.hits:
+        row = [hit.rank]
+        if auto:
+            database = hit.database_id or "unknown"
+            row += [DATABASE_DETAILS.get(database, {}).get("abbreviation", database)]
+        if method != "sample":
+            row += ["exact" if method == "substructure" else _score(hit.score)]
+        row += [_price(hit.price), _synthesis_label(hit, library), hit.smiles]
+        rows.append(row)
     print(_format_table(headers, rows, align_right=right))
     print()
     for line in _result_summary(result, library):
@@ -246,6 +309,9 @@ def _print_result_table(result: SearchResult, *, library: dict[str, Any] | None 
 
 
 def _add_connection_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--guest", action="store_true", help="Use guest access, ignoring saved keys"
+    )
     parser.add_argument("--profile", help="Named profile (default: active profile)")
     parser.add_argument("--api-url", help=argparse.SUPPRESS)
     parser.add_argument("--json", action="store_true", help="Print the raw JSON response")
@@ -284,6 +350,7 @@ def _count_range(text: str) -> tuple[int, int | None]:
 
 
 def _add_filter_options(parser: argparse.ArgumentParser, *, structures: bool = True) -> None:
+    parser.add_argument("--query-file", metavar="FILE.json", help="Reusable native structure query")
     group = parser.add_argument_group(
         "filters",
         "restrict results; every returned molecule satisfies all filters (see `dmc subsets`)",
@@ -336,8 +403,7 @@ def _add_filter_options(parser: argparse.ArgumentParser, *, structures: bool = T
     group.add_argument(
         "--explain",
         action="store_true",
-        help="Print the selection document and the server's validation and estimate, "
-        "without running it (no credit)",
+        help="Explain source routing or validate the selection without searching (no credit)",
     )
 
 
@@ -390,7 +456,7 @@ def _parser() -> argparse.ArgumentParser:
     search = commands.add_parser("search", help="Similarity search for a SMILES query")
     search.add_argument("smiles", nargs="?", help="Query molecule as SMILES")
     search.add_argument(
-        "-d", "--database", help="Database abbreviation or full ID, see `databases` (required)"
+        "-d", "--database", help="Database abbreviation or full ID (default: auto, synthon spaces)"
     )
     search.add_argument(
         "-m", "--method", choices=SEARCH_METHODS, default="morgan", help="Similarity method"
@@ -398,6 +464,24 @@ def _parser() -> argparse.ArgumentParser:
     search.add_argument(
         "-n", "--limit", type=int, default=20, help="Number of hits (per query with --input)"
     )
+    search.add_argument(
+        "--synthesis",
+        type=synthesis_days,
+        metavar="DAYS",
+        help="Maximum vendor-declared synthesis time in business days, e.g. 7d",
+    )
+    search.add_argument(
+        "--all",
+        dest="include_catalogues",
+        action="store_true",
+        help="Also search orderable in-stock and enumerated catalogues",
+    )
+    search.add_argument(
+        "--availability",
+        choices=("in_stock", "make_on_demand"),
+        help="Restrict vendor availability (use --all for in-stock catalogues)",
+    )
+    search.add_argument("--timeout-seconds", type=int, default=30, help="Auto search time budget")
     batch = search.add_argument_group(
         "batch search", "search many query molecules from a file, each separately"
     )
@@ -423,7 +507,10 @@ def _parser() -> argparse.ArgumentParser:
     _add_connection_options(search)
 
     substructure = commands.add_parser("substructure", help="Exact SMILES/SMARTS substructure")
-    substructure.add_argument("query", help="Substructure query")
+    substructure.add_argument("query", nargs="?", help="Substructure query")
+    substructure.add_argument(
+        "--query-file", metavar="FILE.json", help="Reusable native structure query"
+    )
     substructure.add_argument(
         "-d", "--database", required=True, help="Database abbreviation or full ID"
     )
@@ -439,6 +526,11 @@ def _parser() -> argparse.ArgumentParser:
     substructure.add_argument(
         "--timeout-seconds", type=int, default=30, help="Server-side search budget"
     )
+    substructure.add_argument("--where", action="append", help="Descriptor bound, e.g. mw<=400")
+    substructure.add_argument("--require", action="append", help="Required SMARTS (repeatable)")
+    substructure.add_argument("--exclude", action="append", help="Excluded SMARTS (repeatable)")
+    substructure.add_argument("--max-price", type=float, help="Maximum USD price")
+    substructure.add_argument("--keep-unpriced", action="store_true")
     _add_output_options(substructure)
     _add_connection_options(substructure)
 
@@ -535,11 +627,25 @@ def _add_optimize_parser(commands) -> None:
         metavar="NAME=MIN:MAX",
         help="Descriptor range, e.g. MolWt=:500 or TPSA=20:140 (repeatable)",
     )
+    run.add_argument("--query-file", metavar="FILE.json", help="Reusable native structure query")
     run.add_argument(
         "--constraints",
         metavar="FILE.json",
         help="Typed descriptor/structure constraints checked before custom scoring",
     )
+    for flag, metavar, help in (
+        ("--require-pattern", "ID", "Require a registered structure pattern"),
+        ("--exclude-pattern", "ID", "Exclude a registered structure pattern"),
+        ("--require-smarts", "SMARTS", "Require an inline SMARTS pattern"),
+        ("--exclude-smarts", "SMARTS", "Exclude an inline SMARTS pattern"),
+    ):
+        run.add_argument(
+            flag,
+            action="append",
+            default=[],
+            metavar=metavar,
+            help=f"{help} (repeatable; combined with --constraints)",
+        )
     run.add_argument(
         "--objectives", metavar="FILE.json", help="Built-in or mixed normalized objective terms"
     )
@@ -637,7 +743,11 @@ def _profile(args, config) -> str:
 def _open_client(args) -> Client:
     config = load_config()
     profile = _profile(args, config)
-    return Client(profile=profile, api_url=getattr(args, "api_url", None))
+    return Client(
+        profile=profile,
+        api_url=getattr(args, "api_url", None),
+        **({"guest": True} if getattr(args, "guest", False) else {}),
+    )
 
 
 def _login(args) -> int:
@@ -780,9 +890,17 @@ def _check_output(args) -> None:
 
 
 def _emit_result(args, result: SearchResult, client: Client | None = None) -> int:
+    if result.mode == "guest" and not args.json:
+        print("Guest access. Sign in with `dmc login` for account features.", file=sys.stderr)
+        for warning in result.warnings:
+            print(f"warning: {warning.message or warning.code}", file=sys.stderr)
     library = None
     if not args.json and client is not None:
-        library = _catalog_entry(client, result.meta.database)
+        library = (
+            _auto_catalog_entry(client, result)
+            if result.database_id == "auto"
+            else _catalog_entry(client, result.meta.database)
+        )
     if args.output:
         selected = args.format or infer_format(args.output)
         written = write_result(result, args.output, format=selected, html_limit=args.html_limit)
@@ -821,16 +939,32 @@ def _search(args) -> int:
         )
     database, filters = _cli_filters(args) if args.database else (args.database, Filters())
     if args.resume or args.input:
-        if filters or args.explain:
+        if (
+            filters
+            or args.explain
+            or args.synthesis is not None
+            or args.include_catalogues
+            or args.availability
+            or args.timeout_seconds != 30
+        ):
             raise ValueError(
-                "filters and --explain apply to one query; batch search (--input) does not "
-                "take them yet"
+                "routing options, filters and --explain apply to one query; "
+                "batch search (--input) does not take them yet"
             )
         # Batch accepts only .csv/.json, so it needs no RDKit check and keeps its
         # own, clearer message for anything else.
         return _search_many(args)
-    if not args.database:
-        raise ValueError("the following argument is required: -d/--database")
+    args.database = args.database or "auto"
+    database, filters = _cli_filters(args)
+    if (
+        database == "auto"
+        or args.synthesis is not None
+        or args.include_catalogues
+        or args.availability
+    ):
+        return _auto_search(args, database, filters)
+    if args.timeout_seconds != 30:
+        raise ValueError("--timeout-seconds requires automatic database selection")
     if filters or args.explain:
         selection = similarity_selection(
             args.smiles,
@@ -855,6 +989,53 @@ def _search(args) -> int:
         return _emit_result(args, result, client)
 
 
+def _auto_search(args, database, filters) -> int:
+    database, databases, include_catalogues = routing_database(
+        database,
+        synthesis=args.synthesis,
+        include_catalogues=args.include_catalogues,
+    )
+    if database != "auto":
+        raise ValueError("--availability requires automatic database selection")
+    options = dict(
+        method=args.method,
+        limit=args.limit,
+        include_synthons=args.include_synthons,
+        subset=list(filters.subsets),
+        where=filters.where,
+        require=filters.require,
+        exclude=filters.exclude,
+        max_price=filters.max_price,
+        keep_unpriced=filters.keep_unpriced,
+        structure_query=filters.structure_query,
+        synthesis=args.synthesis,
+        include_catalogues=include_catalogues,
+        availability=args.availability,
+        databases=databases,
+        timeout_seconds=args.timeout_seconds,
+    )
+    if not args.explain:
+        _check_output(args)
+    with _open_client(args) as client:
+        if args.explain:
+            plan = client.plan_search(args.smiles, **options)
+            if args.json:
+                print(json.dumps(plan, indent=2))
+            else:
+                rows = [[item["database_id"], "selected", ""] for item in plan["selected"]]
+                rows += [
+                    [item["database_id"], "excluded", item["reason"]] for item in plan["excluded"]
+                ]
+                print(_format_table(["database", "status", "reason"], rows))
+                print("Nothing was run and no search credit was used.")
+            return 0 if plan["selected"] else 1
+        result = client.search(args.smiles, database="auto", **options)
+        code = _emit_result(args, result, client)
+        if not args.json:
+            _print_filter_notes(result, filters, requested=args.limit)
+        return code
+
+
 def _cli_filters(args) -> tuple[str, Filters]:
     require = list(getattr(args, "require", None) or [])
     for count, smarts in getattr(args, "require_count", None) or []:
@@ -862,6 +1043,7 @@ def _cli_filters(args) -> tuple[str, Filters]:
         require.append(Pattern(smarts, low, high))
     return search_filters(
         args.database,
+        structure_query=_query_file(args),
         subset=args.subset,
         where=args.where,
         require=require,
@@ -1130,11 +1312,19 @@ def _print_batch_summary(result) -> None:
 
 
 def _substructure(args) -> int:
+    query = _query_file(args)
+    if (args.query is None) == (query is None):
+        raise ValueError("give exactly one of a query or --query-file")
     _check_output(args)
     with _open_client(args) as client:
         result = client.search_substructure(
-            args.query,
+            query if query is not None else args.query,
             query_format=args.query_format,
+            where=args.where,
+            require=args.require,
+            exclude=args.exclude,
+            max_price=args.max_price,
+            keep_unpriced=args.keep_unpriced,
             database=args.database,
             limit=args.limit,
             timeout_seconds=args.timeout_seconds,
@@ -1387,8 +1577,50 @@ def _print_observations(result: OptimizationResult, *, shown: int) -> None:
     print(_format_table(headers, rows, align_right=[True, True, False, True, False, False]))
 
 
+def _optimization_constraints(args) -> dict[str, Any] | None:
+    data = (
+        _constraints(
+            json.loads(Path(args.constraints).read_text(encoding="utf-8"))
+            if args.constraints
+            else None
+        )
+        or {}
+    )
+    flags = [
+        *(RequireStructure(value) for value in args.require_pattern),
+        *(ExcludeStructure(value) for value in args.exclude_pattern),
+        *(RequireStructure(smarts=value) for value in args.require_smarts),
+        *(ExcludeStructure(smarts=value) for value in args.exclude_smarts),
+    ]
+    if flags:
+        structures = data.setdefault("structures", {})
+        for group, conditions in _constraints(flags)["structures"].items():
+            structures.setdefault(group, []).extend(conditions)
+    query = _query_file(args)
+    if query is not None:
+        from .query_schema import combine_queries
+
+        structures = data.setdefault("structures", {})
+        structures["query"] = combine_queries(structures.get("query"), query).model_dump(
+            mode="json"
+        )
+    return _constraints(data)
+
+
+def _query_file(args):
+    path = getattr(args, "query_file", None)
+    if not path:
+        return None
+    from .query_schema import StructureQuery
+
+    return StructureQuery.model_validate_json(Path(path).read_text(encoding="utf-8"))
+
+
 def _optimize_run(args) -> int:
-    objectives = json.loads(Path(args.objectives).read_text()) if args.objectives else None
+    objectives = _objectives(
+        json.loads(Path(args.objectives).read_text()) if args.objectives else None
+    )
+    constraints = _optimization_constraints(args)
     needs_external = not objectives or any(t.get("type") == "external" for t in objectives)
     if needs_external and not args.score_cmd:
         raise ValueError("--score-cmd is required for an external objective")
@@ -1408,11 +1640,7 @@ def _optimize_run(args) -> int:
             filters="druglike" if args.druglike else None,
             properties=_property_options(args.property),
             objectives=objectives,
-            constraints=(
-                json.loads(Path(args.constraints).read_text(encoding="utf-8"))
-                if args.constraints
-                else None
-            ),
+            constraints=constraints,
             seed=args.seed,
             scorer=scorer,
             objective_name=args.objective_name,

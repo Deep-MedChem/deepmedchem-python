@@ -43,8 +43,21 @@ dmc status --verify                # confirms the profile and that the API accep
 - In CI or scripts, set `DEEPMEDCHEM_API_KEY` instead of `dmc login`. Keys are created at
   https://cheese.deepmedchem.com. Never paste a key into code, logs, or chat output.
 - `dmc login --no-browser` prints only the URL for SSH/containers; `--token-stdin` accepts a key from a pipe.
-- Errors mentioning `missing_api_key` mean neither the keyring, the credentials file, nor the
-  environment variable holds a key for the selected profile.
+- With no configured key, catalog, unfiltered single-database similarity search and sampling
+  use guest access where enabled (currently dev). Use `guest=True` / `--guest` to ignore saved
+  keys; the server normally caps results at 20. Substructure, filters, auto routing and campaigns
+  require an account. `missing_api_key` means an account-only operation was called as a guest.
+- `guest_limit` includes retry timing and a login URL in `error.details`; do not loop on it.
+
+## Automatic search and synthesis estimates
+
+`dmc search SMILES` defaults to orderable synthon spaces. Add `--synthesis 7d` to require a
+vendor-declared upper bound of seven business days, excluding shipping. Unknown estimates
+are excluded. `--all` also includes orderable in-stock/enumerated catalogues; it does not
+admit hypothetical/research collections. `--explain` shows routing without executing search.
+Use `--profile dev` when testing against the matching development backend. Keep full SMILES
+and source provenance; do not present synthesis estimates as delivery guarantees. Auto search
+requires an account; for guest similarity, explicitly select a database with `-d`.
 
 ## Pick the operation
 
@@ -163,7 +176,7 @@ dmc optimize status [NAME] | results NAME --top 50 -o best.csv | cancel NAME | r
   The same name with a different specification is a 409 `idempotency_conflict`.
 - **Report failures, never drop them.** Every proposed id needs exactly one row; the SDK fills
   ids a scorer did not return as `failed`. If the scorer raises, nothing is submitted.
-- Put supported hard requirements in `properties=` / `constraints=`, never in zero/penalty
+- Put supported hard requirements in `constraints=[dmc.PropertyRange(...), dmc.RequireStructure(...)]`, never in zero/penalty
   callback scores. Keep docking and proprietary models in the callback. Unknown hard
   requirements are unsupported; do not silently turn them into a soft preference.
 - Check `catalog()["optimization"]["constraints"]["enabled"]` before using typed structures.
@@ -171,14 +184,23 @@ dmc optimize status [NAME] | results NAME --top 50 -o best.csv | cancel NAME | r
   Guided acquisition is the default: synthon anchors and additive property sampling precede
   exact product verification. Inspect `engine.constraint_acquisition` for actual execution/fallbacks.
 - Check `optimization.objectives.enabled` and advertised ADMET endpoints. Put supported
-  preferences in `objectives=` with explicit normalization bounds, direction and weight.
+  preferences in `objectives=[dmc.Maximize(..., scale=(..., ...))]`
+  (or `Minimize`), with optional positive `weight`. For ADMET, similarity and mixed callbacks,
+  use `PredictedProperty`, `Similarity` and `ExternalScore` sources. Legacy dictionaries remain
+  supported; typed objects work in both sync and async create APIs. Scales accept `(lower, upper)`
+  or a named `Scale`. Exclusions require positive `min_count` and disallow `max_count`.
+- Reuse `PropertyRange` in search `where=` and `Selection.where`; use
+  `Selection.constrain(*constraints)` for a full typed constraint list. Search `require=` /
+  `exclude=` accept `RequireStructure` / `ExcludeStructure`.
+- CLI optimization supports repeatable `--require-pattern`, `--exclude-pattern`,
+  `--require-smarts` and `--exclude-smarts`, combined with `--property` or JSON constraints.
   Built-in-only runs omit the callback. Mixed runs include an `external` term and maximize the
   weighted mean desirability; the callback returns only its raw external score.
 - CP16 guides acquisition; pinned assembled-product teachers enforce ADMET thresholds and
   score ADMET objectives. Neither value is a measurement. Unavailable models fail explicitly.
 - Keep supported descriptor limits and preferences out of custom callbacks. Internal objective
   raw values appear as `metrics.objective_N`, with ADMET provenance in `objective_N_model`.
-- `filters="druglike"` and `properties={"MolWt": (None, 500)}` restrict the space;
+- `filters="druglike"` and `constraints=[dmc.PropertyRange("MolWt", max=500)]` restrict the space;
   `strategy` picks a Navigator preset (`gamma_diversity_screening` default). Allowed databases,
   strategies, properties and limits are in `dmc.catalog()["optimization"]`.
 - `scorer={...}` is pinned at creation; a later submission with a different scorer is refused
@@ -242,7 +264,7 @@ dmc optimize status [NAME] | results NAME --top 50 -o best.csv | cancel NAME | r
 | Symptom | Fix |
 | --- | --- |
 | `missing_api_key` | `dmc login`, or export `DEEPMEDCHEM_API_KEY`; check `dmc status`. |
-| HTTP 401 / 403 | Key revoked or wrong profile; `dmc login --profile default` again. |
+| HTTP 401 / 403 | Key revoked/wrong profile, or guest access disabled on this deployment; check the server error and login URL. |
 | HTTP 429 / `credit_limit_exceeded` | Daily credits exhausted; `dmc usage` shows the reset time. |
 | Substructure timeout | Increase `--timeout-seconds`, simplify the SMARTS, or lower `-n`. |
 | Unknown database | Copy the exact `database_id` from `dmc databases --json`. Enumerated and in-stock catalogues (Mcule, Molport, ZINC15, ENAMINE-REAL, ...) are not reachable from the SDK; do not retry them. |

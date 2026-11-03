@@ -13,7 +13,10 @@ import math
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .chemistry import RequireStructure
 
 # Short names accepted by ``--where``/``where=``, mapped to the server's property IDs
 # and the units it requires (molecule-selection/1 PROPERTY_REGISTRY).
@@ -32,6 +35,13 @@ _PROPERTY_ALIASES = {
     **{property_id: name for name, (property_id, _) in PROPERTIES.items()},
     **{property_id.removeprefix("rdkit."): name for name, (property_id, _) in PROPERTIES.items()},
     "molwt": "mw",
+    "mollogp": "logp",
+    "numhdonors": "hbd",
+    "numhacceptors": "hba",
+    "numrotatablebonds": "rotb",
+    "fractioncsp3": "fsp3",
+    "numaromaticrings": "arom",
+    "aromaticrings": "arom",
     "rotatable_bonds": "rotb",
     "aromatic_rings": "arom",
 }
@@ -255,9 +265,9 @@ def get_subset(name: str) -> Subset:
 
 _OPERATORS = {"<=": "lte", "<": "lt", ">=": "gte", ">": "gt"}
 _NUMBER = r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?"
-_SIMPLE = re.compile(rf"^\s*([A-Za-z_.]+)\s*(<=|>=|<|>)\s*({_NUMBER})\s*$")
-_RANGE = re.compile(rf"^\s*([A-Za-z_.]+)\s*=\s*({_NUMBER})\s*\.\.\s*({_NUMBER})\s*$")
-_BETWEEN = re.compile(rf"^\s*({_NUMBER})\s*<=\s*([A-Za-z_.]+)\s*<=\s*({_NUMBER})\s*$")
+_SIMPLE = re.compile(rf"^\s*([A-Za-z_][A-Za-z0-9_.]*)\s*(<=|>=|<|>)\s*({_NUMBER})\s*$")
+_RANGE = re.compile(rf"^\s*([A-Za-z_][A-Za-z0-9_.]*)\s*=\s*({_NUMBER})\s*\.\.\s*({_NUMBER})\s*$")
+_BETWEEN = re.compile(rf"^\s*({_NUMBER})\s*<=\s*([A-Za-z_][A-Za-z0-9_.]*)\s*<=\s*({_NUMBER})\s*$")
 
 
 def property_definition(name: str) -> tuple[str, str]:
@@ -322,14 +332,22 @@ def validate_smarts(smarts: str, *, format: str = "smarts") -> None:
         raise ValueError(f"invalid {format.upper()} pattern: {smarts!r}")
 
 
-def _patterns(value) -> tuple[Pattern, ...]:
+def _patterns(value, *, exclude=False) -> tuple[Pattern | RequireStructure, ...]:
+    from .chemistry import ExcludeStructure, RequireStructure
+
     if value is None:
         return ()
-    if isinstance(value, (str, Pattern)):
+    if isinstance(value, (str, Pattern, RequireStructure)):
         value = [value]
     output = []
     for item in value:
-        if isinstance(item, Pattern):
+        if isinstance(item, RequireStructure):
+            if isinstance(item, ExcludeStructure) != exclude:
+                raise ValueError(
+                    "use RequireStructure in require= and ExcludeStructure in exclude="
+                )
+            output.append(item)
+        elif isinstance(item, Pattern):
             output.append(item)
         elif isinstance(item, str):
             output.append(Pattern(item))
@@ -341,17 +359,33 @@ def _patterns(value) -> tuple[Pattern, ...]:
     return tuple(output)
 
 
+def _pattern_text(pattern) -> str:
+    from .chemistry import RequireStructure
+
+    if isinstance(pattern, RequireStructure):
+        return pattern.pattern_id or pattern.smarts or pattern.smiles
+    return pattern.smarts
+
+
 def _conditions(value) -> tuple[PropertyCondition, ...]:
+    from .chemistry import PropertyRange
+
     if value is None:
         return ()
-    if isinstance(value, (str, PropertyCondition)):
+    if isinstance(value, (str, PropertyCondition, PropertyRange)):
         value = [value]
     if isinstance(value, Mapping):
         value = [f"{name}{expression}" for name, expression in value.items()]
-    return tuple(
-        item if isinstance(item, PropertyCondition) else parse_condition(str(item))
-        for item in value
-    )
+    output = []
+    for item in value:
+        if isinstance(item, PropertyRange):
+            wire = item._to_wire()
+            bounds = wire["value"]
+            if wire["operator"] == "range":
+                bounds = (bounds["lower"], bounds["upper"])
+            item = PropertyCondition(wire["property_id"], wire["units"], wire["operator"], bounds)
+        output.append(item if isinstance(item, PropertyCondition) else parse_condition(str(item)))
+    return tuple(output)
 
 
 def _price(value, keep_unpriced) -> float | None:
@@ -390,10 +424,11 @@ class Filters:
 
     subsets: tuple[str, ...] = ()
     where: tuple[PropertyCondition, ...] = ()
-    require: tuple[Pattern, ...] = ()
-    exclude: tuple[Pattern, ...] = ()
+    require: tuple[Pattern | RequireStructure, ...] = ()
+    exclude: tuple[Pattern | RequireStructure, ...] = ()
     max_price: float | None = None
     keep_unpriced: bool = False
+    structure_query: object = None
 
     @property
     def _resolved(self) -> tuple[Subset, ...]:
@@ -409,41 +444,66 @@ class Filters:
         exclude=None,
         max_price=None,
         keep_unpriced=False,
+        structure_query=None,
     ) -> Filters:
         names = _names(subset)
         return cls(
             subsets=names,
             where=_conditions(where),
             require=_patterns(require),
-            exclude=_patterns(exclude),
+            exclude=_patterns(exclude, exclude=True),
             max_price=_price(max_price, keep_unpriced),
             keep_unpriced=bool(keep_unpriced),
+            structure_query=structure_query,
         )
 
     def __bool__(self) -> bool:
         return bool(
-            self.subsets or self.where or self.require or self.exclude or self.max_price is not None
+            self.structure_query is not None
+            or self.subsets
+            or self.where
+            or self.require
+            or self.exclude
+            or self.max_price is not None
         )
 
     @property
     def structural(self) -> bool:
-        return bool(self.require or self.exclude) or any(s.structural for s in self._resolved)
+        return bool(self.structure_query is not None or self.require or self.exclude) or any(
+            s.structural for s in self._resolved
+        )
 
     def validate(self) -> None:
+        from .chemistry import RequireStructure
+
         for subset in self._resolved:
             for pattern in (*subset.require, *subset.require_any, *subset.exclude):
                 validate_smarts(pattern.smarts, format=pattern.format)
         for pattern in (*self.require, *self.exclude):
-            validate_smarts(pattern.smarts, format=pattern.format)
+            if isinstance(pattern, RequireStructure):
+                if pattern.pattern_id is None:
+                    format = "smarts" if pattern.smarts is not None else "smiles"
+                    validate_smarts(getattr(pattern, format), format=format)
+            else:
+                validate_smarts(pattern.smarts, format=pattern.format)
 
     def apply(self, selection):
         """Return ``selection`` with every filter added as a constraint."""
 
+        from .chemistry import RequireStructure
+
+        if self.structure_query is not None:
+            from .query_schema import as_structure_query
+
+            selection = selection.constrain(as_structure_query(self.structure_query))
         for subset in self._resolved:
             selection = selection.subset(subset.name)
         for condition in self.where:
             selection = selection.where(condition)
         for index, pattern in enumerate(self.require, 1):
+            if isinstance(pattern, RequireStructure):
+                selection = selection.constrain(pattern)
+                continue
             selection = selection.require_structure(
                 pattern.smarts,
                 min_count=pattern.min_count,
@@ -452,6 +512,9 @@ class Filters:
                 id=f"require-{index}",
             )
         for index, pattern in enumerate(self.exclude, 1):
+            if isinstance(pattern, RequireStructure):
+                selection = selection.constrain(pattern)
+                continue
             selection = selection.exclude_structure(
                 pattern.smarts, format=pattern.format, id=f"exclude-{index}"
             )
@@ -462,8 +525,8 @@ class Filters:
     def describe(self) -> list[str]:
         lines = [f"{s.name}: {s.description}" for s in self._resolved]
         lines += [describe_condition(condition) for condition in self.where]
-        lines += [f"contains {_count_text(p)}{p.smarts}" for p in self.require]
-        lines += [f"does not contain {p.smarts}" for p in self.exclude]
+        lines += [f"contains {_count_text(p)}{_pattern_text(p)}" for p in self.require]
+        lines += [f"does not contain {_count_text(p)}{_pattern_text(p)}" for p in self.exclude]
         if self.max_price is not None:
             unpriced = "kept" if self.keep_unpriced else "excluded"
             lines.append(
@@ -509,11 +572,13 @@ def search_filters(
     exclude=None,
     max_price=None,
     keep_unpriced=False,
+    structure_query=None,
 ) -> tuple[str, Filters]:
     """Resolve ``DATABASE:SUBSET`` and keyword filters into a database and filters."""
 
     database, named = split_database(database)
     filters = Filters.build(
+        structure_query=structure_query,
         subset=merge_subsets(named, subset),
         where=where,
         require=require,
@@ -571,16 +636,12 @@ def sample_selection(
     seed: int | None = None,
     include_synthons: bool = False,
 ):
-    """A random sample restricted by property and price filters."""
+    """A random sample restricted by filters supported by the selected release."""
 
     from .selection import Selection
 
-    if filters.structural:
-        raise ValueError(
-            "sampling with structure filters is not available: the API applies structure "
-            "constraints only to similarity searches. Use property subsets (ro5, druglike, "
-            "beyond-ro5, ro3) or property filters when sampling."
-        )
+    # Catalogue workers support exact structural sampling. Let the service check
+    # the selected release's capabilities; synthon workers reject it explicitly.
     filters.validate()
     selection = filters.apply(Selection.from_database(database).sample(seed=seed).limit(count))
     include = _include(filters, include_synthons)

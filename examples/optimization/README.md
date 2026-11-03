@@ -21,13 +21,13 @@ All of them need `pip install deepmedchem` and a key (`dmc login` or `DEEPMEDCHE
 
 | Chemistry | Explicit parameter | Execution |
 | --- | --- | --- |
-| Required/excluded motifs | `constraints.structures` | Restricted synthon tuple branches, then exact product matching |
-| Descriptor bounds | `properties` or `constraints.properties` | Released additive descriptors and calibrated reaction margins, then exact RDKit checks |
-| ADMET bounds | `constraints.predicted_properties` | CP16 acquisition, then pinned assembled-product teacher verification |
-| Descriptor preferences | `objectives`, type `property` | Internal acquisition and exact scoring |
-| Similarity to a molecule | `objectives`, type `similarity` | Morgan-OR tuple ranking and exact product ECFP4 Tanimoto |
-| ADMET preferences | `objectives`, type `predicted_property` | CP16 ranking and pinned product-model scoring |
-| Docking / custom model | callback, plus an `external` term when mixing objectives | Local black-box scoring |
+| Required/excluded motifs | `RequireStructure` / `ExcludeStructure` | Restricted synthon tuple branches, then exact product matching |
+| Descriptor bounds | `PropertyRange` | Released additive descriptors and calibrated reaction margins, then exact RDKit checks |
+| ADMET bounds | `PredictedPropertyRange` | CP16 acquisition, then pinned assembled-product teacher verification |
+| Descriptor preferences | `Maximize` / `Minimize` with a property ID | Internal acquisition and exact scoring |
+| Similarity to a molecule | `Maximize(Similarity(...), scale=...)` | Morgan-OR tuple ranking and exact product ECFP4 Tanimoto |
+| ADMET preferences | `Minimize(PredictedProperty(...), scale=...)` | CP16 ranking and pinned product-model scoring |
+| Docking / custom model | callback, plus an `ExternalScore` term when mixing objectives | Local black-box scoring |
 
 The default is guided acquisition. Exact checks are the final safeguard, not the candidate
 generator. Anchor plans include intact motifs and junction pieces; stable exclusions can
@@ -93,11 +93,11 @@ result = dmc.optimize(
     database="enamine",
     budget=2000,
     batch_size=100,
-    properties={"MolWt": (None, 400)},
-    constraints={"structures": {
-        "all": [{"pattern_id": "alpha-amino-acid/v1"}],
-        "none": [{"query": {"format": "smarts", "value": "[N+](=O)[O-]"}}],
-    }},
+    constraints=[
+        dmc.PropertyRange("MolWt", max=400),
+        dmc.RequireStructure("alpha-amino-acid/v1"),
+        dmc.ExcludeStructure(smarts="[N+](=O)[O-]"),
+    ],
 )
 ```
 
@@ -106,18 +106,27 @@ pattern has a specific chemical definition; use an explicit query when you need 
 protection, substitution, or stereochemical semantics. Structural matching uses chirality.
 Counts refer to unique atom matches, including overlapping matches; bounds are limited to 1000.
 
-Typed descriptor conditions also work in `constraints.properties`:
-`{"property_id": "rdkit.mol_wt", "operator": "lte", "value": 400, "units": "Da"}`.
-They intersect with `properties=` and `filters=`; contradictions are errors. RDKit is optional
+`PropertyRange("MolWt", max=400)` also accepts `"mw"` or `"rdkit.mol_wt"`; known units
+are inferred. All constraints are conjoined. Use `RequireAnyStructure([...], minimum=1)`
+for alternatives (one group per specification). Existing structured constraint dictionaries
+and `properties=` mappings still work; they intersect with `filters=` and typed constraints.
+Contradictions are errors. RDKit is optional
 on the client. The server validates registry IDs and the worker compiles chemistry queries
 before proposing. Unsupported constraints fail instead of falling back to a callback.
 
-For the CLI, save the constraints object in `constraints.json` and use:
+The CLI can express the same common constraints directly:
 
 ```bash
 dmc optimize run constrained-docking -d enamine --minimize --property MolWt=:400 \
-    --constraints constraints.json --score-cmd './dock.sh {input} {output}'
+    --require-pattern alpha-amino-acid/v1 --exclude-smarts '[N+](=O)[O-]' \
+    --score-cmd './dock.sh {input} {output}'
 ```
+
+`--require-pattern`, `--exclude-pattern`, `--require-smarts` and `--exclude-smarts` are
+repeatable. They append to conditions from an optional `--constraints constraints.json`;
+the combined request is validated before submission. JSON remains useful for ADMET and
+alternative structure groups. `ExcludeStructure` always rejects at least `min_count` matches
+(default 1, must be positive); it rejects `max_count` to avoid letting more frequent motifs pass.
 
 The constraint specification is part of resume identity. Changing it requires a new run name.
 Internal rejections do not consume the external scoring budget. Seed evidence remains audited
@@ -125,18 +134,19 @@ under the existing seed policy; imported measured seeds are not newly proposed m
 
 ## Built-in and mixed objectives
 
-Each term declares `lower`, `upper`, `direction`, and an optional positive `weight` (default 1).
+Use `Maximize` or `Minimize` with `scale=(lower, upper)` and an optional
+positive `weight` (default 1). Named `Scale(lower=..., upper=...)` objects also work.
 The service clips `(value - lower) / (upper - lower)` to [0, 1], reverses it for `minimize`, and
 maximizes the weighted arithmetic mean. Thus units are never added directly. Bounds on an
 objective normalize a preference; use constraints to enforce eligibility.
 
 ```python
 result = dmc.optimize(
-    docking_score, direction="maximize", database="enamine", budget=500, batch_size=50,
-    properties={"MolWt": (None, 400)},
+    docking_score, database="enamine", budget=500, batch_size=50,
+    constraints=[dmc.PropertyRange("MolWt", max=400)],
     objectives=[
-        {"type": "external", "direction": "minimize", "lower": -12, "upper": -4, "weight": 2},
-        {"type": "property", "property_id": "rdkit.qed", "lower": 0, "upper": 1},
+        dmc.Minimize(dmc.ExternalScore(), scale=(-12, -4), weight=2),
+        dmc.Maximize("rdkit.qed", scale=(0, 1)),
     ],
 )
 ```
@@ -148,16 +158,21 @@ Those metric names are reserved for internal provenance. For imported seeds in a
 provide raw external scores; the engine computes the internal components before ingestion.
 
 For similarity use a term such as
-`{"type": "similarity", "metric_id": "rdkit.ecfp4_tanimoto", "reference_smiles": "CCO",
-"lower": 0, "upper": 1}` alongside a structure constraint. This guides ranking inside the
+`dmc.Maximize(dmc.Similarity("CCO"), scale=(0, 1))` alongside a structure constraint. This guides ranking inside the
 eligible tuple branches. It does not decompose an arbitrary reference into an in-space seed.
 
 For an advertised ADMET endpoint use
-`{"endpoint_id": endpoint, "operator": "lte", "value": threshold, "units": advertised_units}`
-in `constraints.predicted_properties`, or a `predicted_property` objective term with the same
-endpoint and units plus normalization bounds. Use model-appropriate units and thresholds.
+`dmc.PredictedPropertyRange(endpoint, units=advertised_units, max=threshold)` in `constraints`,
+or `dmc.Minimize(dmc.PredictedProperty(endpoint, units=advertised_units),
+scale=(3, 8))` in `objectives`. Use model-appropriate units and thresholds.
 
 A built-in-only run omits the callback and finishes on the worker. Its budget counts internally
 scored products; rejected candidates do not consume that molecule budget. Hosted deployments
 with paid optimization reserve the complete built-in-only budget at creation; external/mixed
 runs retain per-round reservations. Pause, cancel, resume and result retrieval still work.
+
+Typed objects work identically with `dmc.optimize`, `client.optimizations.create` and
+`await async_client.optimizations.create`. Built-in and mixed objectives infer aggregate
+`direction="maximize"`; a standalone callback still requires an explicit direction.
+When migrating a saved campaign, keep its original request or use `dmc.resume(name)`:
+typed serialization can differ from a legacy request, so use a new name for a converted spec.

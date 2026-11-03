@@ -10,7 +10,9 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .chemistry import Constraint, PropertyRange, _constraints_to_wire, _validate_constraint_limits
 from .databases import resolve_database
+from .query_schema import combine_queries
 
 
 class PredictedPropertyRankQuantileAcquisition(BaseModel):
@@ -18,9 +20,7 @@ class PredictedPropertyRankQuantileAcquisition(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["predicted_property_rank_quantile"] = (
-        "predicted_property_rank_quantile"
-    )
+    type: Literal["predicted_property_rank_quantile"] = "predicted_property_rank_quantile"
     endpoint_id: str = Field(min_length=1, max_length=256)
     direction: Literal["minimize", "maximize"]
     keep_fraction: float = Field(gt=0, le=1)
@@ -351,6 +351,59 @@ class Selection:
             )
         return selection
 
+    def constrain(self, *constraints: Constraint) -> Selection:
+        """Add the same typed chemistry constraints accepted by optimize().
+
+        All arguments must hold. Existing constraints are retained; only one
+        RequireAnyStructure group is supported across the whole selection.
+        """
+        added = _constraints_to_wire(constraints)
+
+        def update(payload):
+            target = payload["constraints"]
+            for key, kind, fidelity in (
+                ("properties", "property", "exact_product"),
+                ("predicted_properties", "predicted_property", "pinned_assembled_product_teacher"),
+            ):
+                for condition in added.get(key, []):
+                    target.setdefault(key, []).append(
+                        {
+                            "type": kind,
+                            "required_fidelity": fidelity,
+                            "missing": "reject",
+                            **condition,
+                        }
+                    )
+            if "structures" in added:
+                structures = self._structures(payload)
+                for group, conditions in added["structures"].items():
+                    if group == "query":
+                        structures["query"] = combine_queries(
+                            structures.get("query"), conditions
+                        ).model_dump(mode="json", exclude_none=True)
+                        continue
+                    if group == "any":
+                        if structures["any"]["conditions"]:
+                            raise ValueError("a selection has one require-any group")
+                        structures["any"]["minimum"] = conditions["minimum"]
+                        conditions = conditions["conditions"]
+                    destination = (
+                        structures["any"]["conditions"] if group == "any" else structures[group]
+                    )
+                    for condition in conditions:
+                        destination.append(
+                            {
+                                "type": "structure",
+                                "relation": "contains",
+                                "count": {"min": 1},
+                                "id": self._structure_id(structures, group),
+                                **condition,
+                            }
+                        )
+            _validate_constraint_limits(target)
+
+        return self._changed(update)
+
     def where(
         self,
         property_id,
@@ -364,11 +417,22 @@ class Selection:
 
         ``property_id`` is a server ID (``rdkit.mol_wt``) or a short name (``mw``), in
         which case ``units`` may be omitted. A text filter such as ``"mw<=450"`` or a
-        :class:`deepmedchem.subsets.PropertyCondition` may be passed on its own.
+        :class:`deepmedchem.PropertyRange` or legacy PropertyCondition may be passed alone.
         """
 
         from .subsets import PropertyCondition, parse_condition, property_definition
 
+        if isinstance(property_id, PropertyRange):
+            if operator_value or units is not None:
+                raise ValueError("pass either a PropertyRange or property_id with an operator")
+            condition = property_id._to_wire()
+            return self.where(
+                condition["property_id"],
+                units=condition["units"],
+                fidelity=fidelity,
+                missing=missing,
+                **{condition["operator"]: condition["value"]},
+            )
         if not isinstance(property_id, PropertyCondition) and not operator_value:
             property_id = parse_condition(str(property_id))
         if isinstance(property_id, PropertyCondition):
@@ -475,9 +539,7 @@ class Selection:
     def max_per_scaffold(self, value: int) -> Selection:
         if value < 1:
             raise ValueError("max_per_scaffold must be positive")
-        return self._changed(
-            lambda payload: payload["portfolio"].update(max_per_scaffold=value)
-        )
+        return self._changed(lambda payload: payload["portfolio"].update(max_per_scaffold=value))
 
     def include(self, *values: str) -> Selection:
         def update(payload):
@@ -510,9 +572,7 @@ class RunModel(BaseModel):
     def validate_kind(self):
         if self.kind == "selection" and self.selection is None:
             raise ValueError("selection run requires selection")
-        if self.kind == "selection_batch" and (
-            self.selection_template is None or not self.items
-        ):
+        if self.kind == "selection_batch" and (self.selection_template is None or not self.items):
             raise ValueError("selection_batch requires a template and items")
         ids = [item.get("id") for item in self.items]
         if len(ids) != len(set(ids)):

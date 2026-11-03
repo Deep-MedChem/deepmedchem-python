@@ -588,6 +588,58 @@ def _toy(smiles):
     return [float(len(value)) for value in smiles]
 
 
+def test_auto_optimize_passes_routing_and_runs_shared_budget(server):
+    with _client(server) as client:
+        result = dmc.optimize(
+            _toy, direction="maximize", database="auto", databases=["enamine", "freedom"],
+            availability="make_on_demand", budget=10, batch_size=4, name="auto-test",
+            client=client, progress=False,
+        )
+    assert len(result) == 10
+    body = json.loads(server.requests[0].content)
+    assert body["auto"] == {
+        "scope": "orderable", "availability": "make_on_demand",
+        "databases": ["enamine-real-v5a", "freedom-space-5"],
+    }
+    assert body["budget"] == 10
+
+
+def test_async_auto_optimization_create(server):
+    async def run():
+        async with _async_client(server) as client:
+            return await client.optimizations.create(
+                database="auto", scope="all", databases=["enamine"],
+                direction="minimize", budget=10, batch_size=4,
+            )
+    asyncio.run(run())
+    assert json.loads(server.requests[0].content)["auto"] == {
+        "scope": "all", "databases": ["enamine-real-v5a"], "availability": None,
+    }
+
+
+def test_auto_provenance_export(tmp_path):
+    import csv
+
+    sources = [{"database_id": "enamine-real-v5a", "database_release": "v1", "product_id": "p"}]
+    result = OptimizationResult(observations=[{"id": "auto-x", "score": 1, "sources": sources}])
+    assert result.to_records()[0]["sources"] == sources
+    path = tmp_path / "results.csv"
+    result.to_csv(path)
+    with path.open() as stream:
+        assert json.loads(next(csv.DictReader(stream))["sources"]) == sources
+
+
+@pytest.mark.parametrize("options", [
+    {"database": "enamine", "databases": ["enamine"]},
+    {"database": "auto", "objectives": [{"type": "external", "name": "x"}]},
+    {"database": "auto", "databases": [str(i) for i in range(9)]},
+])
+def test_invalid_auto_optimization_options_fail_before_request(server, options):
+    with _client(server) as client, pytest.raises(ValueError):
+        client.optimizations.create(direction="maximize", budget=10, batch_size=4, **options)
+    assert not server.requests
+
+
 def test_optimize_runs_until_budget_and_reports_progress(server, capsys) -> None:
     with _client(server) as client:
         result = dmc.optimize(
@@ -1214,7 +1266,7 @@ def test_optimize_passes_constraints_to_create(server):
 @pytest.mark.parametrize(
     "constraints",
     [
-        [],
+        ["not a constraint"],
         {"structures": []},
         {"properties": {}},
         {"unknown": []},
@@ -1366,3 +1418,167 @@ def test_resume_external_run_requires_callback_before_unpausing(server, objectiv
         with pytest.raises(TypeError, match="score"):
             dmc.resume(opt.id, client=client)
     assert not any(":resume" in str(r.url) for r in server.requests)
+
+
+TYPED_CONSTRAINTS = [
+    dmc.PropertyRange("MolWt", max=400),
+    dmc.RequireStructure("alpha-amino-acid/v1"),
+]
+TYPED_OBJECTIVES = [dmc.Minimize("MolLogP", scale=dmc.Scale(lower=0, upper=3))]
+
+
+def test_typed_sync_and_async_create_have_identical_payloads_and_infer_direction(server):
+    with _client(server) as client:
+        first = client.optimizations.create(
+            database="enamine", budget=4, batch_size=2, name="typed",
+            constraints=TYPED_CONSTRAINTS, objectives=TYPED_OBJECTIVES,
+        )
+        again = client.optimizations.create(
+            database="enamine", budget=4, batch_size=2, name="typed",
+            constraints=tuple(TYPED_CONSTRAINTS), objectives=tuple(TYPED_OBJECTIVES),
+        )
+        assert first.id == again.id
+
+    async def run():
+        async with _async_client(server) as client:
+            again = await client.optimizations.create(
+                database="enamine", budget=4, batch_size=2, name="typed",
+                constraints=TYPED_CONSTRAINTS, objectives=TYPED_OBJECTIVES,
+            )
+            assert first.id == again.id
+
+    asyncio.run(run())
+    payloads = [json.loads(request.content) for request in server.requests]
+    assert payloads[0] == payloads[1] == payloads[2]
+    assert payloads[0]["objective"]["direction"] == "maximize"
+    assert payloads[0]["objectives"][0]["direction"] == "minimize"
+    assert payloads[0]["constraints"]["properties"][0]["value"] == 400
+
+
+def test_typed_high_level_builtin_run_and_resume(server, monkeypatch):
+    original = server.create
+
+    def completed(request):
+        response = original(request)
+        state = server.optimizations[response.json()["id"]]
+        state["resource"].update(status="completed", status_reason="budget_exhausted")
+        state["batch"] = None
+        return httpx.Response(202, json=state["resource"])
+
+    monkeypatch.setattr(server, "create", completed)
+    with _client(server) as client:
+        result = dmc.optimize(
+            constraints=TYPED_CONSTRAINTS, objectives=TYPED_OBJECTIVES,
+            name="typed", budget=4, batch_size=2, client=client, progress=False,
+        )
+        resumed = dmc.resume("typed", client=client, progress=False)
+    assert result.optimization.status == resumed.optimization.status == "completed"
+    assert not any(":submit" in str(request.url) for request in server.requests)
+
+
+def test_typed_mixed_run_submits_raw_callback_scores(server):
+    calls = []
+
+    def score(smiles):
+        calls.extend(smiles)
+        return [-8] * len(smiles)
+
+    with _client(server) as client:
+        result = dmc.optimize(
+            score, constraints=TYPED_CONSTRAINTS,
+            objectives=[
+                dmc.Maximize("rdkit.qed", scale=dmc.Scale(lower=0, upper=1)),
+                dmc.Minimize(dmc.ExternalScore(), scale=dmc.Scale(lower=-12, upper=-4), weight=2),
+            ],
+            budget=4, batch_size=2, client=client, progress=False,
+        )
+    assert len(calls) == 4
+    assert result.optimization.status == "completed"
+    submissions = [json.loads(r.content) for r in server.requests if ":submit" in str(r.url)]
+    assert submissions
+    assert all(row["score"] == -8 for batch in submissions for row in batch["scores"])
+
+
+def test_typed_callback_contract_is_checked_before_constructing_client(monkeypatch):
+    def unexpected_client():
+        pytest.fail("must validate callback before opening a client")
+
+    monkeypatch.setattr(optimization_module, "Client", unexpected_client)
+    with pytest.raises(ValueError, match="external"):
+        dmc.optimize(lambda s: [1] * len(s), objectives=TYPED_OBJECTIVES)
+    with pytest.raises(TypeError, match="score"):
+        dmc.optimize(objectives=[
+            *TYPED_OBJECTIVES,
+            dmc.Minimize(dmc.ExternalScore(), scale=dmc.Scale(lower=-12, upper=-4)),
+        ])
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"constraints": [object()]},
+    {"constraints": [{"pattern_id": "pattern"}]},
+    {"objectives": []},
+    {"objectives": [None]},
+    {"objectives": "rdkit.qed"},
+    {"objectives": TYPED_OBJECTIVES * 17},
+    {"objectives": [dmc.Maximize("MolWt", scale=(0, 500)),
+                    dmc.Maximize("mw", scale=(0, 500))]},
+    {"objectives": [dmc.Minimize(dmc.ExternalScore(), scale=(-12, -4))]},
+    {"constraints": [dmc.PropertyRange("MolWt", max=400)] * 33},
+    {"constraints": [dmc.RequireStructure(smarts="C")] * 17},
+    {"objectives": TYPED_OBJECTIVES, "direction": "minimize"},
+])
+def test_typed_invalid_requests_fail_before_sync_and_async_http(server, kwargs):
+    arguments = {"database": "enamine", "budget": 4, "batch_size": 2,
+                 "direction": "maximize", **kwargs}
+    with _client(server) as client, pytest.raises(ValueError):
+        client.optimizations.create(**arguments)
+
+    async def run():
+        async with _async_client(server) as client:
+            with pytest.raises(ValueError):
+                await client.optimizations.create(**arguments)
+
+    asyncio.run(run())
+    assert not server.requests
+
+
+def test_auto_optimization_retains_typed_constraints_across_driver_and_async_create(server):
+    options = dict(
+        database="auto", databases=["enamine", "freedom"], availability="make_on_demand",
+        direction="minimize", budget=4, batch_size=2, name="typed-auto",
+        constraints=[dmc.PropertyRange("MolWt", max=400),
+                     dmc.RequireStructure("alpha-amino-acid/v1")],
+    )
+    with _client(server) as client:
+        result = dmc.optimize(_toy, **options, client=client, progress=False)
+    assert len(result) == 4
+
+    async def run():
+        async with _async_client(server) as client:
+            return await client.optimizations.create(**options)
+
+    handle = asyncio.run(run())
+    assert handle.id == result.optimization.id
+    bodies = [json.loads(r.content) for r in server.requests
+              if r.method == "POST" and r.url.path == "/api/v2/optimizations"]
+    assert bodies[0] == bodies[1]
+    assert bodies[0]["auto"]["databases"] == ["enamine-real-v5a", "freedom-space-5"]
+    assert bodies[0]["constraints"]["properties"][0]["value"] == 400
+
+
+def test_auto_rejects_typed_builtin_objectives_before_http(server):
+    options = dict(database="auto", budget=4, batch_size=2,
+                   objectives=[dmc.Maximize("rdkit.qed", scale=(0, 1))])
+    with _client(server) as client:
+        with pytest.raises(ValueError, match="external score callback"):
+            client.optimizations.create(**options)
+        with pytest.raises(ValueError, match="external score callback"):
+            dmc.optimize(**options, client=client, progress=False)
+
+    async def run():
+        async with _async_client(server) as client:
+            with pytest.raises(ValueError, match="external score callback"):
+                await client.optimizations.create(**options)
+
+    asyncio.run(run())
+    assert not server.requests
