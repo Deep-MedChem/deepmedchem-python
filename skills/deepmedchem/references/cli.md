@@ -1,7 +1,7 @@
 # `dmc` command reference
 
 Without configured credentials, catalog, unfiltered single-database similarity and sampling
-use guest access where the server enables it (currently the dev API). Python `guest=True`
+use guest access where the server enables it (production and dev APIs). Python `guest=True`
 and CLI `--guest` ignore stored/environment keys. Exact substructure, filters, automatic
 routing, selections, batches and optimization still need an account. Guest results retain
 `mode="guest"` and server warnings; the default server cap is 20 results. `guest_limit`

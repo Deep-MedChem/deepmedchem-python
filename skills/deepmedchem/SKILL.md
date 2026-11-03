@@ -44,7 +44,7 @@ dmc status --verify                # confirms the profile and that the API accep
   https://cheese.deepmedchem.com. Never paste a key into code, logs, or chat output.
 - `dmc login --no-browser` prints only the URL for SSH/containers; `--token-stdin` accepts a key from a pipe.
 - With no configured key, catalog, unfiltered single-database similarity search and sampling
-  use guest access where enabled (currently dev). Use `guest=True` / `--guest` to ignore saved
+  use guest access where enabled (production and dev). Use `guest=True` / `--guest` to ignore saved
   keys; the server normally caps results at 20. Substructure, filters, auto routing and campaigns
   require an account. `missing_api_key` means an account-only operation was called as a guest.
 - `guest_limit` includes retry timing and a login URL in `error.details`; do not loop on it.
