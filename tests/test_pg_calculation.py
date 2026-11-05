@@ -57,9 +57,11 @@ def test_sync_and_async_search_forward_calculation_without_changing_defaults(
         assert "calculation_mode" not in body
 
 
-@pytest.mark.parametrize("mode", ["original", "deprotected"])
 @pytest.mark.parametrize("operation", ["validate", "estimate", "create"])
-def test_retired_pg_constraint_is_not_silently_rewritten(mode, operation):
+def test_pg_exclusion_with_deprotected_mode_is_sent_unchanged_and_refused(operation):
+    # Exclude and evaluate deprotected are separate choices; the server refuses the
+    # combination and the SDK neither drops nor translates either part.
+    mode = "deprotected"
     selection = (
         Selection.from_database("enamine-real-v5a")
         .reference("q", smiles="NCCO")
@@ -67,11 +69,14 @@ def test_retired_pg_constraint_is_not_silently_rewritten(mode, operation):
         .calculation_mode(mode)
     ).to_dict()
     selection["constraints"] = {
-        "structures": {"none": [{"pattern_id": "protecting-groups/v1"}]}
+        "structures": {"none": [{"pattern_id": "protecting-groups/v2"}]}
     }
     original = json.loads(json.dumps(selection))
     sent = []
-    message = "protecting-groups/v1 is retired; use calculation_mode='deprotected'"
+    message = (
+        "PG exclusion (protecting-groups/*) and calculation_mode='deprotected' are "
+        "separate choices; use one of them"
+    )
 
     def handler(request):
         sent.append(json.loads(request.content))
@@ -81,13 +86,13 @@ def test_retired_pg_constraint_is_not_silently_rewritten(mode, operation):
         }})
 
     with Client(api_key="test", transport=httpx.MockTransport(handler)) as client:
-        with pytest.raises(DeepMedChemError, match="is retired") as error:
+        with pytest.raises(DeepMedChemError, match="separate choices") as error:
             getattr(client.selections, operation)(selection)
     assert error.value.status_code == 422 and not error.value.retryable
 
     async def run():
         async with AsyncClient(api_key="test", transport=httpx.MockTransport(handler)) as client:
-            with pytest.raises(DeepMedChemError, match="is retired") as error:
+            with pytest.raises(DeepMedChemError, match="separate choices") as error:
                 await getattr(client.selections, operation)(selection)
             assert error.value.status_code == 422 and not error.value.retryable
 
