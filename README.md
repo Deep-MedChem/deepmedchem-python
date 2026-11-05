@@ -235,30 +235,31 @@ the original search response, so both `hit.price` and the aligned `result.prices
 available without another API request. Databases without price estimates return `None`; run
 `dmc databases` for the current list and the vendor address to request a binding quote.
 
-For a server configured with the experimental PG parent assets, pass
-`calculation_mode="deprotected"` to `search()` (Morgan, shape, or ESP), or use
-`.calculation_mode("deprotected")` on a ranked `Selection`. Ordinary molecules
-remain in the search; approved protected molecules use their deprotected
-calculation structures for retrieval and similarity. The query uses the same
-approved transformation policy. The default is `"original"` and sends no new
-request field to older servers.
+### Protecting groups: include, exclude or evaluate deprotected
 
-In parent mode, `hit.smiles`, product IDs, prices, and constraints still refer to
-the original source. `hit.calculation_smiles` identifies the evaluated structure;
-`result.raw["calculation"]` and `result.warnings` report policy and review coverage.
-HTML exports show both structures when they differ and display optional
-`hit.calculation_reason` for retained exceptions. The local v2 policy covers
-supported Boc, Fmoc, Troc, silyl and trityl contexts. Confirmed detector exceptions
-remain unchanged and searchable with their reason recorded. Unsupported transformations
-are reported and excluded from parent scoring. Salts and counterions are preserved.
-The old `protecting-groups/v1` named exclusion filter is retired: the server rejects
-saved constraints using it with an explicit migration error. Remove that condition
-when deliberately creating a new parent-scoring request; it is never silently
-ignored or translated. PAINS, custom SMARTS and other source constraints retain
-their existing meaning. The SDK's generic pattern builder remains chemistry-thin;
-server validation is authoritative for registered pattern availability.
-Parent calculation requires matching backend
-and core changes plus prepared assets; it is not enabled on existing deployments.
+Building blocks and products can carry protecting groups (Boc, Fmoc, Troc, silyl,
+trityl). There are three choices:
+
+- **Include** (default, `calculation_mode="original"`): protected products are searched
+  and scored as they are. No new request field is sent, so older servers are unaffected.
+- **Exclude**: add the named filter `protecting-groups/v2` to the structure exclusions
+  (`structure_none`, or `constraints.structures.none` in a `Selection`). Products that
+  carry a protecting group are left out.
+- **Evaluate deprotected** (`calculation_mode="deprotected"` in `search()` for Morgan,
+  shape or ESP, or `.calculation_mode("deprotected")` on a ranked `Selection`): every
+  product with a protecting group is evaluated in its deprotected form. Similarity,
+  properties, ADMET and every structure filter (PAINS, SMARTS, substructure) judge the
+  deprotected compound, and the query is deprotected the same way.
+
+In deprotected mode each hit is still the original protected compound: `hit.smiles`,
+product IDs, prices and routes are what you order. `hit.calculation_smiles` is the
+deprotected structure that was evaluated, and `result.raw["calculation"]` reports the
+policy. HTML exports show both structures when they differ. Salts and counterions are
+kept. Exclude and evaluate deprotected are separate choices: a request that combines
+them is refused by the server with an explicit error, and the SDK never rewrites it.
+
+Evaluate deprotected needs a server with prepared deprotection assets for the
+database; it is not enabled on existing deployments.
 
 ## Optimize with explicit chemistry and optional custom scores
 
