@@ -678,7 +678,7 @@ class Client:
         exclude=None,
         max_price=None,
         keep_unpriced=False,
-        database: str,
+        database: str = "auto",
         limit: int = 100,
         timeout_seconds: int = 30,
         include_synthons: bool = False,
@@ -1147,7 +1147,7 @@ class AsyncClient:
     async def search_substructure(
         self, query: str | StructureQuery | QueryNode | dict[str, Any], **kwargs
     ) -> SubstructureResult:
-        database_id = resolve_database(kwargs.pop("database"))
+        database_id = resolve_database(kwargs.pop("database", "auto"))
         synthesis = kwargs.pop("synthesis", None)
         include_catalogues = kwargs.pop("include_catalogues", False)
         availability = kwargs.pop("availability", None)

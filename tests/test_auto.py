@@ -151,3 +151,19 @@ def test_auto_search_and_plan_reuse_typed_constraints():
     assert constraints["properties"][0]["value"] == 400
     assert constraints["structures"]["all"][0]["pattern_id"] == "alpha-amino-acid/v1"
     assert constraints["structures"]["none"][0]["count"] == {"min": 2}
+
+
+def test_substructure_omitted_database_matches_explicit_auto_sync_async_and_facade():
+    captured = []
+    connection = dict(api_key="test", transport=transport(captured))
+    with dmc.Client(**connection) as client:
+        client.search_substructure("CO")
+        client.search_substructure("CO", database="auto")
+    dmc.substructure("CO", **connection)
+
+    async def run():
+        async with dmc.AsyncClient(**connection) as client:
+            await client.search_substructure("CO")
+    asyncio.run(run())
+    assert all(item == captured[0] for item in captured)
+    assert captured[0][0] == "/api/v2/search_auto"
