@@ -512,7 +512,7 @@ def _parser() -> argparse.ArgumentParser:
         "--query-file", metavar="FILE.json", help="Reusable native structure query"
     )
     substructure.add_argument(
-        "-d", "--database", required=True, help="Database abbreviation or full ID"
+        "-d", "--database", default="auto", help="Database abbreviation or full ID (default: auto)"
     )
     substructure.add_argument(
         "-f",

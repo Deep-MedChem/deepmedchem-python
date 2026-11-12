@@ -1042,3 +1042,8 @@ dmc optimize run amino-acid-qed -d enamine --query-file query.json --objectives 
 The query format is `structure-query/1`. Synthon sampling does not support structural
 constraints; catalogue sampling can use them through a selection. These features require
 a compatible server and remain subject to the account/guest capabilities it advertises.
+
+Automatic database selection also applies to `Client.search_substructure`,
+`AsyncClient.search_substructure`, `dmc.substructure`, and `dmc substructure`
+when the database is omitted. Pass an explicit database to restrict the search;
+automatic mode retains its capability, availability, and synthesis-time filters.

@@ -102,7 +102,7 @@ def search(
 def substructure(
     query: str | StructureQuery | QueryNode | dict[str, Any],
     *,
-    database: str,
+    database: str = "auto",
     format: str = "smarts",
     where=None,
     require=None,
