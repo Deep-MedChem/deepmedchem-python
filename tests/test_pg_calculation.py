@@ -133,3 +133,31 @@ def test_invalid_mode_fails_before_transport(mode, direct_cheese):
                 await method("C", database="enamine-real-v5a", calculation_mode=mode, **extra)
 
     asyncio.run(run())
+
+
+def test_deprotected_mode_requires_a_named_database_not_auto():
+    def handler(request):
+        raise AssertionError("no request may be sent")
+
+    with Client(
+        api_key="test", api_url="https://local.test", transport=httpx.MockTransport(handler)
+    ) as client:
+        with pytest.raises(ValueError, match="named database"):
+            client.search("NCCO", calculation_mode="deprotected")
+        with pytest.raises(ValueError, match="named database"):
+            client.search_cheese(
+                "NCCO", database="auto", scorer="shape", calculation_mode="deprotected"
+            )
+
+    async def run_async():
+        async with AsyncClient(
+            api_key="test", api_url="https://local.test", transport=httpx.MockTransport(handler)
+        ) as client:
+            with pytest.raises(ValueError, match="named database"):
+                await client.search("NCCO", calculation_mode="deprotected")
+            with pytest.raises(ValueError, match="named database"):
+                await client.search_cheese(
+                    "NCCO", database="auto", scorer="shape", calculation_mode="deprotected"
+                )
+
+    asyncio.run(run_async())

@@ -493,6 +493,8 @@ class Client:
             databases=databases,
         )
         require_auto(database, availability=availability, scope=scope, databases=databases)
+        if database == "auto" and calculation:
+            raise ValueError("calculation_mode='deprotected' requires a named database, not 'auto'")
         if database == "auto":
             selection = similarity_selection(
                 smiles,
@@ -669,6 +671,7 @@ class Client:
                 method=scorer,
                 limit=limit,
                 include_synthons=include_synthons,
+                calculation_mode=calculation_mode,
             )
         database_id = resolve_database(database)
         return SearchResult.model_validate(
@@ -1071,6 +1074,8 @@ class AsyncClient:
             databases=databases,
         )
         require_auto(database, availability=availability, scope=scope, databases=databases)
+        if database == "auto" and calculation:
+            raise ValueError("calculation_mode='deprotected' requires a named database, not 'auto'")
         if database == "auto":
             selection = similarity_selection(
                 smiles,
