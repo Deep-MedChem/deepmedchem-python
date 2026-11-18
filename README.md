@@ -300,7 +300,14 @@ kept. Exclude and evaluate deprotected are separate choices: a request that comb
 them is refused by the server with an explicit error, and the SDK never rewrites it.
 
 Evaluate deprotected needs a server with prepared deprotection assets for the
-database; it is not enabled on existing deployments.
+database; it is not enabled on existing deployments. It also needs a named database:
+`database="auto"` picks sources by availability, and sources without deprotection
+assets would answer a different question, so that combination is refused locally.
+
+A drawn substructure (`structure_query`) is matched against the deprotected form too,
+so a condition hidden by a protecting group still finds the product. Because the
+matched atoms then belong to the deprotected structure and not to the compound shown,
+such a hit carries no `matched_atom_indices`.
 
 ## Optimize with explicit chemistry and optional custom scores
 
