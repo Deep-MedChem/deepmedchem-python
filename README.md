@@ -300,7 +300,9 @@ kept. Exclude and evaluate deprotected are separate choices: a request that comb
 them is refused by the server with an explicit error, and the SDK never rewrites it.
 
 Evaluate deprotected needs a server with prepared deprotection assets for the
-database; it is not enabled on existing deployments. It also needs a named database:
+database. `client.catalog()` reports which libraries have them: an entry's
+`capabilities["deprotected"]` carries the policy id, or is absent when the library
+cannot evaluate deprotected. It also needs a named database:
 `database="auto"` picks sources by availability, and sources without deprotection
 assets would answer a different question, so that combination is refused locally.
 
