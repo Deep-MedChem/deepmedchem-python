@@ -21,6 +21,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import threading
 import time
 import uuid
 from collections.abc import Iterable, Iterator, Mapping, Sequence
@@ -43,6 +44,8 @@ MAX_RESULT_CELLS = 100_000
 MAX_POLL_INTERVAL = 10.0
 # Retryable errors (network, 429, 503, 504) while waiting are tolerated for this long.
 MAX_OUTAGE_SECONDS = 300.0
+# On-prem search_many: parallel synchronous searches (the backend defaults to one slot).
+MAX_LOCAL_CONCURRENCY = 8
 STATE_SCHEMA_VERSION = "deepmedchem-batch-state/1"
 METHOD_METRICS = {
     "morgan": "rdkit.ecfp4_tanimoto",
@@ -251,10 +254,10 @@ class BatchQueryResult:
 
 @dataclass
 class BatchResult:
-    """Results of one batch run, in input order."""
+    """Results of one batch run, in input order (``run_id`` is None for on-prem searches)."""
 
-    run_id: str
-    idempotency_key: str
+    run_id: str | None
+    idempotency_key: str | None
     status: str
     database: str
     method: str
@@ -625,3 +628,104 @@ def _wait_and_collect(client, state, timeout, poll_interval, on_progress) -> Bat
         limit=state["limit"],
         queries=results,
     )
+
+
+def search_locally(
+    client: Client,
+    queries: Sequence[BatchQuery],
+    *,
+    database: str,
+    method: str,
+    limit: int,
+    timeout: float | None = None,
+    on_progress: Callable[[RunProgress], None] | None = None,
+    max_concurrency: int = 1,
+) -> BatchResult:
+    """Search each query with its own synchronous request (on-prem mode; no durable run).
+
+    Results keep input order and IDs. A query whose request fails is ``failed`` with the
+    API error; queries not sent because ``timeout`` passed or the site became unreachable
+    are ``cancelled`` with the reason. Nothing is retried beyond the client's own retries.
+    """
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    from .client import DeepMedChemError
+
+    if method not in METHOD_METRICS:
+        raise ValueError(f"method must be one of {', '.join(METHOD_METRICS)}")
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+        raise ValueError("limit (hits per query) must be a positive integer")
+    if (
+        isinstance(max_concurrency, bool)
+        or not isinstance(max_concurrency, int)
+        or not 1 <= max_concurrency <= MAX_LOCAL_CONCURRENCY
+    ):
+        raise ValueError(f"max_concurrency must be an integer from 1 to {MAX_LOCAL_CONCURRENCY}")
+    deadline = None if timeout is None else time.monotonic() + timeout
+    stop: list[dict[str, Any]] = []  # first reason to stop sending, shared by worker threads
+    counts = dict.fromkeys(("succeeded", "failed", "cancelled"), 0)
+    lock = threading.Lock()
+
+    def search_one(query: BatchQuery) -> BatchQueryResult:
+        if not stop and deadline is not None and time.monotonic() >= deadline:
+            stop.append(
+                {"code": "client_timeout", "message": f"Not sent: the {timeout} s timeout passed."}
+            )
+        if stop:
+            outcome = BatchQueryResult(query=query, status="cancelled", error=dict(stop[0]))
+        else:
+            try:
+                result = client.search(query.smiles, database=database, method=method, limit=limit)
+                outcome = BatchQueryResult(query=query, status="succeeded", result=result)
+            except DeepMedChemError as error:
+                outcome = BatchQueryResult(query=query, status="failed", error=_error(error))
+                if error.code == "transport_error":
+                    stop.append(
+                        {
+                            "code": "site_unreachable",
+                            "message": "Not sent: an earlier query could not reach the site.",
+                        }
+                    )
+        with lock:
+            counts[outcome.status] += 1
+            if on_progress is not None:
+                pending = len(queries) - sum(counts.values())
+                on_progress(RunProgress(total=len(queries), pending=pending, running=0, **counts))
+        return outcome
+
+    if max_concurrency == 1:
+        results = [search_one(query) for query in queries]
+    else:
+        with ThreadPoolExecutor(max_concurrency, thread_name_prefix="deepmedchem-search") as pool:
+            results = list(pool.map(search_one, queries))
+    if counts["succeeded"] == len(results):
+        status = "completed"
+    elif counts["succeeded"] == 0:
+        status = "failed"
+    else:
+        status = "completed_with_errors"
+    return BatchResult(
+        run_id=None,
+        idempotency_key=None,
+        status=status,
+        database=database,
+        method=method,
+        limit=limit,
+        queries=results,
+    )
+
+
+def _error(error) -> dict[str, Any]:
+    """The API error of one query, in the shape of a hosted run item's ``error``."""
+
+    fields = {
+        "code": error.code,
+        "message": str(error),
+        "status_code": error.status_code,
+        "request_id": error.request_id,
+        "retryable": error.retryable,
+        "field": error.field,
+        "details": error.details,
+    }
+    return {key: value for key, value in fields.items() if value is not None}
