@@ -313,6 +313,10 @@ def _add_connection_options(parser: argparse.ArgumentParser) -> None:
         "--guest", action="store_true", help="Use guest access, ignoring saved keys"
     )
     parser.add_argument("--profile", help="Named profile (default: active profile)")
+    parser.add_argument(
+        "--on-prem", metavar="SITE_URL",
+        help="Use an account-free local CHEESE V2 installation",
+    )
     parser.add_argument("--api-url", help=argparse.SUPPRESS)
     parser.add_argument("--json", action="store_true", help="Print the raw JSON response")
 
@@ -741,6 +745,13 @@ def _profile(args, config) -> str:
 
 
 def _open_client(args) -> Client:
+    if getattr(args, "on_prem", None) is not None:
+        if args.profile or args.guest or args.api_url:
+            raise ValueError(
+                "--on-prem supplies the site URL and cannot be combined with --profile, "
+                "--guest or --api-url"
+            )
+        return Client(on_prem=True, api_url=args.on_prem)
     config = load_config()
     profile = _profile(args, config)
     return Client(
@@ -1175,6 +1186,9 @@ def _search_many(args) -> int:
         except _BatchStopped as stopped:
             return stopped.code
         except KeyboardInterrupt:
+            if getattr(args, "on_prem", None):
+                print("Local batch interrupted.", file=sys.stderr)
+                return 130
             state_path = getattr(args, "_state_path", None)
             if state_path is None:
                 print("\nInterrupted; nothing was submitted.", file=sys.stderr)
@@ -1226,6 +1240,8 @@ def _run_batch(args, client, say):
         wait_and_collect,
     )
 
+    if getattr(args, "on_prem", None) and (args.resume or args.state):
+        raise ValueError("Local search batches run in this client. Remove --state or --resume.")
     if args.resume:
         state_path = Path(args.resume)
         args._state_path = state_path
@@ -1248,6 +1264,11 @@ def _run_batch(args, client, say):
         duplicates = len(queries) - len({query.smiles for query in queries})
         note = f" ({duplicates} repeat an earlier SMILES and are kept)" if duplicates else ""
         say(f"Read {len(queries)} query molecules from {args.input}{note}.")
+        if getattr(args, "on_prem", None):
+            return client.search_many(
+                queries, database=database_id, method=args.method, limit=args.limit,
+                on_progress=_batch_progress(),
+            )
         run = build_run(queries, database=database_id, method=args.method, limit=args.limit)
         estimate = client.runs.estimate(run)
         items = (estimate.get("work") or {}).get("items", len(queries))
@@ -1305,9 +1326,13 @@ def _print_batch_summary(result) -> None:
             align_right=[False, False, True, True, False],
         )
     )
+    completion = (
+        f"Run {result.run_id}, status {result.status}."
+        if result.run_id else f"Local batch {result.status}."
+    )
     print(
         f"{len(result.succeeded)} succeeded ({len(result.empty)} without hits), "
-        f"{len(result.failed)} failed. Run {result.run_id}, status {result.status}."
+        f"{len(result.failed)} failed. {completion}"
     )
 
 

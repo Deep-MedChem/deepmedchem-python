@@ -305,3 +305,21 @@ def test_catalog_display_order_and_unavailable_enamine_prices(capsys):
         if not detailed:
             assert lines[0].split() == ["enamine", "1K", "-", "info@enamine.net"]
     assert json.dumps(catalog) == original
+
+
+def test_on_prem_cli_uses_only_explicit_site(monkeypatch):
+    requests = []
+
+    def record(request):
+        assert request.url.host == "cheese.internal"
+        assert "x-api-key" not in request.headers
+        requests.append(request.url.path)
+        return httpx.Response(200, json=CATALOG)
+
+    factory = functools.partial(Client, transport=httpx.MockTransport(record))
+    monkeypatch.setattr(cli, "Client", factory)
+    monkeypatch.setenv("DEEPMEDCHEM_API_KEY", "unused-hosted-key")
+    args = cli._parser().parse_args(["databases", "--on-prem", "http://cheese.internal"])
+    with cli._open_client(args) as client:
+        assert client.catalog() == CATALOG
+    assert requests == ["/api/v2/catalog"]

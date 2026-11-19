@@ -64,6 +64,49 @@ class RetiredDatabaseError(DeepMedChemError, ValueError):
     """The platform API does not serve a database that classic CHEESE Search used to."""
 
 
+class UnsupportedOnPremError(DeepMedChemError, ValueError):
+    """An argument or operation needs the hosted durable-run service, absent on-prem."""
+
+
+def _reject_durable_only(operation: str, **arguments: Any) -> None:
+    given = [name for name, value in arguments.items() if value is not None]
+    if given:
+        raise UnsupportedOnPremError(
+            f"{operation}: {', '.join(given)} only applies to hosted durable runs. An "
+            "on_prem=True client searches each query with its own synchronous request, so "
+            "there is no server-side run to save, poll or resume; drop the argument.",
+            code="unsupported_on_prem",
+            field=given[0],
+        )
+
+
+def _site(
+    api_key: str | None,
+    api_url: str | None,
+    *,
+    guest: bool,
+    profile: str | None,
+    credential_provider: CredentialSource | None,
+    on_prem: bool,
+) -> tuple[str, str | None]:
+    """Return the base URL and API key; on-prem mode reads no saved settings or credentials."""
+
+    if not on_prem:
+        config = load_config()
+        selected_profile = resolve_profile(profile, config)
+        selected = config.profile(selected_profile)
+        url = api_url or selected.api_url or DEFAULT_API_URL
+        token = _credentials(api_key, credential_provider, profile=selected_profile, guest=guest)
+        return url, token
+    if not api_url or not api_url.startswith(("http://", "https://")):
+        raise ValueError("on_prem=True requires api_url, the on-prem site's http(s) URL")
+    if guest or profile is not None or credential_provider is not None:
+        raise ValueError(
+            "on_prem=True cannot be combined with guest, profile or credential_provider"
+        )
+    return api_url, api_key or None
+
+
 def _sent_database_ids(value: Any) -> Iterator[str]:
     """Yield every ``database_id`` in a request body (search, selection or run template)."""
 
@@ -320,6 +363,11 @@ class Client:
 
     Set ``guest=True`` to skip saved/environment credentials. Account-only operations
     require a configured key. ``is_guest`` reports the resolved authentication mode.
+
+    ``on_prem=True`` talks only to the site at ``api_url`` (required): no profile, saved,
+    environment or provider credentials are read, guest restrictions do not apply, and
+    :meth:`search_many` sends one synchronous search per query instead of a durable run.
+    An explicit ``api_key`` is still sent if the site requires one.
     """
 
     def __init__(
@@ -336,17 +384,22 @@ class Client:
         application_version: str | None = None,
         max_retries: int = 2,
         retry_backoff: float = 0.25,
+        on_prem: bool = False,
     ) -> None:
         if max_retries < 0:
             raise ValueError("max_retries must be non-negative")
         if retry_backoff < 0:
             raise ValueError("retry_backoff must be non-negative")
-        config = load_config()
-        selected_profile = resolve_profile(profile, config)
-        selected = config.profile(selected_profile)
-        configured_url = api_url or selected.api_url or DEFAULT_API_URL
-        token = _credentials(api_key, credential_provider, profile=selected_profile, guest=guest)
-        self.is_guest = token is None
+        configured_url, token = _site(
+            api_key,
+            api_url,
+            guest=guest,
+            profile=profile,
+            credential_provider=credential_provider,
+            on_prem=on_prem,
+        )
+        self.is_on_prem = on_prem
+        self.is_guest = token is None and not on_prem
         client_version = application_version or __version__
         self._client = httpx.Client(
             base_url=configured_url.rstrip("/"),
@@ -566,8 +619,9 @@ class Client:
         limit: int = 20,
         state_file: str | os.PathLike[str] | None = None,
         timeout: float | None = None,
-        poll_interval: float = 1.0,
+        poll_interval: float | None = None,
         on_progress=None,
+        max_concurrency: int | None = None,
     ):
         """Search each query molecule separately in one durable run and wait for the results.
 
@@ -583,12 +637,35 @@ class Client:
         sent carries ``error.state``; pass that to :meth:`resume_search_many`.
         Short network outages while waiting are retried automatically.
         Never prompts, so it is safe in scripts.
+
+        On an ``on_prem=True`` client there is no run: each query is one synchronous
+        search, at most ``max_concurrency`` (default 1) at a time, and the result keeps
+        the same IDs, order and per-query errors with ``run_id=None``. ``timeout`` bounds
+        the whole call; queries not sent in time are ``cancelled``. ``state_file`` and
+        ``poll_interval`` raise :class:`UnsupportedOnPremError`.
         """
 
-        from .batch import normalize_queries, start_batch, wait_and_collect
+        from .batch import normalize_queries, search_locally, start_batch, wait_and_collect
 
+        if self.is_on_prem:
+            _reject_durable_only(
+                "search_many", state_file=state_file, poll_interval=poll_interval
+            )
+        elif max_concurrency is not None:
+            raise ValueError("max_concurrency applies only to on_prem=True clients")
         database_id = resolve_database(database)
         query_list = normalize_queries(queries)
+        if self.is_on_prem:
+            return search_locally(
+                self,
+                query_list,
+                database=database_id,
+                method=method,
+                limit=limit,
+                timeout=timeout,
+                on_progress=on_progress,
+                max_concurrency=1 if max_concurrency is None else max_concurrency,
+            )
         state = start_batch(
             self,
             query_list,
@@ -601,7 +678,7 @@ class Client:
             self,
             state,
             timeout=timeout,
-            poll_interval=poll_interval,
+            poll_interval=1.0 if poll_interval is None else poll_interval,
             on_progress=on_progress,
             state_file=state_file,
         )
@@ -624,6 +701,12 @@ class Client:
 
         from .batch import ensure_started, load_state, wait_and_collect
 
+        if self.is_on_prem:
+            raise UnsupportedOnPremError(
+                "resume_search_many reconnects to a hosted durable run; on_prem=True "
+                "search_many returns its results directly and leaves nothing to resume.",
+                code="unsupported_on_prem",
+            )
         state_file = None if isinstance(state, dict) else state
         loaded = state if isinstance(state, dict) else load_state(state)
         ensure_started(self, loaded, state_file)
@@ -917,7 +1000,7 @@ class _AsyncRuns:
 
 
 class AsyncClient:
-    """Async counterpart of :class:`Client`, including automatic/explicit guest access."""
+    """Async counterpart of :class:`Client`, including guest access and ``on_prem=True``."""
 
     def __init__(
         self,
@@ -933,17 +1016,22 @@ class AsyncClient:
         application_version: str | None = None,
         max_retries: int = 2,
         retry_backoff: float = 0.25,
+        on_prem: bool = False,
     ) -> None:
         if max_retries < 0:
             raise ValueError("max_retries must be non-negative")
         if retry_backoff < 0:
             raise ValueError("retry_backoff must be non-negative")
-        config = load_config()
-        selected_profile = resolve_profile(profile, config)
-        selected = config.profile(selected_profile)
-        configured_url = api_url or selected.api_url or DEFAULT_API_URL
-        token = _credentials(api_key, credential_provider, profile=selected_profile, guest=guest)
-        self.is_guest = token is None
+        configured_url, token = _site(
+            api_key,
+            api_url,
+            guest=guest,
+            profile=profile,
+            credential_provider=credential_provider,
+            on_prem=on_prem,
+        )
+        self.is_on_prem = on_prem
+        self.is_guest = token is None and not on_prem
         client_version = application_version or __version__
         self._client = httpx.AsyncClient(
             base_url=configured_url.rstrip("/"),

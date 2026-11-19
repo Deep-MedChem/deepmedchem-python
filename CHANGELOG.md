@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.0b7+onprem1 — 2026-11-19 (offline V2 pilot build; not for PyPI)
+
+- Add `Client(api_url=..., on_prem=True)` / `AsyncClient(..., on_prem=True)`: talk only to the
+  given site, read no profile, saved, environment or provider credentials, and apply no guest
+  restrictions. An explicit `api_key` is still sent.
+- On-prem `search_many` sends one synchronous search per query (`max_concurrency`, default 1,
+  at most 8), keeping query IDs, order and per-query errors (`run_id=None`). `state_file`,
+  `poll_interval` and `resume_search_many` raise `UnsupportedOnPremError`
+  (`code="unsupported_on_prem"`).
+
 ## 0.4.0b7 — 2026-11-03
 
 - Allow structural catalogue sampling through the sync/async sample helpers and CLI; the server checks each release's capabilities. Synthon sampling with structural constraints remains unsupported.
