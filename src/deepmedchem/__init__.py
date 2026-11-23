@@ -1,6 +1,6 @@
 """Official Python client for the DeepMedChem platform API."""
 
-__version__ = "0.4.0b7+onprem1"
+__version__ = "0.4.0b7+onprem2"
 
 from . import aio, subsets
 from .batch import BatchQuery, BatchQueryResult, BatchResult, read_queries

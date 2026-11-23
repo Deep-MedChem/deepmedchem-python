@@ -7,7 +7,7 @@
 [![Production API](https://img.shields.io/badge/API-api.deepmedchem.com-0A7EA4?style=flat-square)](https://api.deepmedchem.com/api/v2/docs)
 [![Documentation](https://img.shields.io/badge/docs-docs.deepmedchem.com-4B32C3?style=flat-square)](https://docs.deepmedchem.com/)
 
-The official, chemistry-thin Python client for the DeepMedChem hosted chemical-space platform.
+The official, chemistry-thin Python client for the DeepMedChem chemical-space platform and on-prem CHEESE installations.
 It contains no RDKit, models, databases, or proprietary search implementation.
 
 > **Beta:** `deepmedchem` 0.4 is available for early use. APIs may still change before the
@@ -33,7 +33,37 @@ on its own. The key goes to the OS keyring when one is available, otherwise to a
 file (mode 0600) next to the SDK config. Use `--no-browser` to force the print-only behaviour and
 `--token-stdin` to paste an existing key from a pipe.
 
-## Search without an account
+## Use your on-prem CHEESE deployment
+
+Install the `deepmedchem` wheel supplied with your deployment. The `onprem2` pilot wheelhouse includes pinned dependencies for Linux x86-64 and CPython 3.11. To install from extracted release media into an active virtual environment:
+
+```bash
+python -m pip install --no-index --find-links ./sdk/wheelhouse --require-hashes -r ./sdk/wheelhouse/requirements.lock
+```
+
+Give the client your installation’s base URL. Replace the example hostname with the one your company provides. All requests go to that site, including the catalog lookup. No login or per-user API key is required.
+
+```python
+from deepmedchem import Client
+
+with Client(on_prem=True, api_url="https://cheese.your-pharma-company.com") as cheese:
+    print([library["database_id"] for library in cheese.catalog()["libraries"]])
+    hits = cheese.search("O=C(O)CNc1ccc(Br)c(Cl)c1C(=O)O", database="mcule-aa-in-stock", limit=3)
+    for hit in hits.hits:
+        print(hit.catalog_id, hit.score)
+```
+
+For a shared notebook kernel or shell, configure the site once:
+
+```bash
+export DEEPMEDCHEM_ON_PREM_URL=https://cheese.your-pharma-company.com
+dmc databases
+python examples/docs/on_prem_search.py
+```
+
+In this environment `Client()`, `AsyncClient()` and the Python search helpers use the configured site and skip saved cloud credentials. In a portable notebook, use `Client(on_prem=True)` so a missing kernel setting raises an error before sending a query. Open the [on-prem search notebook](examples/notebooks/on_prem_search.ipynb) in the **CHEESE (on-prem)** kernel. The [runnable search example](examples/docs/on_prem_search.py) also accepts `--site` and `--database`. The site serves its API documentation at `/api/v2/docs`.
+
+## Hosted search without an account
 
 When no API key is configured, the SDK uses guest access for catalog, unfiltered
 single-database similarity search (Morgan, shape or ESP), and sampling. Pass `guest=True`

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.0b7+onprem2 — 2026-11-23
+
+- A notebook kernel or shell can set `DEEPMEDCHEM_ON_PREM_URL` once for keyless Python and CLI access to its own CHEESE installation.
+
 ## 0.4.0b7+onprem1 — 2026-11-19 (offline V2 pilot build; not for PyPI)
 
 - Add `Client(api_url=..., on_prem=True)` / `AsyncClient(..., on_prem=True)`: talk only to the

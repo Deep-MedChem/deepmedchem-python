@@ -26,6 +26,7 @@ from .config import (
     FILE_STORE,
     CredentialError,
     config_path,
+    configured_on_prem_url,
     credentials_path,
     delete_all_api_keys,
     delete_api_key,
@@ -1875,6 +1876,22 @@ _COMMANDS = {
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        site = configured_on_prem_url()
+        if site is not None:
+            if args.command in {"login", "logout"}:
+                raise ValueError("This on-prem environment uses keyless access.")
+            if args.command == "status":
+                if args.profile:
+                    raise ValueError("An on-prem environment does not use hosted profiles.")
+                status = {"api_url": site, "mode": "on_prem"}
+                if args.verify:
+                    with Client(on_prem=True, api_url=site) as client:
+                        client.catalog()
+                    status["verified"] = True
+                print(json.dumps(status) if args.json else f"On-prem API: {site}")
+                return 0
+            if getattr(args, "on_prem", None) is None:
+                args.on_prem = site
         return _COMMANDS[args.command](args)
     except (CredentialError, LoginError, ValueError, ImportError, OSError) as error:
         print(str(error), file=sys.stderr)

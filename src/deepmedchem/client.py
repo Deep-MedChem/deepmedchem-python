@@ -14,6 +14,7 @@ from .auto import auto_options, require_auto, routing_database, similarity_plan
 from .config import (
     DEFAULT_API_URL,
     CredentialSource,
+    configured_on_prem_url,
     load_config,
     resolve_api_key,
     resolve_profile,
@@ -88,23 +89,29 @@ def _site(
     profile: str | None,
     credential_provider: CredentialSource | None,
     on_prem: bool,
-) -> tuple[str, str | None]:
-    """Return the base URL and API key; on-prem mode reads no saved settings or credentials."""
+) -> tuple[str, str | None, bool]:
+    """Resolve the site, token and mode without reading hosted settings in on-prem mode."""
 
+    site = configured_on_prem_url()
+    if site is not None:
+        if api_url is not None and api_url.rstrip("/") != site:
+            raise ValueError("api_url conflicts with DEEPMEDCHEM_ON_PREM_URL")
+        api_url = site
+        on_prem = True
     if not on_prem:
         config = load_config()
         selected_profile = resolve_profile(profile, config)
         selected = config.profile(selected_profile)
         url = api_url or selected.api_url or DEFAULT_API_URL
         token = _credentials(api_key, credential_provider, profile=selected_profile, guest=guest)
-        return url, token
+        return url, token, False
     if not api_url or not api_url.startswith(("http://", "https://")):
         raise ValueError("on_prem=True requires api_url, the on-prem site's http(s) URL")
     if guest or profile is not None or credential_provider is not None:
         raise ValueError(
             "on_prem=True cannot be combined with guest, profile or credential_provider"
         )
-    return api_url, api_key or None
+    return api_url, api_key or None, True
 
 
 def _sent_database_ids(value: Any) -> Iterator[str]:
@@ -364,7 +371,8 @@ class Client:
     Set ``guest=True`` to skip saved/environment credentials. Account-only operations
     require a configured key. ``is_guest`` reports the resolved authentication mode.
 
-    ``on_prem=True`` talks only to the site at ``api_url`` (required): no profile, saved,
+    Set ``DEEPMEDCHEM_ON_PREM_URL`` or pass ``on_prem=True`` with ``api_url``.
+    On-prem clients talk only to the configured site: no profile, saved,
     environment or provider credentials are read, guest restrictions do not apply, and
     :meth:`search_many` sends one synchronous search per query instead of a durable run.
     An explicit ``api_key`` is still sent if the site requires one.
@@ -390,7 +398,7 @@ class Client:
             raise ValueError("max_retries must be non-negative")
         if retry_backoff < 0:
             raise ValueError("retry_backoff must be non-negative")
-        configured_url, token = _site(
+        configured_url, token, self.is_on_prem = _site(
             api_key,
             api_url,
             guest=guest,
@@ -398,8 +406,7 @@ class Client:
             credential_provider=credential_provider,
             on_prem=on_prem,
         )
-        self.is_on_prem = on_prem
-        self.is_guest = token is None and not on_prem
+        self.is_guest = token is None and not self.is_on_prem
         client_version = application_version or __version__
         self._client = httpx.Client(
             base_url=configured_url.rstrip("/"),
@@ -1022,7 +1029,7 @@ class AsyncClient:
             raise ValueError("max_retries must be non-negative")
         if retry_backoff < 0:
             raise ValueError("retry_backoff must be non-negative")
-        configured_url, token = _site(
+        configured_url, token, self.is_on_prem = _site(
             api_key,
             api_url,
             guest=guest,
@@ -1030,8 +1037,7 @@ class AsyncClient:
             credential_provider=credential_provider,
             on_prem=on_prem,
         )
-        self.is_on_prem = on_prem
-        self.is_guest = token is None and not on_prem
+        self.is_guest = token is None and not self.is_on_prem
         client_version = application_version or __version__
         self._client = httpx.AsyncClient(
             base_url=configured_url.rstrip("/"),

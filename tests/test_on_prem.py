@@ -185,3 +185,43 @@ def test_hosted_search_many_rejects_on_prem_only_concurrency(monkeypatch):
         assert not client.is_on_prem
         with pytest.raises(ValueError, match="max_concurrency"):
             client.search_many(["CCO"], database="enamine-real", max_concurrency=2)
+
+
+def test_shared_site_binds_both_default_clients(monkeypatch):
+    seen = []
+    monkeypatch.setenv("DEEPMEDCHEM_ON_PREM_URL", SITE + "/")
+    monkeypatch.setenv("DEEPMEDCHEM_API_URL", "https://cloud.invalid")
+    with Client(transport=search_site(seen)) as client:
+        assert client.is_on_prem and not client.is_guest
+        client.catalog()
+
+    async def check_async():
+        async with AsyncClient(transport=search_site(seen)) as client:
+            assert client.is_on_prem and not client.is_guest
+            await client.catalog()
+
+    asyncio.run(check_async())
+    assert seen == [("/api/v2/catalog", None)] * 2
+    with pytest.raises(ValueError, match="conflicts"):
+        Client(api_url="https://elsewhere.invalid")
+
+
+@pytest.mark.parametrize("site", ["", "host", "https://", SITE + "/api/v2", "https://user@host"])
+def test_invalid_shared_site_fails_before_hosted_configuration(monkeypatch, site):
+    monkeypatch.setenv("DEEPMEDCHEM_ON_PREM_URL", site)
+    with pytest.raises(ValueError, match="DEEPMEDCHEM_ON_PREM_URL"):
+        Client()
+
+
+def test_shared_cli_uses_keyless_site_for_data_and_status(monkeypatch, capsys):
+    from deepmedchem import cli
+
+    seen = []
+    monkeypatch.setenv("DEEPMEDCHEM_ON_PREM_URL", SITE)
+    monkeypatch.setattr(cli, "Client", lambda **kw: Client(transport=search_site(seen), **kw))
+    assert cli.main(["databases", "--json"]) == 0
+    assert cli.main(["status", "--verify", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out.splitlines()[-1])["api_url"] == SITE
+    assert cli.main(["login"]) == 1
+    assert cli.main(["databases", "--on-prem", "https://elsewhere.invalid"]) == 1
+    assert seen == [("/api/v2/catalog", None)] * 2
