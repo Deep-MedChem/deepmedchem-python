@@ -8,6 +8,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Protocol, Union, runtime_checkable
+from urllib.parse import urlsplit
 
 try:
     import tomllib
@@ -24,6 +25,21 @@ SERVICE = "deepmedchem"
 ACCOUNT = "default-api-key"
 LEGACY_SERVICE = "dmc-navigator"
 LEGACY_ACCOUNT = "platform-token"
+
+
+def configured_on_prem_url() -> str | None:
+    """A managed notebook or shell can select one account-free CHEESE origin."""
+    value = os.environ.get("DEEPMEDCHEM_ON_PREM_URL")
+    if value is None:
+        return None
+    url = urlsplit(value)
+    if (
+        url.scheme not in {"http", "https"} or not url.hostname or url.username is not None
+        or url.path not in {"", "/"} or url.query or url.fragment
+        or any(char.isspace() for char in value)
+    ):
+        raise ValueError("DEEPMEDCHEM_ON_PREM_URL must be the site's HTTP(S) origin")
+    return value.rstrip("/")
 
 
 class CredentialError(RuntimeError):

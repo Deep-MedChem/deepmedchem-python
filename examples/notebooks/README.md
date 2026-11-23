@@ -1,5 +1,7 @@
 # Jupyter notebooks
 
+Open [On-prem CHEESE search](on_prem_search.ipynb) with the **CHEESE (on-prem)** kernel to list and search the libraries on your company’s server. The kernel supplies the URL and the notebook requires no API key.
+
 [`enamine_search.ipynb`](enamine_search.ipynb) is a small end-to-end example that searches
 Enamine REAL through the DeepMedChem API and uses RDKit to draw the query and a labeled result
 grid. It also includes junction-spanning SMILES and genuine SQC-derived SMARTS substructure
@@ -15,5 +17,5 @@ pip install jupyterlab pandas rdkit
 jupyter lab examples/notebooks/enamine_search.ipynb
 ```
 
-Run `dmc login` first, or provide `DEEPMEDCHEM_API_KEY` through your environment. Never
+For the hosted Enamine notebook, run `dmc login` first, or provide `DEEPMEDCHEM_API_KEY` through your environment. Never
 put a real key in a notebook or commit one.

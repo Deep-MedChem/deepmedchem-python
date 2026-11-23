@@ -1,6 +1,7 @@
 import hashlib
 import json
 import runpy
+import sys
 from pathlib import Path
 
 import httpx
@@ -40,6 +41,10 @@ def _run_resource():
 def _handler(request):
     path = request.url.path
     body = json.loads(request.content or b"{}")
+    if request.url.host == "cheese.your-pharma-company.com":
+        assert "x-api-key" not in request.headers
+        if path == "/api/v2/catalog":
+            return httpx.Response(200, json={"libraries": [{"database_id": "mcule-aa-in-stock"}]})
     if path in {
         "/api/v2/search",
         "/api/v2/search_cheese",
@@ -139,11 +144,16 @@ def test_every_published_sdk_example_executes(monkeypatch, tmp_path):
 
     executed = []
     for path in sorted(EXAMPLES.glob("*.py")):
-        runpy.run_path(path, run_name=f"docs_example_{path.stem}")
+        argv = [str(path)]
+        if path.name == "on_prem_search.py":
+            argv += ["--site", "https://cheese.your-pharma-company.com"]
+        monkeypatch.setattr(sys, "argv", argv)
+        runpy.run_path(path, run_name="__main__")
         executed.append(path.name)
 
     assert executed == [
         "durable_runs.py",
+        "on_prem_search.py",
         "optimize.py",
         "property_filtered_sampling.py",
         "python_quickstart.py",
