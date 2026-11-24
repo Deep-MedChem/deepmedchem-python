@@ -34,7 +34,9 @@ from .client import (
 from .config import Config, CredentialError, CredentialProvider
 from .facade import catalog, sample, search, substructure, usage
 from .models import (
+    AlsoIn,
     Batch,
+    CombinedHit,
     Hit,
     Molecule,
     Observation,
@@ -48,6 +50,7 @@ from .models import (
     SubstructureResult,
     SynthesisEstimate,
     Usage,
+    combine_results,
 )
 from .optimization import (
     AsyncOptimization,
@@ -74,6 +77,7 @@ from .subsets import SUBSETS, Filters, Pattern, PropertyCondition, Subset
 
 __all__ = [
     "AllOf",
+    "AlsoIn",
     "AnyOf",
     "AsyncClient",
     "AsyncDMCClient",
@@ -84,6 +88,7 @@ __all__ = [
     "BatchQueryResult",
     "BatchResult",
     "Client",
+    "CombinedHit",
     "Config",
     "Constraint",
     "Constraints",
@@ -141,6 +146,7 @@ __all__ = [
     "__version__",
     "aio",
     "catalog",
+    "combine_results",
     "normalize_scores",
     "optimize",
     "prepare_order",

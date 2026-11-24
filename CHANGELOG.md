@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- On-prem CHEESE: `Hit.structure_id` (the same structure has the same ID in every library) and
+  `Hit.also_in` (the other installed catalogues that hold it) are typed fields. `also_in` is
+  `None` when the site did not look and empty when no other catalogue holds the structure.
+- Add `combine_results(results, library_order=...)`: searches of several libraries as one row
+  per structure, best score first, with the cheapest priced source chosen (else the first
+  library) and every source listed. Requires a site that sends `structure_id`.
+
 ## 0.4.0b7+onprem2 — 2026-11-23
 
 - A notebook kernel or shell can set `DEEPMEDCHEM_ON_PREM_URL` once for keyless Python and CLI access to its own CHEESE installation.

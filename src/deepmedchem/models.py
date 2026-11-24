@@ -65,6 +65,19 @@ class SynthesisEstimate(APIModel):
         return f"{duration} {unit}"
 
 
+class AlsoIn(APIModel):
+    """Another installed catalogue that holds the same structure as a hit (on-prem CHEESE)."""
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    database_id: str
+    database_release: str | None = None
+    vendor: str | None = None
+    availability: str | None = None
+    catalog_id: str | None = None
+    price: int | None = None
+
+
 class Hit(APIModel):
     """One typed, immutable row in a molecular result."""
 
@@ -86,6 +99,11 @@ class Hit(APIModel):
     sources: list[dict[str, Any]] | None = None
     synthesis: SynthesisEstimate | None = None
     availability: str | None = None
+    # On-prem CHEESE: the same structure has the same structure_id in every library
+    # (product_id is per library), and also_in names the other installed catalogues that
+    # hold it. also_in is None when the site did not look, and empty when none holds it.
+    structure_id: str | None = None
+    also_in: tuple[AlsoIn, ...] | None = None
 
     @property
     def extra(self) -> Mapping[str, Any]:
@@ -106,6 +124,8 @@ class Hit(APIModel):
             "sources",
             "synthesis",
             "availability",
+            "structure_id",
+            "also_in",
         }
         return {key: value for key, value in self.raw.items() if key not in common}
 
@@ -277,6 +297,83 @@ class SearchResult(APIModel, Sequence[str]):
                 "`python -m pip install pandas`."
             ) from error
         return pd.DataFrame.from_records(self.to_records())
+
+
+class CombinedHit(BaseModel):
+    """One structure found by searches of several libraries, with every place it can be had."""
+
+    model_config = ConfigDict(frozen=True)
+
+    structure_id: str | None = None
+    smiles: str
+    score: float | None = None
+    metric: str | None = None
+    # The chosen source (sources[0]): the cheapest priced one, else the first library.
+    database_id: str | None = None
+    catalog_id: str | None = None
+    price: int | None = None
+    sources: tuple[AlsoIn, ...] = ()
+
+
+def combine_results(
+    results: Sequence[SearchResult], *, library_order: Sequence[str] | None = None
+) -> list[CombinedHit]:
+    """Merge searches of several libraries into one row per structure, best score first.
+
+    Hits with the same ``structure_id`` are one structure. Its sources are the searched
+    libraries that returned it and the other catalogues the site found it in (``also_in``).
+    The cheapest priced source is chosen; without any price, the first library in
+    ``library_order`` (pass ``client.catalog()["library_order"]``; by default the order of
+    ``results``). Hits without a ``structure_id`` stay one row each.
+    """
+
+    if library_order is None:
+        library_order = [result.database_id for result in results if result.database_id]
+    position = {database_id: index for index, database_id in enumerate(library_order)}
+    rows: dict[str, dict[str, Any]] = {}
+    for result in results:
+        for hit in result.hits:
+            database_id = hit.database_id or result.database_id
+            key = hit.structure_id or f"{database_id}|{hit.product_id}|{hit.rank}"
+            row = rows.setdefault(key, {"hit": hit, "sources": []})
+            best = row["hit"].score
+            if hit.score is not None and (best is None or hit.score > best):
+                row["hit"] = hit
+            own = AlsoIn(
+                database_id=database_id or "",
+                database_release=hit.database_release or result.database_release,
+                catalog_id=hit.raw.get("catalog_id"),
+                price=hit.price,
+            )
+            for source in (own, *(hit.also_in or ())):
+                if all(known.database_id != source.database_id for known in row["sources"]):
+                    row["sources"].append(source)
+
+    def preference(source: AlsoIn) -> tuple[int, int, int]:
+        rank = position.get(source.database_id, len(position))
+        return (0, source.price, rank) if source.price is not None else (1, 0, rank)
+
+    combined = []
+    for row in rows.values():
+        hit, sources = row["hit"], sorted(row["sources"], key=preference)
+        combined.append(
+            CombinedHit(
+                structure_id=hit.structure_id,
+                smiles=hit.smiles,
+                score=hit.score,
+                metric=hit.metric,
+                database_id=sources[0].database_id or None,
+                catalog_id=sources[0].catalog_id,
+                price=sources[0].price,
+                sources=tuple(sources),
+            )
+        )
+    # A substructure search has no score and keeps the order the hits arrived in.
+    return sorted(
+        combined,
+        key=lambda item: item.score if item.score is not None else float("-inf"),
+        reverse=True,
+    )
 
 
 class SubstructureResult(SearchResult):
