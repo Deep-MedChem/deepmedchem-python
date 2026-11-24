@@ -53,6 +53,21 @@ with Client(on_prem=True, api_url="https://cheese.your-pharma-company.com") as c
         print(hit.catalog_id, hit.score)
 ```
 
+A site with several libraries marks each hit with a `structure_id` (the same structure has the same ID in every library) and lists the other catalogues that hold it in `also_in`. To search several libraries and keep each compound once:
+
+```python
+from deepmedchem import Client, combine_results
+
+with Client(on_prem=True, api_url="https://cheese.your-pharma-company.com") as cheese:
+    catalog = cheese.catalog()
+    results = [cheese.search("O=C(O)CNc1ccc(Br)c(Cl)c1C(=O)O", database=library["database_id"], limit=50)
+               for library in catalog["libraries"]]
+    for compound in combine_results(results, library_order=catalog.get("library_order")):
+        print(compound.database_id, compound.catalog_id, compound.score, [source.database_id for source in compound.sources[1:]])
+```
+
+Each row names the chosen source first: the cheapest where prices exist, otherwise the first library in the site's order.
+
 For a shared notebook kernel or shell, configure the site once:
 
 ```bash
