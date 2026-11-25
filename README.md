@@ -321,6 +321,41 @@ the original search response, so both `hit.price` and the aligned `result.prices
 available without another API request. Databases without price estimates return `None`; run
 `dmc databases` for the current list and the vendor address to request a binding quote.
 
+### Protecting groups: include, exclude or evaluate deprotected
+
+Building blocks and products can carry protecting groups (Boc, Fmoc, Troc, silyl,
+trityl). There are three choices:
+
+- **Include** (default, `calculation_mode="original"`): protected products are searched
+  and scored as they are. No new request field is sent, so older servers are unaffected.
+- **Exclude**: add the named filter `protecting-groups/v2` to the structure exclusions
+  (`structure_none`, or `constraints.structures.none` in a `Selection`). Products that
+  carry a protecting group are left out.
+- **Evaluate deprotected** (`calculation_mode="deprotected"` in `search()` for Morgan,
+  shape or ESP, or `.calculation_mode("deprotected")` on a ranked `Selection`): every
+  product with a protecting group is evaluated in its deprotected form. Similarity,
+  properties, ADMET and every structure filter (PAINS, SMARTS, substructure) judge the
+  deprotected compound, and the query is deprotected the same way.
+
+In deprotected mode each hit is still the original protected compound: `hit.smiles`,
+product IDs, prices and routes are what you order. `hit.calculation_smiles` is the
+deprotected structure that was evaluated, and `result.raw["calculation"]` reports the
+policy. HTML exports show both structures when they differ. Salts and counterions are
+kept. Exclude and evaluate deprotected are separate choices: a request that combines
+them is refused by the server with an explicit error, and the SDK never rewrites it.
+
+Evaluate deprotected needs a server with prepared deprotection assets for the
+database. `client.catalog()` reports which libraries have them: an entry's
+`capabilities["deprotected"]` carries the policy id, or is absent when the library
+cannot evaluate deprotected. It also needs a named database:
+`database="auto"` picks sources by availability, and sources without deprotection
+assets would answer a different question, so that combination is refused locally.
+
+A drawn substructure (`structure_query`) is matched against the deprotected form too,
+so a condition hidden by a protecting group still finds the product. Because the
+matched atoms then belong to the deprotected structure and not to the compound shown,
+such a hit carries no `matched_atom_indices`.
+
 ## Optimize with explicit chemistry and optional custom scores
 
 Put structures and property limits in `constraints=`, and preferences in `objectives=`.

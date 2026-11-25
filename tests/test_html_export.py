@@ -142,6 +142,110 @@ def test_card_layout_order_and_responsive_grid(tmp_path) -> None:
     assert "<table" not in page and "overflow-x" not in page
 
 
+def test_parent_score_shows_both_evaluated_and_original_source_structures(tmp_path) -> None:
+    pytest.importorskip("rdkit")
+    source = "CC(C)(C)OC(=O)NCCO"
+    result = _result(
+        [
+            {
+                "rank": 1,
+                "smiles": source,
+                "score": 1.0,
+                "product_id": "protected-id",
+                "price": 100,
+                "calculation_smiles": "NCCO",
+                "calculation_status": "deprotected",
+            },
+            {
+                "rank": 2,
+                "smiles": "CCO",
+                "score": 0.2,
+                "product_id": "ordinary-id",
+                "calculation_smiles": "CCO",
+                "calculation_status": "unchanged",
+            },
+        ]
+    )
+    page = result.to_html(tmp_path / "parents.html", show=False).read_text()
+    assert len(_images(page)) == 3
+    assert page.index('alt="NCCO"') < page.index('alt="' + source + '"')
+    assert "Evaluated structure" in page
+    assert "Source structure (product ID and price)" in page
+    assert "Evaluated and source structure" in page
+    assert "Score calculated from" in page
+    assert "protected-id" in page and "$100" in page
+    assert result.smiles == [source, "CCO"]
+    assert result.ids == ["protected-id", "ordinary-id"]
+
+
+def test_parent_calculation_smiles_are_escaped(tmp_path) -> None:
+    pytest.importorskip("rdkit")
+    result = _result(
+        [
+            {
+                "rank": 1,
+                "smiles": "CCO",
+                "score": 0.5,
+                "calculation_smiles": 'C"><script>alert(1)</script>',
+            },
+        ]
+    )
+    page = result.to_html(tmp_path / "parents.html", show=False).read_text()
+    assert "<script>" not in page
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in page
+    assert "structure not available" in page
+
+
+def test_same_parent_keeps_each_source_id_price_and_order(tmp_path) -> None:
+    pytest.importorskip("rdkit")
+    sources = ["CC(C)(C)OC(=O)NCCO", "NCCOC(c1ccccc1)(c1ccccc1)c1ccccc1"]
+    result = _result([
+        {"rank": i + 1, "smiles": source, "score": 1.0,
+         "product_id": f"source-{i}", "price": 100 * (i + 1),
+         "calculation_smiles": "NCCO", "calculation_status": "deprotected"}
+        for i, source in enumerate(sources)
+    ])
+    page = result.to_html(tmp_path / "duplicates.html", show=False).read_text()
+    assert result.smiles == sources
+    assert result.ids == ["source-0", "source-1"]
+    assert len(_images(page)) == 4
+    assert page.count('alt="NCCO"') == 2
+    first, second = page.split('<article class="card">')[1:]
+    assert "source-0" in first and "source-1" not in first and "$100" in first
+    assert "source-1" in second and "source-0" not in second and "$200" in second
+
+
+def test_false_positive_calculation_reason_is_visible_and_escaped(tmp_path) -> None:
+    pytest.importorskip("rdkit")
+    result = _result([{
+        "rank": 1, "smiles": "CCO", "score": 1.0,
+        "calculation_smiles": "CCO", "calculation_status": "unchanged",
+        "calculation_reason": "confirmed_non_pg:<reviewed>",
+    }])
+    page = result.to_html(tmp_path / "exception.html", show=False).read_text()
+    assert len(_images(page)) == 1
+    assert "Calculation note: confirmed_non_pg:&lt;reviewed&gt;" in page
+    assert "<reviewed>" not in page
+
+
+def test_parent_coverage_warnings_remain_visible_with_empty_results(tmp_path) -> None:
+    pytest.importorskip("rdkit")
+    result = _result(
+        [],
+        calculation={"mode": "deprotected"},
+        warnings=[
+            {
+                "code": "pg_parent_review_required",
+                "message": "3 source rows have no approved PG parent <review>",
+            }
+        ],
+    )
+    page = result.to_html(tmp_path / "review.html", show=False).read_text()
+    assert "Similarity uses the evaluated structures" in page
+    assert "Constraints apply to the source structures" in page
+    assert "3 source rows have no approved PG parent &lt;review&gt;" in page
+
+
 def test_limit_draws_only_the_first_molecules_and_says_so(tmp_path) -> None:
     pytest.importorskip("rdkit")
     result = _result([{"rank": i, "smiles": "CCO", "score": 0.5} for i in range(1, 4)])
